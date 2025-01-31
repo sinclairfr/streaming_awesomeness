@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  iptv-manager:
+    container_name: iptv-manager  # Nom fixe du container
+    build: 
+      context: .
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ${PWD}/content:/content
+      - ${PWD}/hls:/hls
+      - ${PWD}/cache:/cache
+      - ${PWD}/iptv_manager.py:/app/iptv_manager.py
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - USE_GPU=auto
+      - SERVER_URL=192.168.10.183
+    restart: unless-stopped
+
+  nginx:
+    container_name: iptv-nginx  # Nom fixe pour nginx aussi
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ${PWD}/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ${PWD}/hls:/hls:ro
+    depends_on:
+      - iptv-manager
+    restart: unless-stopped

@@ -1,0 +1,11 @@
+# .dockerignore
+content/
+hls/
+cache/
+*.mp4
+*.avi
+*.mkv
+*.mov
+*.m3u
+*.m3u8
+*.ts
