@@ -5,9 +5,9 @@ services:
       context: .
       dockerfile: Dockerfile
     volumes:
-      - ${PWD}/content:/content
-      - ${PWD}/hls:/hls
-      - ${PWD}/cache:/cache
+      - ${PWD}/content:/app/content
+      - ${PWD}/hls:/app/hls
+      - ${PWD}/cache:/app/cache
       - ${PWD}/iptv_manager.py:/app/iptv_manager.py
     runtime: nvidia
     environment:
