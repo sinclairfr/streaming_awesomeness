@@ -1,3 +1,6 @@
 cache/
 content/
 hls/
+.env
+env
+rebus/

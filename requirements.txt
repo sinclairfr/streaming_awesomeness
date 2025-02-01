@@ -1,3 +1,4 @@
 pathlib
 watchdog
 psutil
+ffmpeg

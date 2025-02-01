@@ -61,26 +61,28 @@ class IPTVChannel:
         self.last_mtime = 0
 
     def start_stream(self):
-        """Démarre le flux IPTV"""
+        """Méthode de démarrage du stream avec plus de logs"""
         with self.lock:
             try:
                 if not self.videos:
                     logger.error(f"🚫 Aucune vidéo disponible pour {self.name}")
                     return False
 
-                # Vérifier si le flux est déjà en cours
+                logger.info(f"🎬 Vérification des vidéos pour {self.name}: {self.videos}")
+
                 if self.ffmpeg_process and self.ffmpeg_process.poll() is None:
                     logger.debug(f"⚡ Flux déjà en cours pour {self.name}")
                     return True
 
                 self.active_streams += 1
-                if self.active_streams == 1:  # Démarrer le stream uniquement pour le premier spectateur
+                if self.active_streams == 1:
+                    logger.info(f"🚀 Démarrage du stream pour {self.name}")
                     self.stop_event.clear()
-                    self._start_ffmpeg()
-                    logger.info(f"📡 Stream démarré pour {self.name}")
+                    return self._start_ffmpeg()  # Retourner le résultat de _start_ffmpeg
+
                 return True
             except Exception as e:
-                logger.error(f"🔥 Erreur lors du démarrage du stream pour {self.name}: {e}")
+                logger.error(f"🔥 Erreur dans start_stream() pour {self.name}: {e}")
                 return False
 
     def _get_video_duration(self, video_path: str) -> float:
@@ -142,6 +144,8 @@ class IPTVChannel:
                             })
                     except (FileNotFoundError, json.JSONDecodeError) as e:
                         logger.error(f"Erreur lors de l'analyse de {file}: {e}")
+            
+            logger.info(f"📄 Fichiers trouvés dans {self.video_dir} : {list(Path(self.video_dir).glob('*.*'))}")
 
             if videos != self.videos:
                 self.videos = videos
@@ -159,64 +163,105 @@ class IPTVChannel:
 
     def _create_channel_directory(self):
         """Crée le répertoire HLS pour la chaîne"""
+        channel_dir = f"hls/{self.name}"  # Utilisation d'un chemin relatif
         try:
-            channel_dir = f"/hls/{self.name}"
             os.makedirs(channel_dir, exist_ok=True)
-            logger.debug(f"Répertoire créé pour {self.name}: {channel_dir}")
-            return True
+            logger.info(f"📁 Répertoire créé pour {self.name}: {channel_dir}")
+        except PermissionError:
+            logger.error(f"🚨 Permission refusée : impossible de créer {channel_dir}")
         except Exception as e:
-            logger.error(f"Erreur lors de la création du répertoire pour {self.name}: {e}")
-            return False
+            logger.error(f"⚠️ Erreur inattendue lors de la création de {channel_dir}: {e}")
 
     def _create_initial_playlist(self):
-        """Crée la playlist initiale vide pour la chaîne"""
+        """Crée la playlist initiale pour la chaîne"""
         try:
-            playlist_path = f"/hls/{self.name}/playlist.m3u8"
+            playlist_path = f"hls/{self.name}/playlist.m3u8"  # Utilisation d'un chemin relatif
             with open(playlist_path, 'w') as f:
-                f.write("#EXTM3U\n#EXT-X-VERSION:3\n")
+                f.write("#EXTM3U\n")
+                f.write("#EXT-X-VERSION:3\n")
+                f.write("#EXT-X-TARGETDURATION:6\n")
+                f.write("#EXT-X-START:TIME-OFFSET=0\n")
+                f.write("#EXT-X-MEDIA-SEQUENCE:0\n")
+                f.write("#EXT-X-PLAYLIST-TYPE:EVENT\n")
             logger.debug(f"Playlist initiale créée pour {self.name}")
             return True
         except Exception as e:
             logger.error(f"Erreur lors de la création de la playlist pour {self.name}: {e}")
-            return False
+            return False    
 
     def _get_cached_path(self, video_path: str) -> str:
-        """Obtient ou crée une version optimisée du fichier dans le cache"""
-        original_file = Path(video_path)
-        file_hash = hashlib.md5(f"{video_path}_{original_file.stat().st_mtime}".encode()).hexdigest()
-        cached_path = Path(self.cache_dir) / f"{file_hash}.mp4"
+        """Obtient ou crée une version optimisée du fichier dans le cache.
+        Si le fichier n'est pas en MP4, il est converti, puis supprimé après conversion réussie.
+        """
+        try:
+            original_file = Path(video_path)
+            file_hash = hashlib.md5(f"{video_path}_{original_file.stat().st_mtime}".encode()).hexdigest()
+            cached_path = Path(self.cache_dir) / f"{file_hash}.mp4"
 
-        if cached_path.exists():
-            logger.info(f"Utilisation du cache pour {original_file.name}")
+            if cached_path.exists():
+                logger.info(f"Utilisation du cache pour {original_file.name}")
+                return str(cached_path)
+
+            logger.info(f"Optimisation et mise en cache de {original_file.name}")
+
+            file_extension = original_file.suffix.lower()
+            if file_extension == '.mp4':
+                logger.info(f"Le fichier {original_file.name} est déjà MP4, copie simple")
+                shutil.copy2(video_path, str(cached_path))
+            else:
+                logger.info(f"Conversion de {original_file.name} en MP4")
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-i", video_path,
+                    "-c:v", "libx264",
+                    "-preset", "medium",
+                    "-crf", "23",
+                    "-c:a", "aac",
+                    "-b:a", "192k",
+                    "-ac", "2",
+                    "-ar", "48000",
+                    "-movflags", "+faststart",
+                    "-progress", "pipe:1",
+                    str(cached_path)
+                ]
+
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1
+                )
+
+                # Lecture et log de la progression en temps réel
+                for line in proc.stdout:
+                    line = line.strip()
+                    if line:
+                        logger.info(f"FFmpeg conversion: {line}")
+
+                proc.wait()
+                if proc.returncode != 0:
+                    raise Exception(f"Erreur FFmpeg, code {proc.returncode}")
+
+            if not cached_path.exists():
+                raise Exception("Le fichier cache n'a pas été créé")
+            if cached_path.stat().st_size == 0:
+                raise Exception("Le fichier cache est vide")
+            logger.info(f"Fichier mis en cache avec succès: {cached_path}")
+
+            # Suppression du fichier source si ce n'était pas déjà un MP4 (conversion effectuée)
+            if file_extension != '.mp4':
+                try:
+                    original_file.unlink()
+                    logger.info(f"Fichier source {original_file.name} supprimé après conversion.")
+                except Exception as e:
+                    logger.error(f"Erreur lors de la suppression du fichier source {original_file.name}: {e}")
+
             return str(cached_path)
 
-        logger.info(f"Optimisation et mise en cache de {original_file.name}")
-
-        file_extension = original_file.suffix.lower()
-        if file_extension == '.mp4':
-            logger.info(f"Le fichier {original_file.name} est déjà MP4, copie simple")
-            shutil.copy2(video_path, cached_path)
-        else:
-            logger.info(f"Conversion de {original_file.name} en MP4")
-            cmd = [
-                "ffmpeg", "-y",
-                "-i", video_path,
-                "-c:v", "libx264",
-                "-preset", "medium",
-                "-crf", "23",
-                "-c:a", "aac",
-                "-movflags", "+faststart",
-                str(cached_path)
-            ]
-
-            try:
-                subprocess.run(cmd, check=True, capture_output=True, text=True)
-                logger.info(f"Fichier mis en cache avec succès: {cached_path}")
-            except subprocess.CalledProcessError as e:
-                logger.error(f"Erreur lors du transcodage: {e.stderr}")
-                return video_path
-
-        return str(cached_path)
+        except Exception as e:
+            logger.error(f"Erreur lors de la mise en cache de {video_path}: {e}")
+            return video_path  # En cas d'erreur, retourner le chemin original
 
     def _clean_processes(self):
         """Nettoie proprement les processus FFmpeg"""
@@ -257,100 +302,198 @@ class IPTVChannel:
             self.stop_event.set()  
             
     def _start_ffmpeg(self):
-        """Démarre FFmpeg et assure la rotation des vidéos"""
+        """Méthode de démarrage FFmpeg avec debug amélioré"""
         try:
-            with self.lock:  # Use the existing lock for thread safety
-                if self.ffmpeg_process and self.ffmpeg_process.poll() is None:
-                    logger.debug(f"⚡ FFmpeg déjà en cours pour {self.name}")
-                    return
+            cached_video = self._get_cached_path(self.videos[self.current_video]["path"])
+            if cached_video is None:
+                logger.warning("Le fichier cache n'a pas été créé, utilisation du fichier original")
+                cached_video = self.videos[self.current_video]["path"]
 
-                if self.stop_event.is_set():
-                    logger.debug(f"🛑 Stop event is set for {self.name}, skipping start")
-                    return
+            logger.info(f"🟢 Initialisation FFmpeg pour {self.name}")
+            
+            # 1. Vérification des prérequis
+            if not shutil.which('ffmpeg'):
+                logger.error("❌ FFmpeg n'est pas installé ou n'est pas dans le PATH")
+                return False
 
-                logger.info(f"🚀 Démarrage du flux pour {self.name}")
+            # 2. Vérification des fichiers et dossiers
+            current_video = self.videos[self.current_video]["path"]
+            if not os.path.exists(current_video):
+                logger.error(f"❌ Fichier vidéo introuvable: {current_video}")
+                return False
 
-                if not self.videos:
-                    logger.error(f"🚫 Aucune vidéo trouvée pour {self.name}")
-                    return
+            hls_dir = f"hls/{self.name}"
+            os.makedirs(hls_dir, exist_ok=True)
+            logger.info(f"📁 Dossier HLS vérifié: {hls_dir}")
 
-                current_video = self.videos[self.current_video]["path"]
-                cached_video = self._get_cached_path(current_video)
+            # 3. Configuration de la commande FFmpeg
+            cmd = [
+                "ffmpeg", "-y",
+                "-stream_loop", "-1",
+                "-re",
+                "-fflags", "+genpts",  # 🔹 Ajout de cette option pour fixer les timestamps
+                "-i", cached_video,
+                "-c:v", "copy",
+                "-c:a", "copy",
+                "-f", "hls",
+                "-hls_time", "6",
+                "-hls_list_size", "10",
+                "-hls_flags", "delete_segments+append_list",
+                "-hls_segment_filename", f"hls/{self.name}/segment_%03d.ts",
+                f"hls/{self.name}/playlist.m3u8",
+                "-threads", "1"
+            ]
 
-                cmd = [
-                    "ffmpeg", "-y",
-                    "-re",
-                    "-i", cached_video,
-                    "-c:v", "copy",
-                    "-c:a", "copy",
-                    "-f", "hls",
-                    "-hls_time", "6",
-                    "-hls_list_size", "10",
-                    "-hls_flags", "delete_segments+append_list",
-                    "-hls_segment_filename", f"/hls/{self.name}/segment_%03d.ts",
-                    f"/hls/{self.name}/playlist.m3u8",
-                    "-threads", "1"
-                ]
+            logger.info(f"🖥️ Commande FFmpeg: {' '.join(cmd)}")
 
-                logger.info(f"🖥 Commande FFmpeg: {' '.join(cmd)}")
-
+            # 4. Lancement de FFmpeg avec capture des erreurs
+            try:
                 self.ffmpeg_process = subprocess.Popen(
                     cmd,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
-                    universal_newlines=True
+                    universal_newlines=True,
+                    bufsize=1
                 )
+            except subprocess.SubprocessError as e:
+                logger.error(f"❌ Erreur lors du lancement de FFmpeg: {e}")
+                return False
 
-                def monitor():
-                    process_ended = False
-                    try:
-                        while not self.stop_event.is_set() and self.ffmpeg_process and self.ffmpeg_process.poll() is None:
-                            line = self.ffmpeg_process.stderr.readline()
-                            if line.strip():
-                                logger.debug(f"📡 FFmpeg: {line.strip()}")
-                            time.sleep(0.1)  # Prevent excessive CPU usage
+            # 5. Vérification immédiate du processus
+            if self.ffmpeg_process.poll() is not None:
+                stderr = self.ffmpeg_process.stderr.read()
+                logger.error(f"❌ FFmpeg s'est arrêté immédiatement. Erreur: {stderr}")
+                return False
 
-                        process_ended = True
-                    except Exception as e:
-                        logger.error(f"🔥 Erreur dans le monitoring: {e}")
-                    finally:
-                        # Only proceed with video rotation if the process actually ended and we should continue
-                        if process_ended and not self.stop_event.is_set() and self.active_streams > 0:
-                            with self.lock:
-                                if self.active_streams > 0:  # Double check under lock
-                                    self.current_video = (self.current_video + 1) % len(self.videos)
-                                    logger.info(f"Passage à la vidéo suivante pour {self.name}")
-                                    # Use executor to start new ffmpeg process to avoid recursion
-                                    self.executor.submit(self._start_ffmpeg)
+            logger.info(f"✅ FFmpeg démarré avec PID {self.ffmpeg_process.pid}")
 
-                # Start the monitor in the executor
-                self.executor.submit(monitor)
+            # 6. Monitoring dans un thread séparé
+            def monitor():
+                try:
+                    while not self.stop_event.is_set():
+                        if self.ffmpeg_process.poll() is not None:
+                            stderr = self.ffmpeg_process.stderr.read()
+                            logger.error(f"❌ FFmpeg s'est arrêté. Code: {self.ffmpeg_process.poll()}, Erreur: {stderr}")
+                            break
+
+                        # Vérification de la playlist toutes les 5 secondes
+                        playlist_path = f"{hls_dir}/playlist.m3u8"
+                        if os.path.exists(playlist_path):
+                            with open(playlist_path, 'r') as f:
+                                content = f.read()
+                                if '.ts' in content:
+                                    logger.info(f"✅ Segments HLS détectés dans la playlist")
+                        else:
+                            logger.warning(f"⚠️ Playlist non trouvée: {playlist_path}")
+
+                        time.sleep(5)
+
+                except Exception as e:
+                    logger.error(f"🔥 Erreur dans le monitoring: {e}")
+                finally:
+                    logger.info("Monitoring FFmpeg terminé")
+
+            self.executor.submit(monitor)
+            return True
 
         except Exception as e:
-            logger.error(f"🚨 Erreur démarrage FFmpeg: {e}")
-            
+            logger.error(f"🚨 Erreur grave dans _start_ffmpeg: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return False
+
 class IPTVManager:
-    def __init__(self, content_dir: str, cache_dir: str = "/cache"):
+    def __init__(self, content_dir: str, cache_dir: str = "./cache"):
         self.content_dir = content_dir
         self.cache_dir = cache_dir
         self.channels: Dict[str, IPTVChannel] = {}
-        self.last_update_time = time.time()
-        self.last_scan_time = 0  # Dernier temps de scan
-        self.scan_delay = 10  # Délai minimum entre deux scans (en secondes)
-
-        self.observer = Observer()
-        self.observer.schedule(ChannelEventHandler(self), self.content_dir, recursive=True)
+        self.last_update_time = 0
+        self.last_scan_time = 0
+        self.scan_delay = 10
 
         # Création des dossiers nécessaires
         os.makedirs(cache_dir, exist_ok=True)
-        os.makedirs("/hls", exist_ok=True)
+        os.makedirs("./hls", exist_ok=True)
 
+        # Configuration du Watchdog
+        self.observer = Observer()
+        self.observer.schedule(ChannelEventHandler(self), self.content_dir, recursive=True)
+
+        # Scanner les chaînes immédiatement et forcer la génération de playlist
+        self.scan_channels(force=True)  # Ajout du paramètre force
+        self.generate_master_playlist()
+        
         logger.info("📡 IPTV Manager initialisé avec Watchdog")
 
-    def scan_channels(self):
+    def _clean_hls_segments(self):
+        """Nettoie les segments HLS anciens"""
+        try:
+            channel_dir = Path(f"hls/{self.name}")  # Utilisation d'un chemin relatif
+            for segment in channel_dir.glob("segment_*.ts"):
+                if segment.stat().st_mtime < time.time() - 3600:  # Supprimer les segments de plus d'une heure
+                    segment.unlink()
+                    logger.debug(f"Segment supprimé: {segment}")
+        except Exception as e:
+            logger.error(f"Erreur lors du nettoyage des segments HLS pour {self.name}: {e}")   
+            
+    def generate_master_playlist(self):
+        """Génère la playlist principale au format M3U"""
+        if time.time() - self.last_update_time < 5:  # Réduit à 5 secondes au lieu de 10
+            return
+
+        self.last_update_time = time.time()
+        playlist_path = os.path.abspath("./hls/playlist.m3u")
+
+        try:
+            with open(playlist_path, "w", encoding='utf-8') as f:
+                f.write("#EXTM3U\n")
+                
+                for name, channel in sorted(self.channels.items()):
+                    logger.debug(f"Ajout de la chaîne {name} à la playlist")
+                    total_duration = -1
+                    f.write(f'#EXTINF:{total_duration} tvg-id="{name}" tvg-name="{name}",{name}\n')
+                    f.write(f'http://{SERVER_URL}./hls/{name}/playlist.m3u8\n')
+
+            logger.info(f"🎬 Playlist M3U mise à jour avec succès - {len(self.channels)} chaînes")
+                
+        except Exception as e:
+            logger.error(f"Erreur lors de la génération de la playlist: {e}")
+ 
+    def run(self):
+        """Démarre le gestionnaire IPTV avec Watchdog"""
+        try:
+            # Forcer un scan et une génération de playlist au démarrage
+            self.scan_channels()
+            self.generate_master_playlist()
+            
+            self.observer.start()
+
+            while True:
+                time.sleep(1)
+
+        except KeyboardInterrupt:
+            self.cleanup()
+
+        except Exception as e:
+            logger.error(f"🔥 Erreur dans le gestionnaire IPTV: {e}")
+            self.cleanup()
+            
+    def _create_empty_playlist(self):
+        """Crée une playlist M3U vide initiale"""
+        try:
+            playlist_path = "./hls/playlist.m3u"
+            with open(playlist_path, "w", encoding='utf-8') as f:
+                f.write("#EXTM3U\n")
+                f.write("#EXTINF-TVG-URL=\"http://localhost\"\n")
+                f.write("#EXTINF-TVG-NAME=\"IPTV Local\"\n")
+            logger.info("Playlist M3U initiale créée")
+        except Exception as e:
+            logger.error(f"Erreur lors de la création de la playlist initiale: {e}")
+
+    def scan_channels(self, force=False):
         """Scanne et met à jour les chaînes"""
         current_time = time.time()
-        if current_time - self.last_scan_time < self.scan_delay:
+        if not force and current_time - self.last_scan_time < self.scan_delay:
             logger.debug("Scan ignoré (trop fréquent)")
             return
 
@@ -360,67 +503,34 @@ class IPTVManager:
         found_channels = set()
 
         # Parcours tous les dossiers dans content_dir
-        for item in Path(self.content_dir).iterdir():
-            if item.is_dir():
-                channel_name = item.name
-                found_channels.add(channel_name)
+        try:
+            content_path = Path(self.content_dir)
+            logger.info(f"Scanning directory: {content_path}")
+            
+            for item in content_path.iterdir():
+                if item.is_dir():
+                    channel_name = item.name
+                    found_channels.add(channel_name)
+                    logger.info(f"Found directory: {channel_name}")
 
-                # Nouvelle chaîne trouvée
-                if channel_name not in self.channels:
-                    logger.info(f"Nouvelle chaîne trouvée: {channel_name}")
-                    channel = IPTVChannel(channel_name, str(item), self.cache_dir)
-                    channel.scan_videos()
-                    if channel.videos:
-                        self.channels[channel_name] = channel
-                        changes_detected = True
-                        channel.start_stream()
-                        logger.info(f"Nouvelle chaîne {channel_name} ajoutée avec succès")
-                else:
-                    # Chaîne existante - vérifie les modifications
-                    channel = self.channels[channel_name]
-                    old_videos = set(v["path"] for v in channel.videos)
-                    channel.scan_videos()
-                    new_videos = set(v["path"] for v in channel.videos)
-
-                    if old_videos != new_videos:
-                        logger.info(f"Changements détectés dans la chaîne {channel_name}")
-                        changes_detected = True
-                        # Redémarre le stream si les vidéos ont changé
-                        if channel.active_streams > 0:
+                    # Nouvelle chaîne trouvée
+                    if channel_name not in self.channels:
+                        logger.info(f"Nouvelle chaîne trouvée: {channel_name}")
+                        channel = IPTVChannel(channel_name, str(item), self.cache_dir)
+                        channel.scan_videos()
+                        if channel.videos:
+                            self.channels[channel_name] = channel
+                            changes_detected = True
                             channel.start_stream()
 
-        # Vérifie les chaînes supprimées
-        removed_channels = current_channels - found_channels
-        if removed_channels:
-            for channel_name in removed_channels:
-                logger.info(f"Chaîne supprimée: {channel_name}")
-                if self.channels[channel_name].ffmpeg_process:
-                    self.channels[channel_name].ffmpeg_process.terminate()
-                del self.channels[channel_name]
-                changes_detected = True
+            # Log des chaînes détectées
+            logger.info(f"Chaînes détectées : {list(self.channels.keys())}")
 
-        # Met à jour la playlist si des changements sont détectés
-        if changes_detected:
-            logger.info("Changements détectés, mise à jour des playlists...")
+            # Force la génération de la playlist
             self.generate_master_playlist()
-            logger.info("Playlists mises à jour avec succès")
             
-    def generate_master_playlist(self):
-        """Génère la playlist pour Tivimate"""
-        if time.time() - self.last_update_time < 10:  # ⏳ Mise à jour max toutes les 10s
-            return
-
-        self.last_update_time = time.time()
-        playlist_path = "/hls/playlist.m3u"
-
-        with open(playlist_path, "w") as f:
-            f.write("#EXTM3U\n")
-            for name, channel in self.channels.items():
-                f.write(f'#EXTINF:-1 tvg-id="{name}" tvg-name="{name}" tvg-logo="" group-title="Movies",{name}\n')
-                f.write(f'http://{SERVER_URL}/hls/{name}/playlist.m3u8\n')
-
-        logger.info("🎬 Playlist M3U mise à jour")
-
+        except Exception as e:
+            logger.error(f"Erreur lors du scan des chaînes: {e}")   
     def run(self):
         """Démarre le gestionnaire IPTV avec Watchdog"""
         try:
@@ -447,7 +557,6 @@ class IPTVManager:
             channel._clean_processes()
             channel.executor.shutdown(wait=True)
 
-
 if __name__ == "__main__":
-    manager = IPTVManager("/content")
+    manager = IPTVManager("./content")
     manager.run()

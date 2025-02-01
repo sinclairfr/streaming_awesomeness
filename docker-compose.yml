@@ -1,11 +1,9 @@
-version: '3.8'
-
 services:
   iptv-manager:
     container_name: iptv-manager  # Nom fixe du container
     build: 
       context: .
-      dockerfile: Dockerfile.dev
+      dockerfile: Dockerfile
     volumes:
       - ${PWD}/content:/content
       - ${PWD}/hls:/hls

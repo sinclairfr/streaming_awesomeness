@@ -11,12 +11,11 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt /app/
 RUN pip3 install -r /app/requirements.txt
 
-# Copie du code
-COPY iptv_manager.py /app/
+WORKDIR /app
 
 # Création des dossiers nécessaires
-RUN mkdir -p /hls /cache /content && \
-    chmod 777 /hls /cache /content
-
-WORKDIR /app
-CMD ["python3", "iptv_manager.py"]
+RUN mkdir -p ./hls ./cache ./content && \
+    chmod 777 ./hls ./cache ./content
+    
+# Utilise python avec -u pour avoir les logs en temps réel
+CMD ["python3", "-u", "iptv_manager.py"]
