@@ -975,20 +975,6 @@ def _clean_directory(directory: Path):
         except Exception as e:
             logger.error(f"Erreur lors de la suppression de {item}: {e}")
             continue
-def _clean_directory(directory: Path):
-    """Nettoie le contenu d'un répertoire sans supprimer le répertoire lui-même"""
-    if not directory.exists():
-        return
-        
-    for item in directory.glob("**/*"):
-        try:
-            if item.is_file():
-                item.unlink()
-            elif item.is_dir():
-                shutil.rmtree(item)
-        except Exception as e:
-            logger.error(f"Erreur lors de la suppression de {item}: {e}")
-            continue
 
 class IPTVManager:
     def __init__(self, content_dir: str, cache_dir: str = "./cache"):
