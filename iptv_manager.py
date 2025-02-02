@@ -136,47 +136,95 @@ class VideoProcessor:
         return True
 
     def _normalize_video(self, video_path: Path, output_dir: Path, target_width: int, target_height: int) -> Optional[Path]:
-        """Normaliser une vidéo avec des paramètres stricts"""
+        """Normalise une vidéo avec accélération matérielle et paramètres rapides"""
         try:
             output_path = output_dir / f"norm_{video_path.stem}.mp4"
             
+            # Configuration des paramètres FFmpeg pour une conversion rapide
             cmd = [
                 "ffmpeg", "-y",
+                # Activation de l'accélération matérielle
+                "-hwaccel", "auto",
+                "-hwaccel_output_format", "auto",
+                
+                # Input
                 "-i", str(video_path),
-                "-vf", f"scale={target_width}:{target_height}:force_original_aspect_ratio=decrease,"
-                       f"pad={target_width}:{target_height}:(ow-iw)/2:(oh-ih)/2",
+                
+                # Filtres vidéo
+                "-vf", (f"scale={target_width}:{target_height}:force_original_aspect_ratio=decrease,"
+                    f"pad={target_width}:{target_height}:(ow-iw)/2:(oh-ih)/2"),
+                
+                # Paramètres vidéo optimisés pour la vitesse
                 "-c:v", "libx264",
-                "-preset", "slow",
-                "-profile:v", "high",
-                "-crf", "23",
-                "-movflags", "+faststart",
+                "-preset", "ultrafast",
+                "-tune", "zerolatency",
+                "-profile:v", "baseline",
+                "-level", "3.0",
+                "-maxrate", "4000k",
+                "-bufsize", "8000k",
                 "-pix_fmt", "yuv420p",
                 "-r", "25",  # Force 25fps
                 "-g", "50",  # GOP size = 2*fps
-                "-keyint_min", "50",
+                "-keyint_min", "25",
                 "-sc_threshold", "0",  # Désactive les changements de scène
-                "-bf", "2",  # Nombre de B-frames
+                "-bf", "0",  # Désactive les B-frames pour plus de vitesse
+                
+                # Paramètres audio simplifiés
                 "-c:a", "aac",
                 "-b:a", "192k",
                 "-ar", "48000",
                 "-ac", "2",
+                
+                # Optimisation pour le streaming
+                "-movflags", "+faststart",
+                
                 str(output_path)
             ]
 
             logger.info(f"Normalizing {video_path.name}")
-            result = subprocess.run(cmd, capture_output=True, text=True)
             
-            if result.returncode == 0 and output_path.exists():
-                logger.info(f"Successfully normalized {video_path.name}")
-                return output_path
-            else:
-                logger.error(f"Normalization failed for {video_path}: {result.stderr}")
+            # Exécution avec capture des erreurs
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True
+            )
+            
+            # Surveillance du processus avec timeout
+            try:
+                stdout, stderr = process.communicate(timeout=1800)  # 30 minutes max
+                success = process.returncode == 0 and output_path.exists()
+                
+                if success:
+                    logger.info(f"Successfully normalized {video_path.name}")
+                    # Vérification rapide du fichier de sortie
+                    probe_cmd = ["ffprobe", "-v", "error", str(output_path)]
+                    probe_result = subprocess.run(probe_cmd, capture_output=True)
+                    
+                    if probe_result.returncode == 0:
+                        return output_path
+                    else:
+                        logger.error(f"Output file verification failed for {video_path.name}")
+                        return None
+                else:
+                    logger.error(f"Normalization failed for {video_path.name}: {stderr}")
+                    if output_path.exists():
+                        output_path.unlink()
+                    return None
+                    
+            except subprocess.TimeoutExpired:
+                process.kill()
+                logger.error(f"Normalization timeout for {video_path.name}")
+                if output_path.exists():
+                    output_path.unlink()
                 return None
 
         except Exception as e:
             logger.error(f"Error normalizing {video_path}: {e}")
+            if 'output_path' in locals() and output_path.exists():
+                output_path.unlink()
             return None
-
     def _safe_concatenate(self, video_files: List[Path], output_path: Path) -> bool:
         """Concaténation sécurisée avec vérification"""
         try:
@@ -242,7 +290,7 @@ class VideoProcessor:
             return False
 
     def process_videos(self) -> Optional[str]:
-        """Process all videos with caching and verification"""
+        """Process all videos with parallel processing and hardware acceleration"""
         try:
             # 1. Collecter tous les fichiers vidéo sources
             source_files = sorted([
@@ -263,54 +311,64 @@ class VideoProcessor:
             # 3. Charger les données de tracking
             tracking_data = self._load_tracking_data()
             
-            # 4. Traiter les fichiers
+            # 4. Préparer le traitement des fichiers
             temp_dir = self.diffusion_dir / "temp"
             temp_dir.mkdir(exist_ok=True)
-            
             processed_files = []
-            target_height = 1080
-            
-            # Déterminer le target_width à partir du premier fichier
+
+            # Déterminer les dimensions cibles à partir du premier fichier
             first_video_info = self.analyze_video(str(source_files[0]))
             if not first_video_info:
                 return None
+                
+            target_height = 1080
             target_width = int((target_height * first_video_info['width']) / first_video_info['height'])
-            target_width = (target_width // 2) * 2
+            target_width = (target_width // 2) * 2  # Assure une largeur paire
 
-            for source_file in source_files:
-                file_hash = self._get_file_hash(source_file)
-                cached_path = tracking_data['processed_files'].get(file_hash)
+            # 5. Traitement parallèle des fichiers
+            with ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
+                futures = []
                 
-                if cached_path and Path(cached_path).exists():
-                    # Vérifier que le fichier en cache est valide
-                    if self._verify_video(Path(cached_path)):
-                        logger.info(f"Using cached version of {source_file.name}")
-                        processed_files.append(Path(cached_path))
-                        continue
-                
-                # Normaliser le fichier
-                normalized_path = self._normalize_video(
-                    source_file,
-                    temp_dir,
-                    target_width,
-                    target_height
-                )
-                
-                if normalized_path:
-                    # Déplacer vers le dossier final
-                    final_path = self.diffusion_dir / f"norm_{source_file.stem}.mp4"
-                    if final_path.exists():
-                        final_path.unlink()
-                    shutil.move(normalized_path, final_path)
+                for source_file in source_files:
+                    file_hash = self._get_file_hash(source_file)
+                    cached_path = tracking_data['processed_files'].get(file_hash)
                     
-                    # Mettre à jour le tracking
-                    tracking_data['processed_files'][file_hash] = str(final_path)
-                    processed_files.append(final_path)
-                else:
-                    logger.error(f"Failed to normalize {source_file}")
-                    return None
+                    # Utiliser le cache si possible
+                    if cached_path and Path(cached_path).exists():
+                        if self._verify_video(Path(cached_path)):
+                            logger.info(f"Using cached version of {source_file.name}")
+                            processed_files.append(Path(cached_path))
+                            continue
 
-            # 5. Concaténer en bigfile
+                    # Sinon, soumettre pour traitement parallèle
+                    future = executor.submit(
+                        self._normalize_video,
+                        source_file,
+                        temp_dir,
+                        target_width,
+                        target_height
+                    )
+                    futures.append((future, file_hash, source_file))
+
+                # Attendre et traiter les résultats
+                for future, file_hash, source_file in futures:
+                    try:
+                        normalized_path = future.result()
+                        if normalized_path:
+                            final_path = self.diffusion_dir / f"norm_{source_file.stem}.mp4"
+                            if final_path.exists():
+                                final_path.unlink()
+                            shutil.move(normalized_path, final_path)
+                            tracking_data['processed_files'][file_hash] = str(final_path)
+                            processed_files.append(final_path)
+                        else:
+                            logger.error(f"Failed to normalize {source_file}")
+                            return None
+                    except Exception as e:
+                        logger.error(f"Error processing {source_file}: {e}")
+                        return None
+
+            # 6. Concaténer en bigfile
             if bigfile_path.exists():
                 bigfile_path.unlink()
 
@@ -332,7 +390,7 @@ class VideoProcessor:
         except Exception as e:
             logger.error(f"Error in video processing: {e}")
             return None
-
+    
 class IPTVChannel:
     def __init__(self, name: str, video_dir: str, cache_dir: str):
         self.name = name
@@ -579,6 +637,7 @@ class IPTVChannel:
                 logger.error(traceback.format_exc())
                 self._clean_processes()
                 return False
+    
     def ensure_hls_conversion(video_dir: str, hls_dir: str) -> bool:
         """Ensure all videos in the directory are converted to HLS format."""
         try:
@@ -696,9 +755,11 @@ class IPTVChannel:
 
             cmd = [
                 "ffmpeg", "-y",
+                "-hwaccel", "auto",  # Active l'accélération matérielle si disponible
                 "-i", str(original_file),
                 "-c:v", "libx264",
-                "-preset", "superfast",
+                "-preset", "ultrafast",
+                "-tune", "zerolatency",
                 "-crf", "23",
                 "-c:a", "aac",
                 "-b:a", "192k",
