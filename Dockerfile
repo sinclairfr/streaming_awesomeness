@@ -19,3 +19,4 @@ RUN mkdir -p ./hls ./cache ./content && \
     
 # Utilise python avec -u pour avoir les logs en temps réel
 CMD ["python3", "-u", "iptv_manager.py"]
+#CMD ["python3", "-u", "bigfile_logic.py"]
