@@ -50,362 +50,358 @@ class ChannelEventHandler(FileSystemEventHandler):
 class VideoProcessor:
     def __init__(self, channel_dir: str):
         self.channel_dir = Path(channel_dir)
-        self.diffusion_dir = self.channel_dir / "diffusion"
-        self.diffusion_dir.mkdir(exist_ok=True)
         self.video_extensions = ('.mp4', '.avi', '.mkv', '.mov')
-        self.tracking_file = self.diffusion_dir / "processed_files.json"
-
-    def _get_file_hash(self, file_path: Path) -> str:
-        """Calculer un hash unique pour un fichier basé sur son nom, taille et date de modification"""
-        stats = file_path.stat()
-        return hashlib.md5(f"{file_path.name}_{stats.st_size}_{stats.st_mtime}".encode()).hexdigest()
-
-    def _load_tracking_data(self) -> dict:
-        """Charger les données de tracking des fichiers traités"""
-        if self.tracking_file.exists():
-            try:
-                with open(self.tracking_file, 'r') as f:
-                    return json.load(f)
-            except json.JSONDecodeError:
-                logger.error("Corrupted tracking file, resetting")
-        return {'processed_files': {}, 'bigfile_composition': []}
-
-    def _save_tracking_data(self, data: dict):
-        """Sauvegarder les données de tracking"""
-        try:
-            with open(self.tracking_file, 'w') as f:
-                json.dump(data, f, indent=2)
-        except Exception as e:
-            logger.error(f"Error saving tracking data: {e}")
-
-    def analyze_video(self, video_path: str) -> dict:
-        """Analyser les paramètres d'une vidéo"""
-        try:
-            cmd = [
-                "ffprobe",
-                "-v", "quiet",
-                "-print_format", "json",
-                "-show_streams",
-                "-show_format",
-                str(video_path)
-            ]
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            data = json.loads(result.stdout)
-            
-            # Trouver le stream vidéo
-            video_stream = next((s for s in data['streams'] if s['codec_type'] == 'video'), None)
-            if not video_stream:
-                raise ValueError("No video stream found")
-                
-            return {
-                'width': int(video_stream.get('width', 1920)),
-                'height': int(video_stream.get('height', 1080)),
-                'fps': eval(video_stream.get('r_frame_rate', '25/1')),
-                'duration': float(data['format'].get('duration', 0)),
-                'bitrate': int(data['format'].get('bit_rate', 0))
-            }
-        except Exception as e:
-            logger.error(f"Error analyzing video {video_path}: {e}")
-            return {}
-
-    def _verify_bigfile(self, source_files: List[Path]) -> bool:
-        """Vérifier si le bigfile existant correspond aux fichiers sources"""
-        bigfile_path = self.diffusion_dir / "bigfile.mp4"
-        if not bigfile_path.exists():
-            return False
-
-        tracking_data = self._load_tracking_data()
-        current_composition = [self._get_file_hash(f) for f in source_files]
+        self.processed_dir = self.channel_dir / "processed"
+        self.processed_dir.mkdir(exist_ok=True)
+        self.processed_cache = {}  # Cache pour stocker les infos des fichiers déjà traités
         
-        # Vérifier si la composition correspond
-        if current_composition != tracking_data.get('bigfile_composition', []):
-            logger.info("Source files changed, bigfile needs rebuild")
+    def _is_already_normalized(self, video_path: Path, ref_info: dict = None) -> bool:
+        """Vérifie si une vidéo est déjà normalisée selon les paramètres de référence"""
+        try:
+            # Vérifier le cache d'abord
+            cache_key = str(video_path.absolute())
+            if cache_key in self.processed_cache:
+                return True
+
+            # Si pas de ref_info fourni, utiliser les paramètres par défaut
+            if not ref_info:
+                ref_info = {
+                    'codec_name': 'h264',
+                    'pix_fmt': 'yuv420p',
+                    'r_frame_rate': '25/1',
+                    'profile': 'high',
+                    'level': 41
+                }
+
+            # Vérifier le fichier de sortie existant
+            output_path = self.processed_dir / f"{video_path.stem}.mp4"
+            if output_path.exists():
+                output_info = self._get_video_info(output_path)
+                if (output_info.get('codec_name') == ref_info['codec_name'] and
+                    output_info.get('pix_fmt') == ref_info['pix_fmt'] and
+                    output_info.get('r_frame_rate') == ref_info['r_frame_rate']):
+                    # Ajouter au cache
+                    self.processed_cache[cache_key] = True
+                    logger.info(f"Le fichier {video_path.name} est déjà normalisé")
+                    return True
+
+            # Vérifier le fichier source
+            current_info = self._get_video_info(video_path)
+            if (current_info.get('codec_name') == ref_info['codec_name'] and
+                current_info.get('pix_fmt') == ref_info['pix_fmt'] and
+                current_info.get('r_frame_rate') == ref_info['r_frame_rate']):
+                # Ajouter au cache
+                self.processed_cache[cache_key] = True
+                logger.info(f"Le fichier source {video_path.name} est déjà au bon format")
+                return True
+
             return False
 
-        # Vérifier l'intégrité du bigfile
-        try:
-            cmd = ["ffprobe", "-v", "error", str(bigfile_path)]
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode != 0:
-                logger.error("Corrupted bigfile detected")
-                return False
         except Exception as e:
-            logger.error(f"Error verifying bigfile: {e}")
+            logger.error(f"Erreur lors de la vérification de normalisation pour {video_path}: {e}")
             return False
 
-        return True
-
-    def _normalize_video(self, video_path: Path, output_dir: Path, target_width: int, target_height: int) -> Optional[Path]:
-        """Normalise une vidéo avec accélération matérielle et paramètres rapides"""
+    def _normalize_video(self, video_path: Path, ref_info: dict = None) -> Optional[Path]:
+        """Normaliser une vidéo pour correspondre aux paramètres de référence"""
         try:
-            output_path = output_dir / f"norm_{video_path.stem}.mp4"
-            
-            # Configuration des paramètres FFmpeg pour une conversion rapide
+            # Si pas de ref_info fourni, utilise des paramètres par défaut
+            if not ref_info:
+                ref_info = {
+                    'codec_name': 'h264',
+                    'pix_fmt': 'yuv420p',
+                    'r_frame_rate': '25/1',
+                    'profile': 'high',
+                    'level': 41  # 4.1
+                }
+
+            temp_output = self.processed_dir / f"temp_{video_path.stem}.mp4"
+            output_path = self.processed_dir / f"{video_path.stem}.mp4"
+
+            # Vérifier si le fichier est déjà normalisé via le cache
+            if self._is_already_normalized(video_path, ref_info):
+                if not output_path.exists():
+                    try:
+                        shutil.copy2(video_path, output_path)
+                        logger.info(f"Copied {video_path.name} to processed directory")
+                    except Exception as e:
+                        logger.error(f"Error copying {video_path.name}: {e}")
+                        return None
+                return output_path
+
             cmd = [
                 "ffmpeg", "-y",
-                # Activation de l'accélération matérielle
-                "-hwaccel", "auto",
-                "-hwaccel_output_format", "auto",
-                
-                # Input
                 "-i", str(video_path),
-                
-                # Filtres vidéo
-                "-vf", (f"scale={target_width}:{target_height}:force_original_aspect_ratio=decrease,"
-                    f"pad={target_width}:{target_height}:(ow-iw)/2:(oh-ih)/2"),
-                
-                # Paramètres vidéo optimisés pour la vitesse
                 "-c:v", "libx264",
                 "-preset", "ultrafast",
-                "-tune", "zerolatency",
-                "-profile:v", "baseline",
-                "-level", "3.0",
-                "-maxrate", "4000k",
-                "-bufsize", "8000k",
+                "-profile:v", "baseline",  # Plus compatible
+                "-level:v", "3.0",
                 "-pix_fmt", "yuv420p",
-                "-r", "25",  # Force 25fps
-                "-g", "50",  # GOP size = 2*fps
+                "-r", "25",  # Framerate fixe
+                "-g", "50",  # GOP size
                 "-keyint_min", "25",
-                "-sc_threshold", "0",  # Désactive les changements de scène
-                "-bf", "0",  # Désactive les B-frames pour plus de vitesse
-                
-                # Paramètres audio simplifiés
+                "-sc_threshold", "0",
+                "-b:v", "2000k",  # Bitrate vidéo constant
+                "-maxrate", "2500k",
+                "-bufsize", "3000k",
                 "-c:a", "aac",
                 "-b:a", "192k",
                 "-ar", "48000",
                 "-ac", "2",
-                
-                # Optimisation pour le streaming
+                "-max_muxing_queue_size", "1024",  # Évite les erreurs de muxing
                 "-movflags", "+faststart",
-                
-                str(output_path)
+                str(temp_output)
             ]
 
-            logger.info(f"Normalizing {video_path.name}")
+            logger.info(f"Running FFmpeg command for {video_path.name}")
+            logger.debug(f"FFmpeg command: {' '.join(cmd)}")
             
-            # Exécution avec capture des erreurs
+            # Exécuter FFmpeg avec surveillance du processus
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 universal_newlines=True
             )
-            
-            # Surveillance du processus avec timeout
+
+            logger.info(f"Normalizing {video_path.name}")
             try:
-                stdout, stderr = process.communicate(timeout=1800)  # 30 minutes max
-                success = process.returncode == 0 and output_path.exists()
+                # Utiliser communicate avec timeout
+                stdout, stderr = process.communicate(timeout=1800)  # 30 minutes timeout
                 
-                if success:
-                    logger.info(f"Successfully normalized {video_path.name}")
-                    # Vérification rapide du fichier de sortie
-                    probe_cmd = ["ffprobe", "-v", "error", str(output_path)]
-                    probe_result = subprocess.run(probe_cmd, capture_output=True)
-                    
-                    if probe_result.returncode == 0:
+                if process.returncode == 0 and temp_output.exists():
+                    # Vérifier le fichier de sortie
+                    if self._get_video_info(temp_output):
+                        temp_output.rename(output_path)
+                        logger.info(f"Successfully normalized {video_path.name}")
+                        self.processed_cache[str(video_path.absolute())] = True  # Ajouter au cache
                         return output_path
                     else:
                         logger.error(f"Output file verification failed for {video_path.name}")
-                        return None
                 else:
-                    logger.error(f"Normalization failed for {video_path.name}: {stderr}")
-                    if output_path.exists():
-                        output_path.unlink()
-                    return None
-                    
+                    logger.error(f"Failed to normalize {video_path.name}")
+                    if stderr:
+                        logger.error(f"FFmpeg error: {stderr}")
+                
+                if temp_output.exists():
+                    temp_output.unlink()
+                return None
+                
             except subprocess.TimeoutExpired:
                 process.kill()
-                logger.error(f"Normalization timeout for {video_path.name}")
-                if output_path.exists():
-                    output_path.unlink()
+                logger.error(f"Timeout during normalization of {video_path.name}")
+                if temp_output.exists():
+                    temp_output.unlink()
+                return None
+                
+            except Exception as e:
+                logger.error(f"Error during FFmpeg execution for {video_path.name}: {e}")
+                if process.poll() is None:
+                    process.kill()
+                if temp_output.exists():
+                    temp_output.unlink()
                 return None
 
         except Exception as e:
             logger.error(f"Error normalizing {video_path}: {e}")
-            if 'output_path' in locals() and output_path.exists():
-                output_path.unlink()
-            return None
-    def _safe_concatenate(self, video_files: List[Path], output_path: Path) -> bool:
-        """Concaténation sécurisée avec vérification"""
-        try:
-            # Créer le fichier de concaténation
-            concat_file = self.diffusion_dir / "concat.txt"
-            with open(concat_file, 'w', encoding='utf-8') as f:
-                for video in video_files:
-                    f.write(f"file '{video.absolute()}'\n")
-
-            cmd = [
-                "ffmpeg", "-y",
-                "-f", "concat",
-                "-safe", "0",
-                "-i", str(concat_file),
-                "-c", "copy",  # Use copy since files are already normalized
-                "-movflags", "+faststart",
-                str(output_path)
-            ]
-
-            logger.info("Concatenating normalized videos...")
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            
-            success = result.returncode == 0 and output_path.exists()
-            if success:
-                logger.info("Concatenation successful")
-            else:
-                logger.error(f"Concatenation failed: {result.stderr}")
-            
-            return success
-
-        except Exception as e:
-            logger.error(f"Error in concatenation: {e}")
-            return False
-
-    def _verify_video(self, video_path: Path) -> bool:
-        """Vérifier qu'un fichier vidéo est valide"""
+            if 'temp_output' in locals() and temp_output.exists():
+                temp_output.unlink()
+            return None 
+    def _get_video_info(self, video_path: Path) -> dict:
+        """Obtenir les informations détaillées d'une vidéo"""
         try:
             cmd = [
                 "ffprobe",
                 "-v", "error",
-                "-select_streams", "v:0",
-                "-show_entries", "stream=codec_name,width,height,r_frame_rate",
+                "-select_streams", "v:0",  # Sélectionne le premier flux vidéo
+                "-show_entries", "stream=width,height,r_frame_rate,pix_fmt,codec_name,profile,level",
                 "-of", "json",
                 str(video_path)
             ]
             result = subprocess.run(cmd, capture_output=True, text=True)
-            
             if result.returncode == 0:
                 data = json.loads(result.stdout)
-                stream = data.get('streams', [{}])[0]
-                
-                # Vérifier les paramètres
-                if (stream.get('codec_name') == 'h264' and
-                    stream.get('height') == 1080 and
-                    stream.get('r_frame_rate') == '25/1'):
-                    return True
-                    
-                logger.error(f"Invalid video parameters in {video_path}")
-            return False
-                
+                return data.get('streams', [{}])[0]
+            return {}
         except Exception as e:
-            logger.error(f"Error verifying video {video_path}: {e}")
-            return False
+            logger.error(f"Error getting video info for {video_path}: {e}")
+            return {}
 
-    def process_videos(self) -> Optional[str]:
-        """Process all videos with parallel processing and hardware acceleration"""
+    def process_videos(self) -> list[Path]:
+        """Traiter toutes les vidéos et retourner la liste des fichiers normalisés"""
         try:
-            # 1. Collecter tous les fichiers vidéo sources
             source_files = sorted([
-                f for f in self.channel_dir.glob('*.*') 
+                f for f in self.channel_dir.glob('*.*')
                 if f.suffix.lower() in self.video_extensions
             ])
-            
+
             if not source_files:
                 logger.error("No video files found")
-                return None
+                return []
 
-            # 2. Vérifier si le bigfile existant est valide
-            bigfile_path = self.diffusion_dir / "bigfile.mp4"
-            if self._verify_bigfile(source_files):
-                logger.info("Existing bigfile is valid, skipping processing")
-                return str(bigfile_path)
-
-            # 3. Charger les données de tracking
-            tracking_data = self._load_tracking_data()
-            
-            # 4. Préparer le traitement des fichiers
-            temp_dir = self.diffusion_dir / "temp"
-            temp_dir.mkdir(exist_ok=True)
             processed_files = []
-
-            # Déterminer les dimensions cibles à partir du premier fichier
-            first_video_info = self.analyze_video(str(source_files[0]))
-            if not first_video_info:
-                return None
-                
-            target_height = 1080
-            target_width = int((target_height * first_video_info['width']) / first_video_info['height'])
-            target_width = (target_width // 2) * 2  # Assure une largeur paire
-
-            # 5. Traitement parallèle des fichiers
-            with ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
-                futures = []
-                
-                for source_file in source_files:
-                    file_hash = self._get_file_hash(source_file)
-                    cached_path = tracking_data['processed_files'].get(file_hash)
-                    
-                    # Utiliser le cache si possible
-                    if cached_path and Path(cached_path).exists():
-                        if self._verify_video(Path(cached_path)):
-                            logger.info(f"Using cached version of {source_file.name}")
-                            processed_files.append(Path(cached_path))
-                            continue
-
-                    # Sinon, soumettre pour traitement parallèle
-                    future = executor.submit(
-                        self._normalize_video,
-                        source_file,
-                        temp_dir,
-                        target_width,
-                        target_height
-                    )
-                    futures.append((future, file_hash, source_file))
-
-                # Attendre et traiter les résultats
-                for future, file_hash, source_file in futures:
-                    try:
-                        normalized_path = future.result()
-                        if normalized_path:
-                            final_path = self.diffusion_dir / f"norm_{source_file.stem}.mp4"
-                            if final_path.exists():
-                                final_path.unlink()
-                            shutil.move(normalized_path, final_path)
-                            tracking_data['processed_files'][file_hash] = str(final_path)
-                            processed_files.append(final_path)
-                        else:
-                            logger.error(f"Failed to normalize {source_file}")
-                            return None
-                    except Exception as e:
-                        logger.error(f"Error processing {source_file}: {e}")
-                        return None
-
-            # 6. Concaténer en bigfile
-            if bigfile_path.exists():
-                bigfile_path.unlink()
-
-            if self._safe_concatenate(processed_files, bigfile_path):
-                # Mettre à jour la composition du bigfile
-                tracking_data['bigfile_composition'] = [
-                    self._get_file_hash(f) for f in source_files
-                ]
-                self._save_tracking_data(tracking_data)
-                
-                # Nettoyer les fichiers temporaires
-                if temp_dir.exists():
-                    shutil.rmtree(temp_dir)
-                    
-                return str(bigfile_path)
             
-            return None
+            # Utiliser le premier fichier comme référence
+            ref_info = self._get_video_info(source_files[0])
+            
+            # Traiter chaque vidéo
+            for source_file in source_files:
+                processed_path = self._normalize_video(source_file, ref_info)
+                if processed_path:
+                    processed_files.append(processed_path)
+                else:
+                    logger.error(f"Failed to process {source_file}")
+                    return []  # En cas d'échec, on arrête tout
+
+            return processed_files
 
         except Exception as e:
             logger.error(f"Error in video processing: {e}")
+            return []
+
+    def create_concat_file(self, video_files: list[Path]) -> Optional[Path]:
+        """Créer le fichier de concaténation pour FFmpeg"""
+        try:
+            concat_file = self.processed_dir / "concat.txt"
+            with open(concat_file, 'w', encoding='utf-8') as f:
+                for video in video_files:
+                    f.write(f"file '{video.absolute()}'\n")
+            return concat_file
+        except Exception as e:
+            logger.error(f"Error creating concat file: {e}")
             return None
-    
+        
 class IPTVChannel:
     def __init__(self, name: str, video_dir: str, cache_dir: str):
         self.name = name
         self.video_dir = video_dir
-        self.cache_dir = cache_dir
         self.ffmpeg_process = None
         self.lock = threading.Lock()
         self.stop_event = threading.Event()
-        self.active_streams = 0
         self._create_channel_directory()
+        self.processed_videos = []
 
     def _create_channel_directory(self):
         """Crée les répertoires nécessaires pour la chaîne"""
         hls_dir = f"hls/{self.name}"
         os.makedirs(hls_dir, exist_ok=True)
+
+    def scan_videos(self) -> bool:
+        """Process and prepare videos for streaming"""
+        try:
+            processor = VideoProcessor(self.video_dir)
+            self.processed_videos = processor.process_videos()
+            return len(self.processed_videos) > 0
+        except Exception as e:
+            logger.error(f"Error scanning videos for {self.name}: {e}")
+            return False
+
+    def start_stream(self):
+        """Start streaming with optimized concat demuxer"""
+        with self.lock:
+            try:
+                if not self.processed_videos:
+                    logger.error(f"No processed videos available for {self.name}")
+                    return False
+
+                processor = VideoProcessor(self.video_dir)
+                concat_file = processor.create_concat_file(self.processed_videos)
+                if not concat_file:
+                    return False
+
+                hls_dir = f"hls/{self.name}"
+                self._clean_hls_directory()
+
+                cmd = [
+                    "ffmpeg",
+                    "-hide_banner",
+                    "-loglevel", "info",
+                    "-re",  # Lecture en temps réel
+                    "-f", "concat",
+                    "-safe", "0",
+                    "-stream_loop", "-1",  # Boucle infinie
+                    "-i", str(concat_file),
+                    # Pas de réencodage puisque les fichiers sont déjà normalisés
+                    "-c", "copy",
+                    # Configuration HLS optimisée
+                    "-f", "hls",
+                    "-hls_time", "2",  # Durée des segments
+                    "-hls_list_size", "10",  # Nombre de segments dans la playlist
+                    "-hls_flags", "delete_segments+append_list+independent_segments",
+                    "-hls_segment_type", "mpegts",  # Format des segments
+                    "-hls_segment_filename", f"{hls_dir}/segment_%d.ts",
+                    f"{hls_dir}/playlist.m3u8"
+                ]
+
+                logger.info(f"Starting FFmpeg for {self.name}")
+                
+                self.ffmpeg_process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    universal_newlines=True
+                )
+
+                # Vérification du démarrage
+                time.sleep(2)
+                if self.ffmpeg_process.poll() is not None:
+                    stderr = self.ffmpeg_process.stderr.read()
+                    logger.error(f"FFmpeg failed to start: {stderr}")
+                    return False
+
+                # Démarrer le thread de monitoring
+                def monitor_output():
+                    while not self.stop_event.is_set() and self.ffmpeg_process and self.ffmpeg_process.poll() is None:
+                        stderr_line = self.ffmpeg_process.stderr.readline()
+                        if stderr_line:
+                            line = stderr_line.strip()
+                            if "error" in line.lower():
+                                logger.error(f"FFmpeg [{self.name}]: {line}")
+                            else:
+                                logger.debug(f"FFmpeg [{self.name}]: {line}")
+
+                monitor_thread = threading.Thread(target=monitor_output, daemon=True)
+                monitor_thread.start()
+
+                logger.info(f"Stream started for {self.name}")
+                return True
+
+            except Exception as e:
+                logger.error(f"Error starting stream: {e}")
+                return False
+
+    def _clean_hls_directory(self):
+        """Nettoie le répertoire HLS"""
+        try:
+            hls_dir = f"hls/{self.name}"
+            for pattern in ["*.ts", "*.m3u8"]:
+                for file in Path(hls_dir).glob(pattern):
+                    try:
+                        file.unlink()
+                    except OSError:
+                        pass
+        except Exception as e:
+            logger.error(f"Error cleaning HLS directory: {e}")
+
+    def _clean_processes(self):
+        """Clean up FFmpeg processes"""
+        with self.lock:
+            if self.ffmpeg_process:
+                try:
+                    logger.info(f"Stopping FFmpeg for {self.name}")
+                    self.stop_event.set()
+                    self.ffmpeg_process.terminate()
+                    
+                    try:
+                        self.ffmpeg_process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        self.ffmpeg_process.kill()
+                        
+                    self._clean_hls_directory()
+                    self.ffmpeg_process = None
+                    
+                except Exception as e:
+                    logger.error(f"Error cleaning processes: {e}")
+                    self.ffmpeg_process = None
 
     def _start_ffmpeg(self):
         """Start FFmpeg with optimized HLS streaming settings"""
@@ -483,161 +479,6 @@ class IPTVChannel:
             logger.error(f"Error starting FFmpeg: {e}")
             return False
 
-    def _clean_hls_directory(self):
-        """Nettoie le répertoire HLS"""
-        try:
-            hls_dir = f"hls/{self.name}"
-            for pattern in ["*.ts", "*.m3u8"]:
-                for file in Path(hls_dir).glob(pattern):
-                    try:
-                        file.unlink()
-                    except OSError:
-                        pass
-        except Exception as e:
-            logger.error(f"Error cleaning HLS directory for {self.name}: {e}")
-
-    def scan_videos(self) -> bool:
-        """Process and prepare videos for streaming"""
-        try:
-            processor = VideoProcessor(self.video_dir)
-            bigfile_path = processor.process_videos()
-            
-            if bigfile_path:
-                logger.info(f"Successfully processed videos for {self.name}")
-                self.bigfile_path = bigfile_path
-                return True
-            return False
-
-        except Exception as e:
-            logger.error(f"Error scanning videos for {self.name}: {e}")
-            return False
-
-    def _clean_processes(self):
-        """Clean up FFmpeg processes properly"""
-        with self.lock:  # Protection contre les nettoyages simultanés
-            if not self.ffmpeg_process:
-                return
-
-            try:
-                logger.info(f"Stopping FFmpeg for {self.name}")
-                self.stop_event.set()
-                
-                # Arrêt propre
-                self.ffmpeg_process.terminate()
-                
-                try:
-                    # Attendre l'arrêt propre
-                    for _ in range(50):  # 5 secondes max
-                        if self.ffmpeg_process.poll() is not None:
-                            break
-                        time.sleep(0.1)
-                    else:
-                        # Force kill si nécessaire
-                        self.ffmpeg_process.kill()
-                        self.ffmpeg_process.wait(timeout=1)
-                except (subprocess.TimeoutExpired, ProcessLookupError):
-                    pass
-
-                # Nettoyage des segments HLS
-                hls_dir = f"hls/{self.name}"
-                if os.path.exists(hls_dir):
-                    for entry in os.scandir(hls_dir):
-                        if entry.name.endswith(('.ts', '.m3u8')):
-                            try:
-                                os.unlink(entry.path)
-                            except OSError:
-                                pass
-
-                self.ffmpeg_process = None
-                logger.info(f"FFmpeg stopped for {self.name}")
-
-            except Exception as e:
-                logger.error(f"Error cleaning processes for {self.name}: {e}")
-                self.ffmpeg_process = None
-
-    def start_stream(self):
-        """Start streaming with enhanced error handling and logging"""
-        with self.lock:
-            try:
-                logger.info(f"Starting stream for channel: {self.name}")
-                
-                # Ensure HLS directory exists
-                hls_dir = f"hls/{self.name}"
-                os.makedirs(hls_dir, exist_ok=True)
-                logger.info(f"Ensured HLS directory: {hls_dir}")
-
-                # Clean old files
-                self._clean_hls_directory()
-                
-                # Verify bigfile exists
-                if not hasattr(self, 'bigfile_path') or not os.path.exists(self.bigfile_path):
-                    logger.error(f"No valid bigfile for {self.name}")
-                    return False
-                
-                logger.info(f"Using bigfile: {self.bigfile_path}")
-
-                # Start FFmpeg process
-                cmd = [
-                    "ffmpeg",
-                    "-hide_banner",
-                    "-loglevel", "info",
-                    "-re",
-                    "-stream_loop", "-1",
-                    "-i", self.bigfile_path,
-                    
-                    # Video settings
-                    "-c:v", "copy",
-                    
-                    # Audio settings
-                    "-c:a", "copy",
-                    
-                    # HLS settings
-                    "-f", "hls",
-                    "-hls_time", "2",
-                    "-hls_list_size", "10",
-                    "-hls_flags", "delete_segments+append_list",
-                    "-hls_segment_filename", f"{hls_dir}/segment_%d.ts",
-                    f"{hls_dir}/playlist.m3u8"
-                ]
-
-                logger.info(f"Starting FFmpeg for {self.name}")
-                logger.debug(f"FFmpeg command: {' '.join(cmd)}")
-
-                self.ffmpeg_process = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    universal_newlines=True
-                )
-
-                # Wait for initial playlist creation
-                max_wait = 10
-                playlist_file = Path(f"{hls_dir}/playlist.m3u8")
-                start_time = time.time()
-                
-                while time.time() - start_time < max_wait:
-                    if self.ffmpeg_process.poll() is not None:
-                        error = self.ffmpeg_process.stderr.read()
-                        logger.error(f"FFmpeg failed to start for {self.name}: {error}")
-                        return False
-                    
-                    if playlist_file.exists() and playlist_file.stat().st_size > 0:
-                        logger.info(f"HLS stream started successfully for {self.name}")
-                        return True
-                    
-                    time.sleep(0.5)
-
-                logger.error(f"Timeout waiting for HLS playlist creation for {self.name}")
-                self._clean_processes()
-                return False
-
-            except Exception as e:
-                logger.error(f"Error starting stream for {self.name}: {e}")
-                import traceback
-                logger.error(traceback.format_exc())
-                self._clean_processes()
-                return False
-    
     def ensure_hls_conversion(video_dir: str, hls_dir: str) -> bool:
         """Ensure all videos in the directory are converted to HLS format."""
         try:
@@ -1120,6 +961,35 @@ class IPTVChannel:
             logger.error(traceback.format_exc())
             return False
 
+def _clean_directory(directory: Path):
+    """Nettoie le contenu d'un répertoire sans supprimer le répertoire lui-même"""
+    if not directory.exists():
+        return
+        
+    for item in directory.glob("**/*"):
+        try:
+            if item.is_file():
+                item.unlink()
+            elif item.is_dir():
+                shutil.rmtree(item)
+        except Exception as e:
+            logger.error(f"Erreur lors de la suppression de {item}: {e}")
+            continue
+def _clean_directory(directory: Path):
+    """Nettoie le contenu d'un répertoire sans supprimer le répertoire lui-même"""
+    if not directory.exists():
+        return
+        
+    for item in directory.glob("**/*"):
+        try:
+            if item.is_file():
+                item.unlink()
+            elif item.is_dir():
+                shutil.rmtree(item)
+        except Exception as e:
+            logger.error(f"Erreur lors de la suppression de {item}: {e}")
+            continue
+
 class IPTVManager:
     def __init__(self, content_dir: str, cache_dir: str = "./cache"):
         self.content_dir = content_dir
@@ -1132,6 +1002,13 @@ class IPTVManager:
 
         # Setup directories with logging
         logger.info("Initializing IPTV Manager")
+        
+        # Clean HLS directory at startup
+        hls_dir = Path("./hls")
+        logger.info("Cleaning HLS directory...")
+        _clean_directory(hls_dir)
+        
+        # Recreate directories
         for dir_path in [cache_dir, "./hls"]:
             os.makedirs(dir_path, exist_ok=True)
             logger.info(f"Ensured directory exists: {dir_path}")
@@ -1145,6 +1022,31 @@ class IPTVManager:
         logger.info(f"Starting initial scan of {self.content_dir}")
         self.scan_channels(initial=True, force=True)
         self.generate_master_playlist()
+        
+    def cleanup(self):
+        """Nettoyage simplifié - juste arrêter les processus"""
+        logger.info("Début du nettoyage...")
+        
+        # Arrêter l'observer
+        if hasattr(self, 'observer'):
+            logger.info("Arrêt de l'observer...")
+            self.observer.stop()
+            self.observer.join()
+
+        # Nettoyer les processus des chaînes
+        for name, channel in self.channels.items():
+            logger.info(f"Nettoyage de la chaîne {name}...")
+            channel._clean_processes()
+            if hasattr(channel, 'executor'):
+                channel.executor.shutdown(wait=True)
+
+        logger.info("Nettoyage terminé")
+
+    def _signal_handler(self, signum, frame):
+        """Gestionnaire de signal pour un arrêt propre"""
+        logger.info(f"Signal {signum} reçu, nettoyage en cours...")
+        self.cleanup()
+        sys.exit(0)
 
     def scan_channels(self, force=False, initial=False):
         """Enhanced channel scanning with detailed debugging"""
@@ -1334,16 +1236,15 @@ class IPTVManager:
             logger.error(f"🔥 Erreur dans le gestionnaire IPTV: {e}")
             self.cleanup()
             
-    def cleanup(self):
-        """Nettoyage propre à l'arrêt"""
-        logger.info("Arrêt du gestionnaire...")
-        self.observer.stop()
-        self.observer.join()
-
-        for channel in self.channels.values():
-            channel._clean_processes()
-            channel.executor.shutdown(wait=True)
 
 if __name__ == "__main__":
     manager = IPTVManager("./content")
-    manager.run()
+    try:
+        manager.run()
+    except KeyboardInterrupt:
+        logger.info("Interruption utilisateur détectée")
+        manager.cleanup()
+    except Exception as e:
+        logger.error(f"Erreur fatale: {e}")
+        manager.cleanup()
+        raise
