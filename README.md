@@ -7,9 +7,11 @@ Ce projet permet de créer un service de diffusion IPTV en continu à partir de 
 - Détection automatique des fichiers vidéo et des mises à jour
 - Normalisation des fichiers vidéo (H.264, AAC, YUV420p, 25 FPS)
 - Génération d'un flux HLS en continu avec segments dynamiques
+- Lecture en boucle des vidéos pour créer un **faux live**
 - Surveillance en temps réel des nouveaux fichiers ajoutés
 - Création automatique de playlists M3U pour les lecteurs IPTV
 - Gestion multi-chaînes avec Watchdog pour la détection des changements
+- **Compatibilité avec TiviMate et autres lecteurs IPTV**
 
 ## Installation
 ### Prérequis
@@ -38,6 +40,10 @@ Le service surveillera le dossier `./content` et mettra à jour automatiquement 
 
 ### Ajouter des vidéos
 Placez simplement vos fichiers vidéo dans `./content/{nom_chaine}/`. Les formats supportés sont : `mp4`, `avi`, `mkv`, `mov`. Les fichiers sont automatiquement convertis si nécessaire.
+
+### Faux Live et Compatibilité IPTV
+- Les vidéos sont **lues en boucle** pour donner l'illusion d'un flux en direct (**faux live**).
+- Compatible avec **TiviMate**, **VLC**, **Perfect Player** et tout lecteur supportant **HLS/M3U8**.
 
 ### Accéder aux flux IPTV
 Les flux sont disponibles sous forme de fichiers M3U8 accessibles à :
