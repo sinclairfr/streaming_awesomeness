@@ -2,3 +2,4 @@ pathlib
 watchdog
 psutil
 ffmpeg
+tqdm
