@@ -2,7 +2,6 @@
 import os
 import sys
 import subprocess
-import json
 import shutil
 import logging
 import threading
@@ -34,6 +33,14 @@ NORMALIZATION_PARAMS = {
     "profile": "baseline",
     "level": "3.0",
 }
+
+# On configure un logger pour le minuteur de crash
+crash_logger = logging.getLogger("CrashTimer")
+if not crash_logger.handlers:
+    crash_handler = logging.FileHandler("/crash_timer.log")
+    crash_handler.setFormatter(logging.Formatter("%(asctime)s - %(message)s"))
+    crash_logger.addHandler(crash_handler)
+    crash_logger.setLevel(logging.INFO)
 
 
 # -----------------------------------------------------------------------------
@@ -72,6 +79,9 @@ class ChannelEventHandler(FileSystemEventHandler):
 
     def on_created(self, event):
         if event.is_directory:
+            logger.info(f"🔍 Nouveau dossier détecté: {event.src_path}")
+            # Attendre un peu que les fichiers soient copiés
+            time.sleep(2)
             self._handle_event(event)
 
 
@@ -142,7 +152,7 @@ class VideoProcessor:
                 "-c:v",
                 "libx264",
                 "-preset",
-                "ultrafast",
+                "medium",
                 "-profile:v",
                 "baseline",
                 "-level:v",
@@ -290,6 +300,21 @@ class IPTVChannel:
         self.error_count = 0
         self.max_errors = 3
         self.restart_delay = 5  # en secondes
+        self.last_successful_segment = 0
+        self.segment_check_interval = 2  # Vérifier toutes les 2 secondes
+        self.segment_timeout = 10  # Réduire le timeout à 10s au lieu de 30s
+        self.target_duration = 4  # Durée cible des segments
+        self.wrap_threshold = 20  # Seuil de rotation des segments
+        self.media_sequence = 0  # Séquence média initiale
+        self.segment_buffer = 15
+        self.min_segment_size = 1024  # 1KB minimum
+        self.current_segments = {}  # Pour tracker les segments actifs
+        self.last_playlist = None  # Garder une copie de la dernière playlist valide
+        self.stream_start_time = None
+        self.media_sequence = 0
+        self.segment_count = 0
+        self.wrap_count = 20
+        self.fallback_mode = False  # False = mode stream copy, True = mode ré-encodage
 
     def start_stream(self) -> bool:
         with self.lock:
@@ -317,82 +342,11 @@ class IPTVChannel:
                 self._clean_processes()
                 return False
 
-    def _build_ffmpeg_command(self, hls_dir: str) -> list:
-        concat_file = self._create_concat_file()
-        if not concat_file:
-            raise Exception("Impossible de créer le fichier de concaténation")
-        return [
-            "ffmpeg",
-            "-hide_banner",
-            "-loglevel",
-            "info",
-            "-y",
-            "-re",
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-stream_loop",
-            "-1",
-            "-i",
-            str(concat_file),
-            "-c:v",
-            "copy",
-            "-c:a",
-            "copy",
-            "-f",
-            "hls",
-            "-hls_time",
-            "2",
-            "-hls_list_size",
-            "10",
-            "-hls_flags",
-            "delete_segments+append_list+independent_segments",
-            "-hls_segment_type",
-            "mpegts",
-            "-hls_segment_filename",
-            f"{hls_dir}/segment_%d.ts",
-            f"{hls_dir}/playlist.m3u8",
-        ]
-
-    def _monitor_ffmpeg(self, hls_dir: str):
-        self.last_segment_time = time.time()
-        segment_timeout = 10  # secondes sans nouveau segment
-        while (
-            not self.stop_event.is_set()
-            and self.ffmpeg_process
-            and self.ffmpeg_process.poll() is None
-        ):
-            try:
-                current_time = time.time()
-                segments = list(Path(hls_dir).glob("segment_*.ts"))
-                if segments:
-                    last_segment = max(segments, key=lambda f: f.stat().st_mtime)
-                    self.last_segment_time = last_segment.stat().st_mtime
-                if current_time - self.last_segment_time > segment_timeout:
-                    self.error_count += 1
-                    logger.error(
-                        f"⚠️ Aucun nouveau segment depuis {segment_timeout}s pour {self.name}"
-                    )
-                    if self.error_count >= self.max_errors:
-                        logger.error(
-                            f"🔄 Redémarrage du stream pour {self.name} après {self.error_count} erreurs"
-                        )
-                        self._restart_stream()
-                        break
-                if not self._check_system_resources():
-                    logger.warning(f"⚠️ Ressources système faibles pour {self.name}")
-                time.sleep(1)
-            except Exception as e:
-                logger.error(f"Erreur dans la surveillance de {self.name} : {e}")
-                self._restart_stream()
-                break
-
     def _check_system_resources(self) -> bool:
         try:
             cpu_percent = psutil.cpu_percent()
             memory_percent = psutil.virtual_memory().percent
-            if cpu_percent > 95 and memory_percent > 90:
+            if cpu_percent > 98 and memory_percent > 95:
                 logger.warning(
                     f"Ressources critiques - CPU: {cpu_percent}%, RAM: {memory_percent}%"
                 )
@@ -401,16 +355,6 @@ class IPTVChannel:
         except Exception as e:
             logger.error(f"Erreur lors de la vérification des ressources : {e}")
             return True
-
-    def _restart_stream(self):
-        try:
-            logger.info(f"🔄 Redémarrage du stream {self.name}")
-            self._clean_processes()
-            time.sleep(self.restart_delay)
-            self.error_count = 0
-            self.start_stream()
-        except Exception as e:
-            logger.error(f"Erreur lors du redémarrage du stream {self.name} : {e}")
 
     def _clean_processes(self):
         with self.lock:
@@ -491,18 +435,260 @@ class IPTVChannel:
                 stderr=subprocess.PIPE,
                 universal_newlines=True,
             )
-            time.sleep(2)
-            if process.poll() is not None:
-                stderr = process.stderr.read()
-                logger.error(
-                    f"❌ FFmpeg s'est arrêté immédiatement pour {self.name}. Erreur : {stderr}"
-                )
-                return None
-            logger.info(f"✅ FFmpeg démarré pour {self.name} avec PID {process.pid}")
-            return process
+            # Attendre la création du premier segment
+            start_time = time.time()
+            hls_dir = Path(f"hls/{self.name}")
+            while time.time() - start_time < 10:  # 10s timeout
+                if list(hls_dir.glob("segment_*.ts")):
+                    self.stream_start_time = time.time()
+                    logger.info(
+                        f"✅ FFmpeg démarré pour {self.name} avec PID {process.pid}"
+                    )
+                    return process
+                time.sleep(0.1)
+
+            logger.error(f"❌ Timeout en attendant les segments pour {self.name}")
+            process.kill()
+            return None
         except Exception as e:
             logger.error(f"Erreur lors du démarrage de FFmpeg pour {self.name} : {e}")
             return None
+
+    def _build_ffmpeg_command(self, hls_dir: str) -> list:
+        if self.fallback_mode:
+            video_codec = "libx264"
+            audio_codec = "aac"
+            preset = [
+                "-preset",
+                "medium",
+                "-profile:v",
+                "baseline",
+                "-level:v",
+                "3.0",
+                "-pix_fmt",
+                "yuv420p",
+                "-r",
+                "25",
+                "-g",
+                "50",
+                "-keyint_min",
+                "25",
+                "-sc_threshold",
+                "0",
+            ]
+        else:
+            video_codec = "copy"
+            audio_codec = "copy"
+            preset = []
+
+        cmd = (
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "info",
+                "-y",
+                "-re",
+                "-fflags",
+                "+genpts+igndts",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-stream_loop",
+                "-1",
+                "-i",
+                str(self._create_concat_file()),
+            ]
+            + preset
+            + [
+                "-c:v",
+                video_codec,
+                "-c:a",
+                audio_codec,
+                "-f",
+                "hls",
+                "-hls_time",
+                "4",
+                "-hls_list_size",
+                str(self.segment_buffer),
+                "-hls_flags",
+                "delete_segments+append_list+program_date_time",
+                "-hls_segment_type",
+                "mpegts",
+                "-hls_init_time",
+                "4",
+                "-hls_segment_filename",
+                f"{hls_dir}/segment_%d.ts",
+                f"{hls_dir}/playlist.m3u8",
+            ]
+        )
+
+        logger.info(
+            f"Commande FFmpeg ({'fallback' if self.fallback_mode else 'normal'}) pour {self.name} : {' '.join(cmd)}"
+        )
+        return cmd
+
+    def _monitor_ffmpeg(self, hls_dir: str):
+        self.last_segment_time = time.time()
+        last_segment_number = -1
+        hls_dir = Path(hls_dir)
+        crash_threshold = 10  # Seuil en secondes avant de logger le bug
+
+        while (
+            not self.stop_event.is_set()
+            and self.ffmpeg_process
+            and self.ffmpeg_process.poll() is None
+        ):
+            try:
+                current_time = time.time()
+                segments = sorted(hls_dir.glob("segment_*.ts"))
+                if segments:
+                    newest_segment = max(segments, key=lambda x: x.stat().st_mtime)
+                    try:
+                        current_segment = int(newest_segment.stem.split("_")[1])
+                    except ValueError:
+                        current_segment = -1
+                    if current_segment != last_segment_number:
+                        self.last_segment_time = current_time
+                        last_segment_number = current_segment
+                        self.error_count = 0
+
+                        # Mise à jour de la playlist HLS
+                        playlist_content = self._generate_playlist(segments)
+                        playlist_path = hls_dir / "playlist.m3u8"
+                        temp_playlist = playlist_path.with_suffix(".m3u8.tmp")
+                        temp_playlist.write_text(playlist_content)
+                        temp_playlist.replace(playlist_path)
+
+                        # (Optionnel) Nettoyage des anciens segments ici...
+
+                elapsed = current_time - self.last_segment_time
+                if elapsed > crash_threshold:
+                    message = f"[{self.name}] Aucune mise à jour de segment depuis {elapsed:.1f} secondes."
+                    print(message)
+                    crash_logger.info(message)
+
+                time.sleep(1)
+            except Exception as e:
+                logger.error(f"Erreur monitoring {self.name} : {e}")
+                time.sleep(1)
+
+    def _generate_playlist(self, segments: list) -> str:
+        """Génère une playlist HLS personnalisée."""
+        segments = sorted(segments, key=lambda x: int(x.stem.split("_")[1]))
+
+        # Trouver le plus petit numéro de segment pour la séquence média
+        first_segment = min(int(s.stem.split("_")[1]) for s in segments)
+        last_segment = max(int(s.stem.split("_")[1]) for s in segments)
+
+        playlist = [
+            "#EXTM3U",
+            "#EXT-X-VERSION:3",
+            f"#EXT-X-TARGETDURATION:{self.target_duration}",
+            f"#EXT-X-MEDIA-SEQUENCE:{first_segment}",  # Utiliser le numéro du premier segment
+        ]
+
+        base_time = datetime.datetime.utcnow() - datetime.timedelta(
+            seconds=len(segments) * self.target_duration
+        )
+
+        for idx, segment in enumerate(segments):
+            segment_num = int(segment.stem.split("_")[1])
+            segment_time = (
+                base_time + datetime.timedelta(seconds=idx * self.target_duration)
+            ).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+            playlist.extend(
+                [
+                    f"#EXT-X-PROGRAM-DATE-TIME:{segment_time}",
+                    f"#EXTINF:{self.target_duration}.000000,",
+                    segment.name,
+                ]
+            )
+
+        return "\n".join(playlist)
+
+    def _restart_stream(self):
+        try:
+            logger.info(f"🔄 Redémarrage du stream {self.name}")
+            # On sauvegarde l'état actuel (séquence média et nombre de segments)
+            current_state = {
+                "media_sequence": self.media_sequence,
+                "segment_count": self.segment_count,
+            }
+
+            # On arrête proprement le processus FFmpeg en cours
+            self._clean_processes()
+
+            # On prépare un dossier temporaire pour sauvegarder la playlist et quelques segments
+            hls_dir = Path(f"hls/{self.name}")
+            temp_dir = hls_dir / "temp"
+            temp_dir.mkdir(exist_ok=True)
+
+            if hls_dir.exists():
+                # On sauvegarde la playlist actuelle si elle existe
+                playlist = hls_dir / "playlist.m3u8"
+                if playlist.exists():
+                    shutil.copy2(playlist, temp_dir / "playlist.m3u8")
+                # On sauvegarde les 3 derniers segments
+                segments = sorted(
+                    list(hls_dir.glob("segment_*.ts")),
+                    key=lambda x: x.stat().st_mtime,
+                    reverse=True,
+                )[:3]
+                for seg in segments:
+                    shutil.copy2(seg, temp_dir / seg.name)
+
+            # On nettoie le dossier HLS
+            self._clean_hls_directory()
+
+            # On restaure la playlist et les segments sauvegardés
+            if temp_dir.exists():
+                for item in temp_dir.iterdir():
+                    shutil.copy2(item, hls_dir / item.name)
+                shutil.rmtree(temp_dir)
+
+            # On restaure l'état de la séquence média
+            self.media_sequence = current_state["media_sequence"]
+            self.segment_count = current_state["segment_count"]
+            self.error_count = 0
+
+            # Activation du mode fallback si ce n'est pas déjà fait
+            if not self.fallback_mode:
+                logger.info(
+                    "Activation du mode ré-encodage (fallback mode) pour garantir la compatibilité"
+                )
+                self.fallback_mode = True
+
+            # On recrée le fichier de concaténation pour FFmpeg
+            concat_file = self._create_concat_file()
+            if not concat_file:
+                logger.error("Échec de la recréation du fichier de concaténation")
+                return False
+
+            # Petite pause avant de redémarrer
+            time.sleep(self.restart_delay)
+
+            # On lance le stream avec la nouvelle configuration
+            stream_started = self.start_stream()
+
+            # Optionnel : on attend que le fichier playlist.m3u8 soit bien créé (timeout 10s)
+            timeout = 10
+            start_time = time.time()
+            playlist_path = hls_dir / "playlist.m3u8"
+            while not playlist_path.exists() and (time.time() - start_time < timeout):
+                time.sleep(0.5)
+            if not playlist_path.exists():
+                logger.error(
+                    f"La playlist {playlist_path} n'a pas été créée dans le délai imparti"
+                )
+                return False
+
+            return stream_started
+        except Exception as e:
+            logger.error(f"Erreur lors du redémarrage du stream {self.name}: {e}")
+            return False
 
 
 # -----------------------------------------------------------------------------
@@ -558,6 +744,31 @@ class IPTVManager:
         # Lancer le monitoring des clients via le log d'Nginx
         self.client_monitor = ClientMonitor(NGINX_ACCESS_LOG)
         self.client_monitor.start()
+        # Démarrer le monitoring des ressources
+        self.resource_monitor = ResourceMonitor()
+        self.resource_monitor.start()
+
+        self.master_playlist_timer = threading.Timer(30, self._update_master_playlist)
+        self.master_playlist_timer.start()
+
+        self.master_playlist_updater = threading.Thread(
+            target=self._master_playlist_loop, daemon=True
+        )
+        self.master_playlist_updater.start()
+
+    def _master_playlist_loop(self):
+        """Boucle de mise à jour continue de la master playlist."""
+        while True:
+            try:
+                self.generate_master_playlist()
+            except Exception as e:
+                logger.error(f"Erreur mise à jour master playlist: {e}")
+            time.sleep(10)  # Mise à jour toutes les 10 secondes
+
+    def _update_master_playlist(self):
+        self.generate_master_playlist()
+        self.master_playlist_timer = threading.Timer(10, self._update_master_playlist)
+        self.master_playlist_timer.start()
 
     def _clean_directory(self, directory: Path):
         if not directory.exists():
@@ -674,6 +885,31 @@ class IPTVManager:
                 logger.info(f"Chaînes traitées avec succès : {len(processed_channels)}")
                 logger.info(f"Chaînes actives : {', '.join(self.channels.keys())}")
                 self.generate_master_playlist()
+
+                ##oo
+                # Vérifier l'état des chaînes après le scan
+                active_channels = []
+                for name, channel in self.channels.items():
+                    if channel.ffmpeg_process and channel.ffmpeg_process.poll() is None:
+                        active_channels.append(name)
+                    else:
+                        logger.warning(
+                            f"La chaîne {name} n'est pas active, tentative de redémarrage"
+                        )
+                        if channel.start_stream():
+                            active_channels.append(name)
+
+                if not active_channels:
+                    logger.error("❌ CRITIQUE : Aucune chaîne active après le scan !")
+                    # Forcer un rescan complet
+                    self._clean_directory(Path("./hls"))
+                    time.sleep(5)
+                    self.scan_channels(force=True)
+                else:
+                    logger.info(f"Chaînes actives: {', '.join(active_channels)}")
+
+                self.generate_master_playlist()
+
             except Exception as e:
                 logger.error(f"Erreur lors du scan des chaînes : {e}")
                 import traceback
@@ -757,6 +993,68 @@ class IPTVManager:
         except Exception as e:
             logger.error(f"🔥 Erreur dans le gestionnaire IPTV : {e}")
             self.cleanup()
+
+
+# -----------------------------------------------------------------------------
+# Moniteur des ressources système
+# -----------------------------------------------------------------------------
+class ResourceMonitor(threading.Thread):
+    def __init__(self):
+        super().__init__(daemon=True)
+        self.interval = 20  # secondes
+
+    def run(self):
+        while True:
+            try:
+                cpu_percent = psutil.cpu_percent(interval=1)
+                ram = psutil.virtual_memory()
+                ram_used_gb = ram.used / (1024 * 1024 * 1024)
+                ram_total_gb = ram.total / (1024 * 1024 * 1024)
+
+                # Tenter de récupérer les infos GPU si nvidia-smi est disponible
+                gpu_info = ""
+                try:
+                    result = subprocess.run(
+                        [
+                            "nvidia-smi",
+                            "--query-gpu=utilization.gpu,memory.used",
+                            "--format=csv,noheader,nounits",
+                        ],
+                        capture_output=True,
+                        text=True,
+                    )
+                    if result.returncode == 0:
+                        gpu_util, gpu_mem = result.stdout.strip().split(",")
+                        gpu_info = f", GPU: {gpu_util}%, MEM GPU: {gpu_mem}MB"
+                except FileNotFoundError:
+                    pass  # Pas de GPU NVIDIA
+
+                logger.info(
+                    f"💻 Ressources - CPU: {cpu_percent}%, "
+                    f"RAM: {ram_used_gb:.1f}/{ram_total_gb:.1f}GB ({ram.percent}%)"
+                    f"{gpu_info}"
+                )
+            except Exception as e:
+                logger.error(f"Erreur monitoring ressources: {e}")
+
+            time.sleep(self.interval)
+
+
+def run(self):
+    try:
+        self.scan_channels()
+        self.generate_master_playlist()
+        self.observer.start()
+        cpu_thread = threading.Thread(target=self._cpu_monitor, daemon=True)
+        cpu_thread.start()
+        while True:
+            time.sleep(1)
+    except Exception as e:
+        logger.error(f"🔥 Erreur fatale dans le gestionnaire IPTV : {e}")
+        import traceback
+
+        logger.error(traceback.format_exc())
+        self.cleanup()
 
 
 if __name__ == "__main__":
