@@ -20,3 +20,267 @@
 [hls muxer @ 0x559eb33d8b40] failed to delete old segment hls/channel1/segment_20250206154580.ts: No such file or directory
 [hls muxer @ 0x559eb33d8b40] failed to delete old segment hls/channel1/segment_20250206154583.ts: No such file or directory
 [hls muxer @ 0x559eb33d8b40] failed to delete old segment hls/channel1/segment_20250206154585.ts: No such file or directory
+[concat @ 0x5642c30b2940] Impossible to open '/app/content/channel1/processed/Anderson, Paul Thomas - 1999 - Magnolia.0175880.mp4'
+[in#0 @ 0x5642c30b2800] Error opening input: No such file or directory
+Error opening input file content/channel1/_playlist.txt.
+Error opening input files: No such file or directory
+[concat @ 0x5603b9d9b940] Impossible to open '/app/content/channel1/processed/Anderson, Paul Thomas - 1999 - Magnolia.0175880.mp4'
+[in#0 @ 0x5603b9d9b800] Error opening input: No such file or directory
+Error opening input file content/channel1/_playlist.txt.
+Error opening input files: No such file or directory
+[concat @ 0x560cd6c4e940] Impossible to open '/app/content/channel1/processed/Anderson, Paul Thomas - 1999 - Magnolia.0175880.mp4'
+[in#0 @ 0x560cd6c4e800] Error opening input: No such file or directory
+Error opening input file content/channel1/_playlist.txt.
+Error opening input files: No such file or directory
+[concat @ 0x558f6b2fb940] Impossible to open '/app/content/channel1/processed/Anderson, Paul Thomas - 1999 - Magnolia.0175880.mp4'
+[in#0 @ 0x558f6b2fb800] Error opening input: No such file or directory
+Error opening input file content/channel1/_playlist.txt.
+Error opening input files: No such file or directory
+[concat @ 0x557c318f0940] Impossible to open '/app/content/channel1/processed/Anderson, Paul Thomas - 1999 - Magnolia.0175880.mp4'
+[in#0 @ 0x557c318f0800] Error opening input: No such file or directory
+Error opening input file content/channel1/_playlist.txt.
+Error opening input files: No such file or directory
+[concat @ 0x5652e6829940] Impossible to open '/app/content/channel1/processed/Anderson, Paul Thomas - 1999 - Magnolia.0175880.mp4'
+[in#0 @ 0x5652e6829800] Error opening input: No such file or directory
+Error opening input file content/channel1/_playlist.txt.
+Error opening input files: No such file or directory
+[concat @ 0x563915e15940] Impossible to open '/app/content/channel1/processed/Anderson, Paul Thomas - 1999 - Magnolia.0175880.mp4'
+[in#0 @ 0x563915e15800] Error opening input: No such file or directory
+Error opening input file content/channel1/_playlist.txt.
+Error opening input files: No such file or directory
+[concat @ 0x56528e62c940] Impossible to open '/app/content/channel1/processed/Anderson, Paul Thomas - 1999 - Magnolia.0175880.mp4'
+[in#0 @ 0x56528e62c800] Error opening input: No such file or directory
+Error opening input file content/channel1/_playlist.txt.
+Error opening input files: No such file or directory
+[concat @ 0x561a26f99940] Impossible to open '/app/content/channel1/processed/Anderson, Paul Thomas - 1999 - Magnolia.0175880.mp4'
+[in#0 @ 0x561a26f99800] Error opening input: No such file or directory
+Error opening input file content/channel1/_playlist.txt.
+Error opening input files: No such file or directory
+[concat @ 0x55dc000dd940] Impossible to open '/app/content/channel1/processed/Anderson, Paul Thomas - 1999 - Magnolia.0175880.mp4'
+[in#0 @ 0x55dc000dd800] Error opening input: No such file or directory
+Error opening input file content/channel1/_playlist.txt.
+Error opening input files: No such file or directory
+[concat @ 0x55e8b401d940] Impossible to open '/app/content/channel1/processed/Anderson, Paul Thomas - 1999 - Magnolia.0175880.mp4'
+[in#0 @ 0x55e8b401d800] Error opening input: No such file or directory
+Error opening input file content/channel1/_playlist.txt.
+Error opening input files: No such file or directory
+[concat @ 0x560ee9ec1940] Impossible to open '/app/content/channel1/processed/Anderson, Paul Thomas - 1999 - Magnolia.0175880.mp4'
+[in#0 @ 0x560ee9ec1800] Error opening input: No such file or directory
+Error opening input file content/channel1/_playlist.txt.
+Error opening input files: No such file or directory
+[concat @ 0x55af5c8ea940] Impossible to open '/app/content/channel1/processed/Anderson, Paul Thomas - 1999 - Magnolia.0175880.mp4'
+[in#0 @ 0x55af5c8ea800] Error opening input: No such file or directory
+Error opening input file content/channel1/_playlist.txt.
+Error opening input files: No such file or directory
+[concat @ 0x556029225940] Impossible to open '/app/content/channel1/processed/Anderson, Paul Thomas - 1999 - Magnolia.0175880.mp4'
+[in#0 @ 0x556029225800] Error opening input: No such file or directory
+Error opening input file content/channel1/_playlist.txt.
+Error opening input files: No such file or directory
+[concat @ 0x558dd9937940] Impossible to open '/app/content/channel1/processed/Anderson, Paul Thomas - 1999 - Magnolia.0175880.mp4'
+[in#0 @ 0x558dd9937800] Error opening input: No such file or directory
+Error opening input file content/channel1/_playlist.txt.
+Error opening input files: No such file or directory
+[concat @ 0x5654d2640940] Impossible to open '/app/content/channel1/processed/Anderson, Paul Thomas - 1999 - Magnolia.0175880.mp4'
+[in#0 @ 0x5654d2640800] Error opening input: No such file or directory
+Error opening input file content/channel1/_playlist.txt.
+Error opening input files: No such file or directory
+[concat @ 0x558707245940] Impossible to open '/app/content/channel1/processed/Anderson, Paul Thomas - 1999 - Magnolia.0175880.mp4'
+[in#0 @ 0x558707245800] Error opening input: No such file or directory
+Error opening input file content/channel1/_playlist.txt.
+Error opening input files: No such file or directory
+[concat @ 0x55ea9814f940] Impossible to open '/app/content/channel1/processed/Anderson, Paul Thomas - 1999 - Magnolia.0175880.mp4'
+[in#0 @ 0x55ea9814f800] Error opening input: No such file or directory
+Error opening input file content/channel1/_playlist.txt.
+Error opening input files: No such file or directory
+[concat @ 0x55e08f583940] Impossible to open '/app/content/channel1/processed/Anderson, Paul Thomas - 1999 - Magnolia.0175880.mp4'
+[in#0 @ 0x55e08f583800] Error opening input: No such file or directory
+Error opening input file content/channel1/_playlist.txt.
+Error opening input files: No such file or directory
+[concat @ 0x563a84325940] Impossible to open '/app/content/channel1/processed/Anderson, Paul Thomas - 1999 - Magnolia.0175880.mp4'
+[in#0 @ 0x563a84325800] Error opening input: No such file or directory
+Error opening input file content/channel1/_playlist.txt.
+Error opening input files: No such file or directory
+[concat @ 0x55e65a553940] Impossible to open '/app/content/channel1/processed/Anderson, Paul Thomas - 1999 - Magnolia.0175880.mp4'
+[in#0 @ 0x55e65a553800] Error opening input: No such file or directory
+Error opening input file content/channel1/_playlist.txt.
+Error opening input files: No such file or directory
+[hls @ 0x563819c33c00] failed to rename file hls/channel1/playlist.m3u8.tmp to hls/channel1/playlist.m3u8: No such file or directory
+[hls muxer @ 0x5601bdddeb40] failed to delete old segment hls/channel1/segment_20250206212041.ts: No such file or directory
+[hls muxer @ 0x55ae7e655b40] failed to delete old segment hls/channel1/segment_20250206212041.ts: No such file or directory
+    Last message repeated 1 times
+[hls muxer @ 0x563819c91b40] failed to delete old segment hls/channel1/segment_20250206212041.ts: No such file or directory
+[hls muxer @ 0x558bdf211b40] failed to delete old segment hls/channel1/segment_20250206212041.ts: No such file or directory
+[hls muxer @ 0x563819c91b40] failed to delete old segment hls/channel1/segment_20250206212050.ts: No such file or directory
+[hls muxer @ 0x55ae7e655b40] failed to delete old segment hls/channel1/segment_20250206212050.ts: No such file or directory
+[hls @ 0x563819c33c00] failed to rename file hls/channel1/playlist.m3u8.tmp to hls/channel1/playlist.m3u8: No such file or directory
+[hls muxer @ 0x5601bdddeb40] failed to delete old segment hls/channel1/segment_20250206212050.ts: No such file or directory
+[hls muxer @ 0x563819c91b40] failed to delete old segment hls/channel1/segment_20250206212051.ts: No such file or directory
+[hls muxer @ 0x55ae7e655b40] failed to delete old segment hls/channel1/segment_20250206212051.ts: No such file or directory
+[hls muxer @ 0x5601bdddeb40] failed to delete old segment hls/channel1/segment_20250206212051.ts: No such file or directory
+[hls muxer @ 0x563819c91b40] failed to delete old segment hls/channel1/segment_20250206212052.ts: No such file or directory
+[hls muxer @ 0x55ae7e655b40] failed to delete old segment hls/channel1/segment_20250206212052.ts: No such file or directory
+[hls muxer @ 0x5601bdddeb40] failed to delete old segment hls/channel1/segment_20250206212052.ts: No such file or directory
+[hls muxer @ 0x55ae7e655b40] failed to delete old segment hls/channel1/segment_20250206212053.ts: No such file or directory
+[hls muxer @ 0x5601bdddeb40] failed to delete old segment hls/channel1/segment_20250206212053.ts: No such file or directory
+[hls muxer @ 0x563819c91b40] failed to delete old segment hls/channel1/segment_20250206212053.ts: No such file or directory
+[hls muxer @ 0x563819c91b40] failed to delete old segment hls/channel1/segment_20250206212054.ts: No such file or directory
+[hls muxer @ 0x55ae7e655b40] failed to delete old segment hls/channel1/segment_20250206212054.ts: No such file or directory
+[hls muxer @ 0x5601bdddeb40] failed to delete old segment hls/channel1/segment_20250206212054.ts: No such file or directory
+[hls muxer @ 0x55ae7e655b40] failed to delete old segment hls/channel1/segment_20250206212055.ts: No such file or directory
+[hls muxer @ 0x563819c91b40] failed to delete old segment hls/channel1/segment_20250206212055.ts: No such file or directory
+[hls @ 0x563819c33c00] failed to rename file hls/channel1/playlist.m3u8.tmp to hls/channel1/playlist.m3u8: No such file or directory
+[hls muxer @ 0x5601bdddeb40] failed to delete old segment hls/channel1/segment_20250206212055.ts: No such file or directory
+[hls muxer @ 0x55ae7e655b40] failed to delete old segment hls/channel1/segment_20250206212056.ts: No such file or directory
+[hls muxer @ 0x563819c91b40] failed to delete old segment hls/channel1/segment_20250206212056.ts: No such file or directory
+[hls muxer @ 0x5601bdddeb40] failed to delete old segment hls/channel1/segment_20250206212056.ts: No such file or directory
+[hls muxer @ 0x55ae7e655b40] failed to delete old segment hls/channel1/segment_20250206212057.ts: No such file or directory
+[hls muxer @ 0x563819c91b40] failed to delete old segment hls/channel1/segment_20250206212057.ts: No such file or directory
+[hls muxer @ 0x5601bdddeb40] failed to delete old segment hls/channel1/segment_20250206212057.ts: No such file or directory
+[hls muxer @ 0x563819c91b40] failed to delete old segment hls/channel1/segment_20250206212058.ts: No such file or directory
+[hls muxer @ 0x55ae7e655b40] failed to delete old segment hls/channel1/segment_20250206212058.ts: No such file or directory
+[hls muxer @ 0x5601bdddeb40] failed to delete old segment hls/channel1/segment_20250206212058.ts: No such file or directory
+[hls muxer @ 0x563819c91b40] [hls muxer @ 0x55ae7e655b40] failed to delete old segment hls/channel1/segment_20250206212059.ts: No such file or directory
+failed to delete old segment hls/channel1/segment_20250206212059.ts: No such file or directory
+[hls @ 0x55ae7e5f7c00] failed to rename file hls/channel1/playlist.m3u8.tmp to hls/channel1/playlist.m3u8: No such file or directory
+[hls muxer @ 0x5601bdddeb40] failed to delete old segment hls/channel1/segment_20250206212059.ts: No such file or directory
+[hls muxer @ 0x55ae7e655b40] failed to delete old segment hls/channel1/segment_20250206212060.ts: No such file or directory
+[hls muxer @ 0x563819c91b40] failed to delete old segment hls/channel1/segment_20250206212060.ts: No such file or directory
+[hls @ 0x563819c33c00] failed to rename file hls/channel1/playlist.m3u8.tmp to hls/channel1/playlist.m3u8: No such file or directory
+[hls muxer @ 0x5601bdddeb40] failed to delete old segment hls/channel1/segment_20250206212060.ts: No such file or directory
+[hls muxer @ 0x55ae7e655b40] failed to delete old segment hls/channel1/segment_20250206212061.ts: No such file or directory
+[hls muxer @ 0x563819c91b40] failed to delete old segment hls/channel1/segment_20250206212061.ts: No such file or directory
+[hls @ 0x563819c33c00] failed to rename file hls/channel1/playlist.m3u8.tmp to hls/channel1/playlist.m3u8: No such file or directory
+[hls muxer @ 0x5601bdddeb40] failed to delete old segment hls/channel1/segment_20250206212061.ts: No such file or directory
+[hls muxer @ 0x55ae7e655b40] failed to delete old segment hls/channel1/segment_20250206212062.ts: No such file or directory
+[hls muxer @ 0x563819c91b40] failed to delete old segment hls/channel1/segment_20250206212062.ts: No such file or directory
+[hls muxer @ 0x5601bdddeb40] failed to delete old segment hls/channel1/segment_20250206212062.ts: No such file or directory
+[hls muxer @ 0x563819c91b40] failed to delete old segment hls/channel1/segment_20250206212063.ts: No such file or directory
+[hls muxer @ 0x55ae7e655b40] failed to delete old segment hls/channel1/segment_20250206212063.ts: No such file or directory
+[hls muxer @ 0x5601bdddeb40] failed to delete old segment hls/channel1/segment_20250206212063.ts: No such file or directory
+[hls muxer @ 0x55ae7e655b40] failed to delete old segment hls/channel1/segment_20250206212064.ts: No such file or directory
+[hls muxer @ 0x563819c91b40] failed to delete old segment hls/channel1/segment_20250206212064.ts: No such file or directory
+[hls @ 0x563819c33c00] failed to rename file hls/channel1/playlist.m3u8.tmp to hls/channel1/playlist.m3u8: No such file or directory
+[hls muxer @ 0x5601bdddeb40] failed to delete old segment hls/channel1/segment_20250206212064.ts: No such file or directory
+[hls muxer @ 0x563819c91b40] failed to delete old segment hls/channel1/segment_20250206212065.ts: No such file or directory
+[hls muxer @ 0x55ae7e655b40] failed to delete old segment hls/channel1/segment_20250206212065.ts: No such file or directory
+[hls muxer @ 0x5601bdddeb40] failed to delete old segment hls/channel1/segment_20250206212065.ts: No such file or directory
+[hls muxer @ 0x55ae7e655b40] failed to delete old segment hls/channel1/segment_20250206212066.ts: No such file or directory
+[hls muxer @ 0x563819c91b40] failed to delete old segment hls/channel1/segment_20250206212066.ts: No such file or directory
+[hls @ 0x563819c33c00] failed to rename file hls/channel1/playlist.m3u8.tmp to hls/channel1/playlist.m3u8: No such file or directory
+[hls muxer @ 0x5601bdddeb40] failed to delete old segment hls/channel1/segment_20250206212066.ts: No such file or directory
+[hls muxer @ 0x55ae7e655b40] failed to delete old segment hls/channel1/segment_20250206212067.ts: No such file or directory
+[hls muxer @ 0x563819c91b40] failed to delete old segment hls/channel1/segment_20250206212067.ts: No such file or directory
+[hls muxer @ 0x5601bdddeb40] failed to delete old segment hls/channel1/segment_20250206212067.ts: No such file or directory
+[hls muxer @ 0x55ae7e655b40] [hls muxer @ 0x563819c91b40] failed to delete old segment hls/channel1/segment_20250206212068.ts: No such file or directory
+failed to delete old segment hls/channel1/segment_20250206212068.ts: No such file or directory
+[hls @ 0x55ae7e5f7c00] failed to rename file hls/channel1/playlist.m3u8.tmp to hls/channel1/playlist.m3u8: No such file or directory
+[hls muxer @ 0x5601bdddeb40] failed to delete old segment hls/channel1/segment_20250206212068.ts: No such file or directory
+[hls muxer @ 0x55ae7e655b40] failed to delete old segment hls/channel1/segment_20250206212069.ts: No such file or directory
+[hls muxer @ 0x563819c91b40] failed to delete old segment hls/channel1/segment_20250206212069.ts: No such file or directory
+[hls muxer @ 0x5601bdddeb40] failed to delete old segment hls/channel1/segment_20250206212069.ts: No such file or directory
+[hls muxer @ 0x55ae7e655b40] failed to delete old segment hls/channel1/segment_20250206212070.ts: No such file or directory
+[hls muxer @ 0x563819c91b40] failed to delete old segment hls/channel1/segment_20250206212070.ts: No such file or directory
+[hls @ 0x563819c33c00] failed to rename file hls/channel1/playlist.m3u8.tmp to hls/channel1/playlist.m3u8: No such file or directory
+[hls muxer @ 0x5601bdddeb40] failed to delete old segment hls/channel1/segment_20250206212070.ts: No such file or directory
+[hls muxer @ 0x55ae7e655b40] failed to delete old segment hls/channel1/segment_20250206212071.ts: No such file or directory
+[hls muxer @ 0x563819c91b40] failed to delete old segment hls/channel1/segment_20250206212071.ts: No such file or directory
+[hls @ 0x563819c33c00] failed to rename file hls/channel1/playlist.m3u8.tmp to hls/channel1/playlist.m3u8: No such file or directory
+[hls muxer @ 0x5601bdddeb40] failed to delete old segment hls/channel1/segment_20250206212071.ts: No such file or directory
+[hls muxer @ 0x55ae7e655b40] failed to delete old segment hls/channel1/segment_20250206212072.ts: No such file or directory
+[hls muxer @ 0x563819c91b40] failed to delete old segment hls/channel1/segment_20250206212072.ts: No such file or directory
+[hls muxer @ 0x5601bdddeb40] failed to delete old segment hls/channel1/segment_20250206212072.ts: No such file or directory
+[hls muxer @ 0x563819c91b40] failed to delete old segment hls/channel1/segment_20250206212073.ts: No such file or directory
+[hls muxer @ 0x55ae7e655b40] failed to delete old segment hls/channel1/segment_20250206212073.ts: No such file or directory
+[hls muxer @ 0x5601bdddeb40] failed to delete old segment hls/channel1/segment_20250206212073.ts: No such file or directory
+[hls muxer @ 0x55ae7e655b40] failed to delete old segment hls/channel1/segment_20250206212074.ts: No such file or directory
+[hls muxer @ 0x563819c91b40] failed to delete old segment hls/channel1/segment_20250206212074.ts: No such file or directory
+[hls muxer @ 0x5601bdddeb40] failed to delete old segment hls/channel1/segment_20250206212074.ts: No such file or directory
+[hls muxer @ 0x55c57b9ebb40] failed to delete old segment hls/channel1/segment_20250206212814.ts: No such file or directory
+[hls muxer @ 0x5639588cbb40] failed to delete old segment hls/channel1/segment_20250206212815.ts: No such file or directory
+[hls muxer @ 0x55c57b9ebb40] failed to delete old segment hls/channel1/segment_20250206212816.ts: No such file or directory
+[hls muxer @ 0x5639588cbb40] failed to delete old segment hls/channel1/segment_20250206212839.ts: No such file or directory
+[hls @ 0x56395886dc00] failed to rename file hls/channel1/playlist.m3u8.tmp to hls/channel1/playlist.m3u8: No such file or directory
+[hls muxer @ 0x56269eef4b40] failed to delete old segment hls/channel1/segment_20250206212839.ts: No such file or directory
+[hls muxer @ 0x55c57b9ebb40] failed to delete old segment hls/channel1/segment_20250206212960.ts: No such file or directory
+[hls muxer @ 0x56269eef4b40] failed to delete old segment hls/channel1/segment_20250206212960.ts: No such file or directory
+[hls muxer @ 0x55c57b9ebb40] failed to delete old segment hls/channel1/segment_20250206212961.ts: No such file or directory
+[hls muxer @ 0x56269eef4b40] failed to delete old segment hls/channel1/segment_20250206212961.ts: No such file or directory
+[hls muxer @ 0x55700b1b2b40] failed to delete old segment hls/channel1/segment_20250206212961.ts: No such file or directory
+[hls muxer @ 0x5639588cbb40] failed to delete old segment hls/channel1/segment_20250206212962.ts: No such file or directory
+[hls muxer @ 0x56269eef4b40] failed to delete old segment hls/channel1/segment_20250206212962.ts: No such file or directory
+[hls muxer @ 0x55700b1b2b40] failed to delete old segment hls/channel1/segment_20250206212962.ts: No such file or directory
+[hls muxer @ 0x55c57b9ebb40] failed to delete old segment hls/channel1/segment_20250206212963.ts: No such file or directory
+[hls @ 0x55c57b98dc00] failed to rename file hls/channel1/playlist.m3u8.tmp to hls/channel1/playlist.m3u8: No such file or directory
+[hls muxer @ 0x55700b1b2b40] failed to delete old segment hls/channel1/segment_20250206212963.ts: No such file or directory
+[hls muxer @ 0x5639588cbb40] failed to delete old segment hls/channel1/segment_20250206212964.ts: No such file or directory
+[hls muxer @ 0x55700b1b2b40] failed to delete old segment hls/channel1/segment_20250206212964.ts: No such file or directory
+[hls muxer @ 0x5639588cbb40] failed to delete old segment hls/channel1/segment_20250206212965.ts: No such file or directory
+[hls muxer @ 0x5639588cbb40] failed to delete old segment hls/channel1/segment_20250206212966.ts: No such file or directory
+[hls muxer @ 0x5639588cbb40] failed to delete old segment hls/channel1/segment_20250206212967.ts: No such file or directory
+[hls @ 0x55a900392c00] failed to rename file hls/channel1/playlist.m3u8.tmp to hls/channel1/playlist.m3u8: No such file or directory
+[hls muxer @ 0x5639588cbb40] failed to delete old segment hls/channel1/segment_20250206212968.ts: No such file or directory
+[hls muxer @ 0x55e831266b40] failed to delete old segment hls/channel1/segment_20250206213035.ts: No such file or directory
+[hls muxer @ 0x55d79b40fb40] failed to delete old segment hls/channel1/segment_20250206213035.ts: No such file or directory
+[hls muxer @ 0x55a9003f0b40] failed to delete old segment hls/channel1/segment_20250206213035.ts: No such file or directory
+[hls muxer @ 0x55c57b9ebb40] failed to delete old segment hls/channel1/segment_20250206212969.ts: No such file or directory
+[hls muxer @ 0x55e831266b40] failed to delete old segment hls/channel1/segment_20250206213036.ts: No such file or directory
+[hls muxer @ 0x55d79b40fb40] failed to delete old segment hls/channel1/segment_20250206213036.ts: No such file or directory
+[hls muxer @ 0x55a9003f0b40] failed to delete old segment hls/channel1/segment_20250206213036.ts: No such file or directory
+[hls muxer @ 0x5639588cbb40] failed to delete old segment hls/channel1/segment_20250206212970.ts: No such file or directory
+[hls muxer @ 0x55e831266b40] failed to delete old segment hls/channel1/segment_20250206213037.ts: No such file or directory
+[hls muxer @ 0x55d79b40fb40] failed to delete old segment hls/channel1/segment_20250206213037.ts: No such file or directory
+[hls muxer @ 0x55a9003f0b40] failed to delete old segment hls/channel1/segment_20250206213037.ts: No such file or directory
+[hls muxer @ 0x55e831266b40] failed to delete old segment hls/channel1/segment_20250206213038.ts: No such file or directory
+[hls muxer @ 0x55d79b40fb40] failed to delete old segment hls/channel1/segment_20250206213038.ts: No such file or directory
+[hls muxer @ 0x55a9003f0b40] failed to delete old segment hls/channel1/segment_20250206213038.ts: No such file or directory
+[hls muxer @ 0x55c57b9ebb40] failed to delete old segment hls/channel1/segment_20250206212971.ts: No such file or directory
+[hls @ 0x56395886dc00] failed to rename file hls/channel1/playlist.m3u8.tmp to hls/channel1/playlist.m3u8: No such file or directory
+[hls muxer @ 0x5639588cbb40] failed to delete old segment hls/channel1/segment_20250206212972.ts: No such file or directory
+[hls muxer @ 0x55d79b40fb40] failed to delete old segment hls/channel1/segment_20250206213114.ts: No such file or directory
+[hls muxer @ 0x55a9003f0b40] failed to delete old segment hls/channel1/segment_20250206213114.ts: No such file or directory
+[hls muxer @ 0x5639588cbb40] failed to delete old segment hls/channel1/segment_20250206212973.ts: No such file or directory
+[hls muxer @ 0x55d79b40fb40] failed to delete old segment hls/channel1/segment_20250206213115.ts: No such file or directory
+[hls muxer @ 0x55a9003f0b40] failed to delete old segment hls/channel1/segment_20250206213115.ts: No such file or directory
+[hls muxer @ 0x5639588cbb40] failed to delete old segment hls/channel1/segment_20250206212974.ts: No such file or directory
+[hls muxer @ 0x55d79b40fb40] failed to delete old segment hls/channel1/segment_20250206213116.ts: No such file or directory
+[hls muxer @ 0x55a9003f0b40] failed to delete old segment hls/channel1/segment_20250206213116.ts: No such file or directory
+[hls muxer @ 0x5639588cbb40] failed to delete old segment hls/channel1/segment_20250206212975.ts: No such file or directory
+[hls @ 0x56395886dc00] failed to rename file hls/channel1/playlist.m3u8.tmp to hls/channel1/playlist.m3u8: No such file or directory
+[hls muxer @ 0x55d79b40fb40] failed to delete old segment hls/channel1/segment_20250206213117.ts: No such file or directory
+[hls muxer @ 0x55a9003f0b40] failed to delete old segment hls/channel1/segment_20250206213117.ts: No such file or directory
+[hls muxer @ 0x55d79b40fb40] failed to delete old segment hls/channel1/segment_20250206213118.ts: No such file or directory
+[hls muxer @ 0x55a9003f0b40] failed to delete old segment hls/channel1/segment_20250206213118.ts: No such file or directory
+[hls muxer @ 0x5639588cbb40] failed to delete old segment hls/channel1/segment_20250206212976.ts: No such file or directory
+[hls muxer @ 0x5639588cbb40] failed to delete old segment hls/channel1/segment_20250206212977.ts: No such file or directory
+[hls muxer @ 0x55d79b40fb40] failed to delete old segment hls/channel1/segment_20250206213119.ts: No such file or directory
+[hls muxer @ 0x55a9003f0b40] failed to delete old segment hls/channel1/segment_20250206213119.ts: No such file or directory
+[hls muxer @ 0x55c57b9ebb40] failed to delete old segment hls/channel1/segment_20250206212978.ts: No such file or directory
+[hls muxer @ 0x55d79b40fb40] failed to delete old segment hls/channel1/segment_20250206213120.ts: No such file or directory
+[hls muxer @ 0x55a9003f0b40] failed to delete old segment hls/channel1/segment_20250206213120.ts: No such file or directory
+[hls muxer @ 0x5639588cbb40] failed to delete old segment hls/channel1/segment_20250206212979.ts: No such file or directory
+[hls muxer @ 0x55d79b40fb40] failed to delete old segment hls/channel1/segment_20250206213121.ts: No such file or directory
+[hls muxer @ 0x55a9003f0b40] failed to delete old segment hls/channel1/segment_20250206213121.ts: No such file or directory
+[hls muxer @ 0x55c57b9ebb40] failed to delete old segment hls/channel1/segment_20250206212980.ts: No such file or directory
+[hls muxer @ 0x55d79b40fb40] failed to delete old segment hls/channel1/segment_20250206213122.ts: No such file or directory
+[hls muxer @ 0x55a9003f0b40] failed to delete old segment hls/channel1/segment_20250206213122.ts: No such file or directory
+[hls muxer @ 0x55d79b40fb40] failed to delete old segment hls/channel1/segment_20250206213123.ts: No such file or directory
+[hls muxer @ 0x55a9003f0b40] failed to delete old segment hls/channel1/segment_20250206213123.ts: No such file or directory
+[hls muxer @ 0x5639588cbb40] failed to delete old segment hls/channel1/segment_20250206212981.ts: No such file or directory
+[hls @ 0x55c57b98dc00] failed to rename file hls/channel1/playlist.m3u8.tmp to hls/channel1/playlist.m3u8: No such file or directory
+[hls muxer @ 0x5639588cbb40] failed to delete old segment hls/channel1/segment_20250206212982.ts: No such file or directory
+[hls muxer @ 0x55d79b40fb40] failed to delete old segment hls/channel1/segment_20250206213124.ts: No such file or directory
+[hls muxer @ 0x55a9003f0b40] failed to delete old segment hls/channel1/segment_20250206213124.ts: No such file or directory
+[hls muxer @ 0x55c57b9ebb40] failed to delete old segment hls/channel1/segment_20250206212983.ts: No such file or directory
+[hls muxer @ 0x55d79b40fb40] failed to delete old segment hls/channel1/segment_20250206213125.ts: No such file or directory
+[hls muxer @ 0x55a9003f0b40] failed to delete old segment hls/channel1/segment_20250206213125.ts: No such file or directory
+[hls muxer @ 0x5639588cbb40] failed to delete old segment hls/channel1/segment_20250206212984.ts: No such file or directory
+[hls @ 0x55c57b98dc00] failed to rename file hls/channel1/playlist.m3u8.tmp to hls/channel1/playlist.m3u8: No such file or directory
+[hls muxer @ 0x55d79b40fb40] failed to delete old segment hls/channel1/segment_20250206213126.ts: No such file or directory
+[hls muxer @ 0x55a9003f0b40] failed to delete old segment hls/channel1/segment_20250206213126.ts: No such file or directory
+[hls muxer @ 0x55c57b9ebb40] failed to delete old segment hls/channel1/segment_20250206212985.ts: No such file or directory
+[hls muxer @ 0x55e831266b40] failed to delete old segment hls/channel1/segment_20250206213127.ts: No such file or directory
+[hls muxer @ 0x55a9003f0b40] failed to delete old segment hls/channel1/segment_20250206213127.ts: No such file or directory
+[hls muxer @ 0x5628b8b21040] failed to delete old segment hls/channel1/segment_20250206213794.ts: No such file or directory
+[hls muxer @ 0x5628b8b21040] failed to delete old segment hls/channel1/segment_20250206213795.ts: No such file or directory
+[hls muxer @ 0x5628b8b21040] failed to delete old segment hls/channel1/segment_20250206213796.ts: No such file or directory
+[hls muxer @ 0x5628b8b21040] failed to delete old segment hls/channel1/segment_20250206213797.ts: No such file or directory
