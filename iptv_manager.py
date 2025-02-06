@@ -38,7 +38,8 @@ NORMALIZATION_PARAMS = {
 # On configure un logger pour le minuteur de crash
 crash_logger = logging.getLogger("CrashTimer")
 if not crash_logger.handlers:
-    crash_handler = logging.FileHandler("/crash_timer.log")
+
+    crash_handler = logging.FileHandler("/app/crash_timer.log")
     crash_handler.setFormatter(logging.Formatter("%(asctime)s - %(message)s"))
     crash_logger.addHandler(crash_handler)
     crash_logger.setLevel(logging.INFO)
@@ -324,60 +325,402 @@ class VideoProcessor:
 # -----------------------------------------------------------------------------
 # Gestion d'une chaîne IPTV (streaming et surveillance)
 # -----------------------------------------------------------------------------
+from typing import Optional, List
+import subprocess
+import logging
+import threading
+import time
+import datetime
+from pathlib import Path
+import shutil
+import os
+
+logger = logging.getLogger(__name__)
+
+from typing import Optional, List
+import subprocess
+import logging
+import threading
+import time
+import datetime
+from pathlib import Path
+import shutil
+import os
+
+logger = logging.getLogger(__name__)
+
+
 class IPTVChannel:
     def __init__(self, name: str, video_dir: str, use_gpu: bool = False):
-        self.use_gpu = use_gpu
         self.name = name
         self.video_dir = video_dir
-        self.processor = VideoProcessor(self.video_dir, use_gpu=use_gpu)
+        self.use_gpu = use_gpu
         self.processed_videos = []
+        self.video_extensions = (".mp4", ".avi", ".mkv", ".mov")
+
+        # Initialisation du processeur vidéo
+        self.processor = VideoProcessor(self.video_dir, self.use_gpu)
+
+        # Configuration des logs
+        self.ffmpeg_log_dir = Path("logs/ffmpeg")
+        self.ffmpeg_log_dir.mkdir(parents=True, exist_ok=True)
+        self.ffmpeg_log_file = self.ffmpeg_log_dir / f"{self.name}_ffmpeg.log"
+
+        # Configuration HLS
+        self.hls_time = 6
+        self.hls_list_size = 4
+        self.hls_delete_threshold = 1
+        self.target_duration = 6  # Ajout de l'attribut manquant
+
+        # Paramètres d'encodage
+        self.video_bitrate = "2800k"
+        self.max_bitrate = "2996k"
+        self.buffer_size = "4200k"
+        self.gop_size = 48
+        self.keyint_min = 48
+        self.sc_threshold = 0
+        self.crf = 20
+
+        # Autres initialisations
+        self.restart_count = 0
+        self.max_restarts = 3
+        self.restart_cooldown = 30
+        self.error_count = 0
+        self.min_segment_size = 1024
         self.ffmpeg_process = None
-        self.lock = threading.Lock()
         self.stop_event = threading.Event()
-        self._create_channel_directory()
+        self.lock = threading.Lock()
+        self.fallback_mode = False
         self.monitoring_thread = None
         self.last_segment_time = 0
-        self.error_count = 0
-        self.max_errors = 3
-        self.restart_delay = 5  # en secondes
-        self.last_successful_segment = 0
-        self.segment_check_interval = 2  # Vérifier toutes les 2 secondes
-        self.segment_timeout = 10  # Réduire le timeout à 10s au lieu de 30s
-        self.target_duration = 4  # Durée cible des segments
-        self.wrap_threshold = 20  # Seuil de rotation des segments
-        self.media_sequence = 0  # Séquence média initiale
-        self.segment_buffer = 15
-        self.min_segment_size = 1024  # 1KB minimum
-        self.current_segments = {}  # Pour tracker les segments actifs
-        self.last_playlist = None  # Garder une copie de la dernière playlist valide
-        self.stream_start_time = None
-        self.media_sequence = 0
-        self.segment_count = 0
-        self.wrap_count = 20
-        self.fallback_mode = False  # False = mode stream copy, True = mode ré-encodage
+
+    def _build_ffmpeg_command(self, hls_dir: str) -> list:
+        # Base commune pour tous les modes
+        base_cmd = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "warning",  # On réduit les logs console
+            "-y",
+            "-re",
+            "-fflags",
+            "+genpts+igndts",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-stream_loop",
+            "-1",
+            "-i",
+            str(self._create_concat_file()),
+        ]
+
+        if self.fallback_mode:
+            # Mode ré-encodage complet
+            encoding_params = [
+                "-map",
+                "0:v:0",
+                "-map",
+                "0:a:0",
+                "-vf",
+                "scale=w=1280:h=720:force_original_aspect_ratio=decrease",
+                "-c:v",
+                "h264_nvenc" if self.use_gpu else "libx264",
+                "-profile:v",
+                "main",
+                "-b:v",
+                self.video_bitrate,
+                "-maxrate",
+                self.max_bitrate,
+                "-bufsize",
+                self.buffer_size,
+                "-crf",
+                str(self.crf),
+                "-g",
+                str(self.gop_size),
+                "-keyint_min",
+                str(self.keyint_min),
+                "-sc_threshold",
+                str(self.sc_threshold),
+                "-c:a",
+                "aac",
+                "-ar",
+                "48000",
+                "-b:a",
+                "128k",
+            ]
+        else:
+            # Mode copie simple
+            encoding_params = ["-c:v", "copy", "-c:a", "copy"]
+
+        # Paramètres HLS
+        hls_params = [
+            "-f",
+            "hls",
+            "-hls_time",
+            str(self.hls_time),
+            "-hls_list_size",
+            str(self.hls_list_size),
+            "-hls_delete_threshold",
+            str(self.hls_delete_threshold),
+            "-hls_flags",
+            "delete_segments+append_list",
+            "-hls_start_number_source",
+            "datetime",
+            "-hls_segment_filename",
+            f"{hls_dir}/segment_%d.ts",
+            f"{hls_dir}/playlist.m3u8",
+        ]
+
+        return base_cmd + encoding_params + hls_params
+
+    def _start_ffmpeg_process(self, cmd: list) -> Optional[subprocess.Popen]:
+        try:
+            logger.info(f"🚀 Démarrage FFmpeg pour {self.name}")
+
+            # On redirige les logs détaillés vers un fichier
+            with open(self.ffmpeg_log_file, "a") as ffmpeg_log:
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=ffmpeg_log,
+                    universal_newlines=True,
+                )
+
+            # Attente de la création du premier segment
+            start_time = time.time()
+            hls_dir = Path(f"hls/{self.name}")
+            while time.time() - start_time < 10:
+                if list(hls_dir.glob("segment_*.ts")):
+                    self.stream_start_time = time.time()
+                    logger.info(
+                        f"✅ FFmpeg démarré pour {self.name} (PID: {process.pid})"
+                    )
+                    return process
+                time.sleep(0.1)
+
+            logger.error(f"❌ Timeout en attendant les segments pour {self.name}")
+            process.kill()
+            return None
+
+        except Exception as e:
+            logger.error(f"Erreur démarrage FFmpeg pour {self.name}: {e}")
+            return None
+
+    def _monitor_ffmpeg(self, hls_dir: str):
+        self.last_segment_time = time.time()
+        last_segment_number = -1
+        hls_dir = Path(hls_dir)
+        crash_threshold = 10
+
+        while (
+            not self.stop_event.is_set()
+            and self.ffmpeg_process
+            and self.ffmpeg_process.poll() is None
+        ):
+            try:
+                current_time = time.time()
+                segments = sorted(hls_dir.glob("segment_*.ts"))
+
+                if segments:
+                    newest_segment = max(segments, key=lambda x: x.stat().st_mtime)
+                    try:
+                        current_segment = int(newest_segment.stem.split("_")[1])
+                        segment_size = newest_segment.stat().st_size
+
+                        # Log des informations de segment dans un fichier séparé
+                        with open(
+                            self.ffmpeg_log_dir / f"{self.name}_segments.log", "a"
+                        ) as seg_log:
+                            seg_log.write(
+                                f"{datetime.datetime.now()} - Segment {current_segment}: {segment_size} bytes\n"
+                            )
+
+                        if segment_size < self.min_segment_size:
+                            logger.warning(
+                                f"⚠️ Segment {newest_segment.name} trop petit ({segment_size} bytes)"
+                            )
+                            self.error_count += 1
+                        else:
+                            if current_segment != last_segment_number:
+                                self.last_segment_time = current_time
+                                last_segment_number = current_segment
+                                self.error_count = 0
+                                logger.debug(
+                                    f"✨ Nouveau segment {current_segment} pour {self.name}"
+                                )
+                    except ValueError:
+                        logger.error(
+                            f"Format de segment invalide: {newest_segment.name}"
+                        )
+                        self.error_count += 1
+                else:
+                    self.error_count += 1
+
+                elapsed = current_time - self.last_segment_time
+                if elapsed > crash_threshold:
+                    logger.error(
+                        f"🔥 Pas de nouveau segment pour {self.name} depuis {elapsed:.1f}s"
+                    )
+                    if self.restart_count < self.max_restarts:
+                        self.restart_count += 1
+                        logger.info(
+                            f"🔄 Tentative de redémarrage {self.restart_count}/{self.max_restarts}"
+                        )
+                        if self._restart_stream():
+                            self.error_count = 0
+                        else:
+                            logger.error(f"❌ Échec du redémarrage pour {self.name}")
+                    else:
+                        logger.critical(
+                            f"⛔️ Nombre maximum de redémarrages atteint pour {self.name}"
+                        )
+
+                time.sleep(1)
+            except Exception as e:
+                logger.error(f"Erreur monitoring {self.name}: {e}")
+                time.sleep(1)
+
+    def _restart_stream(self) -> bool:
+        try:
+            logger.info(f"🔄 Redémarrage du stream {self.name}")
+
+            # Attente du cooldown si nécessaire
+            elapsed = time.time() - getattr(self, "last_restart_time", 0)
+            if elapsed < self.restart_cooldown:
+                logger.info(
+                    f"⏳ Attente du cooldown ({self.restart_cooldown - elapsed:.1f}s)"
+                )
+                time.sleep(self.restart_cooldown - elapsed)
+
+            self.last_restart_time = time.time()
+
+            # On arrête proprement FFmpeg
+            self._clean_processes()
+
+            # On attend un peu
+            time.sleep(2)
+
+            # On redémarre
+            return self.start_stream()
+
+        except Exception as e:
+            logger.error(f"Erreur lors du redémarrage de {self.name}: {e}")
+            return False
+
+    def _clean_processes(self):
+        with self.lock:
+            if self.ffmpeg_process:
+                try:
+                    self.stop_event.set()
+                    self.ffmpeg_process.terminate()
+                    try:
+                        self.ffmpeg_process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        self.ffmpeg_process.kill()
+                    finally:
+                        self.ffmpeg_process = None
+                except Exception as e:
+                    logger.error(
+                        f"Erreur lors du nettoyage du processus pour {self.name}: {e}"
+                    )
+
+    def _create_concat_file(self) -> Optional[Path]:
+        """Crée le fichier de concaténation pour FFmpeg"""
+        try:
+            if not self.processed_videos:
+                self._scan_videos()
+
+            if not self.processed_videos:
+                logger.error(f"Aucune vidéo traitée disponible pour {self.name}")
+                return None
+
+            concat_file = Path(self.video_dir) / "_playlist.txt"
+            with open(concat_file, "w", encoding="utf-8") as f:
+                for video in self.processed_videos:
+                    f.write(f"file '{video.absolute()}'\n")
+            logger.info(f"Fichier de concaténation créé: {concat_file}")
+            return concat_file
+        except Exception as e:
+            logger.error(
+                f"Erreur lors de la création du fichier de concaténation pour {self.name}: {e}"
+            )
+            return None
+
+    def _scan_videos(self) -> bool:
+        """Scanne les fichiers vidéos disponibles"""
+        try:
+            source_dir = Path(self.video_dir)
+            processed_dir = source_dir / "processed"
+            processed_dir.mkdir(exist_ok=True)
+
+            # Liste tous les fichiers vidéo source
+            source_files = []
+            for ext in self.video_extensions:
+                source_files.extend(source_dir.glob(f"*{ext}"))
+
+            if not source_files:
+                logger.warning(f"Aucun fichier vidéo trouvé dans {self.video_dir}")
+                return False
+
+            # Vérifie les fichiers déjà traités
+            self.processed_videos = []
+            for source in source_files:
+                processed_file = processed_dir / f"{source.stem}.mp4"
+                if processed_file.exists():
+                    self.processed_videos.append(processed_file)
+                else:
+                    # Si besoin de normalisation, l'implémenter ici
+                    processed = self._process_video(source, processed_file)
+                    if processed:
+                        self.processed_videos.append(processed_file)
+
+            if not self.processed_videos:
+                logger.error(f"Aucune vidéo traitée disponible pour {self.name}")
+                return False
+
+            self.processed_videos.sort()
+            return True
+
+        except Exception as e:
+            logger.error(f"Erreur lors du scan des vidéos pour {self.name}: {e}")
+            return False
+
+    def _process_video(self, source: Path, dest: Path) -> bool:
+        """Traite une vidéo source si nécessaire"""
+        try:
+            # Pour l'instant, on fait juste une copie
+            # TODO: Implémenter la normalisation si nécessaire
+            shutil.copy2(source, dest)
+            logger.info(f"Vidéo copiée: {source.name} -> {dest.name}")
+            return True
+        except Exception as e:
+            logger.error(f"Erreur traitement vidéo {source.name}: {e}")
+            return False
 
     def start_stream(self) -> bool:
         with self.lock:
             try:
-                if not self.processed_videos:
-                    logger.error(f"❌ Aucune vidéo traitée pour {self.name}")
-                    return False
-                if not self._check_system_resources():
-                    logger.error(
-                        f"❌ Ressources système insuffisantes pour {self.name}"
-                    )
-                    return False
                 hls_dir = f"hls/{self.name}"
-                self._clean_hls_directory()  # On vide le dossier HLS avant de démarrer
+                Path(hls_dir).mkdir(parents=True, exist_ok=True)
+
                 cmd = self._build_ffmpeg_command(hls_dir)
                 self.ffmpeg_process = self._start_ffmpeg_process(cmd)
+
                 if not self.ffmpeg_process:
                     return False
-                self._start_monitoring(hls_dir)
+
+                if not self.monitoring_thread or not self.monitoring_thread.is_alive():
+                    self.monitoring_thread = threading.Thread(
+                        target=self._monitor_ffmpeg, args=(hls_dir,), daemon=True
+                    )
+                    self.monitoring_thread.start()
+
                 return True
+
             except Exception as e:
                 logger.error(
-                    f"Erreur lors du démarrage du stream pour {self.name} : {e}"
+                    f"Erreur lors du démarrage du stream pour {self.name}: {e}"
                 )
                 self._clean_processes()
                 return False
@@ -396,34 +739,8 @@ class IPTVChannel:
             logger.error(f"Erreur lors de la vérification des ressources : {e}")
             return True
 
-    def _clean_processes(self):
-        with self.lock:
-            if self.ffmpeg_process:
-                try:
-                    self.stop_event.set()
-                    self.ffmpeg_process.terminate()
-                    try:
-                        self.ffmpeg_process.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        self.ffmpeg_process.kill()
-                    finally:
-                        self.ffmpeg_process = None
-                except Exception as e:
-                    logger.error(
-                        f"Erreur lors du nettoyage du processus pour {self.name} : {e}"
-                    )
-
     def _create_channel_directory(self):
         Path(f"hls/{self.name}").mkdir(parents=True, exist_ok=True)
-
-    def scan_videos(self) -> bool:
-        try:
-            processor = VideoProcessor(self.video_dir)
-            self.processed_videos = processor.process_videos()
-            return len(self.processed_videos) > 0
-        except Exception as e:
-            logger.error(f"Erreur lors du scan des vidéos pour {self.name} : {e}")
-            return False
 
     def _clean_hls_directory(self):
         try:
@@ -448,190 +765,6 @@ class IPTVChannel:
                 target=self._monitor_ffmpeg, args=(hls_dir,), daemon=True
             )
             self.monitoring_thread.start()
-
-    def _create_concat_file(self) -> "Optional[Path]":
-        try:
-            concat_file = Path(self.video_dir) / "_playlist.txt"
-            if not self.processed_videos:
-                logger.error("Aucune vidéo traitée disponible")
-                return None
-            with open(concat_file, "w", encoding="utf-8") as f:
-                for video in self.processed_videos:
-                    f.write(f"file '{video.absolute()}'\n")
-            logger.info(f"Fichier de concaténation créé : {concat_file}")
-            return concat_file
-        except Exception as e:
-            logger.error(
-                f"Erreur lors de la création du fichier de concaténation pour {self.name} : {e}"
-            )
-            return None
-
-    def _start_ffmpeg_process(self, cmd: list) -> "Optional[subprocess.Popen]":
-        try:
-            logger.info(f"🖥️ Commande FFmpeg pour {self.name} : {' '.join(cmd)}")
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                universal_newlines=True,
-            )
-            # Attendre la création du premier segment
-            start_time = time.time()
-            hls_dir = Path(f"hls/{self.name}")
-            while time.time() - start_time < 10:  # 10s timeout
-                if list(hls_dir.glob("segment_*.ts")):
-                    self.stream_start_time = time.time()
-                    logger.info(
-                        f"✅ FFmpeg démarré pour {self.name} avec PID {process.pid}"
-                    )
-                    return process
-                time.sleep(0.1)
-
-            logger.error(f"❌ Timeout en attendant les segments pour {self.name}")
-            process.kill()
-            return None
-        except Exception as e:
-            logger.error(f"Erreur lors du démarrage de FFmpeg pour {self.name} : {e}")
-            return None
-
-    def _build_ffmpeg_command(self, hls_dir: str) -> list:
-        audio_codec = "aac" if self.fallback_mode else "copy"
-
-        if self.fallback_mode:
-            if self.use_gpu:
-                video_codec = "h264_nvenc"
-                preset = [
-                    "-preset",
-                    "p4",
-                    "-profile:v",
-                    "baseline",
-                    "-level:v",
-                    "3.0",
-                    "-pix_fmt",
-                    "yuv420p",
-                    "-rc",
-                    "cbr",
-                    "-g",
-                    "50",
-                    "-sc_threshold",
-                    "0",
-                ]
-            else:
-                video_codec = "libx264"
-                preset = [
-                    "-preset",
-                    "medium",
-                    "-profile:v",
-                    "baseline",
-                    "-level:v",
-                    "3.0",
-                    "-pix_fmt",
-                    "yuv420p",
-                    "-r",
-                    "25",
-                    "-g",
-                    "50",
-                    "-keyint_min",
-                    "25",
-                    "-sc_threshold",
-                    "0",
-                ]
-        else:
-            video_codec = "copy"
-            preset = []
-
-        cmd = (
-            [
-                "ffmpeg",
-                "-hide_banner",
-                "-loglevel",
-                "info",
-                "-y",
-                "-re",
-                "-fflags",
-                "+genpts+igndts",
-                "-f",
-                "concat",
-                "-safe",
-                "0",
-                "-stream_loop",
-                "-1",
-                "-i",
-                str(self._create_concat_file()),
-            ]
-            + preset
-            + [
-                "-c:v",
-                video_codec,
-                "-c:a",
-                audio_codec,
-                "-f",
-                "hls",
-                "-hls_time",
-                "4",
-                "-hls_list_size",
-                str(self.segment_buffer),
-                "-hls_flags",
-                "delete_segments+append_list+program_date_time",
-                "-hls_segment_type",
-                "mpegts",
-                "-hls_init_time",
-                "4",
-                "-hls_segment_filename",
-                f"{hls_dir}/segment_%d.ts",
-                f"{hls_dir}/playlist.m3u8",
-            ]
-        )
-
-        logger.info(
-            f"Commande FFmpeg ({'fallback' if self.fallback_mode else 'normal'}) pour {self.name} : {' '.join(cmd)}"
-        )
-        return cmd
-
-    def _monitor_ffmpeg(self, hls_dir: str):
-        self.last_segment_time = time.time()
-        last_segment_number = -1
-        hls_dir = Path(hls_dir)
-        crash_threshold = 10  # Seuil en secondes avant de logger le bug
-
-        while (
-            not self.stop_event.is_set()
-            and self.ffmpeg_process
-            and self.ffmpeg_process.poll() is None
-        ):
-            try:
-                current_time = time.time()
-                segments = sorted(hls_dir.glob("segment_*.ts"))
-                if segments:
-                    newest_segment = max(segments, key=lambda x: x.stat().st_mtime)
-                    try:
-                        current_segment = int(newest_segment.stem.split("_")[1])
-                    except ValueError:
-                        current_segment = -1
-                    if current_segment != last_segment_number:
-                        self.last_segment_time = current_time
-                        last_segment_number = current_segment
-                        self.error_count = 0
-
-                        # Mise à jour de la playlist HLS
-                        playlist_content = self._generate_playlist(segments)
-                        playlist_path = hls_dir / "playlist.m3u8"
-                        temp_playlist = playlist_path.with_suffix(".m3u8.tmp")
-                        temp_playlist.write_text(playlist_content)
-                        temp_playlist.replace(playlist_path)
-
-                        # (Optionnel) Nettoyage des anciens segments ici...
-
-                elapsed = current_time - self.last_segment_time
-                if elapsed > crash_threshold:
-                    message = f"[{self.name}] Aucune mise à jour de segment depuis {elapsed:.1f} secondes."
-                    print(message)
-                    crash_logger.info(message)
-
-                time.sleep(1)
-            except Exception as e:
-                logger.error(f"Erreur monitoring {self.name} : {e}")
-                time.sleep(1)
 
     def _generate_playlist(self, segments: list) -> str:
         """Génère une playlist HLS avec PDT et séquence média."""
@@ -673,87 +806,6 @@ class IPTVChannel:
             )
 
         return "\n".join(playlist)
-
-    def _restart_stream(self):
-        try:
-            logger.info(f"🔄 Redémarrage du stream {self.name}")
-            # On sauvegarde l'état actuel (séquence média et nombre de segments)
-            current_state = {
-                "media_sequence": self.media_sequence,
-                "segment_count": self.segment_count,
-            }
-
-            # On arrête proprement le processus FFmpeg en cours
-            self._clean_processes()
-
-            # On prépare un dossier temporaire pour sauvegarder la playlist et quelques segments
-            hls_dir = Path(f"hls/{self.name}")
-            temp_dir = hls_dir / "temp"
-            temp_dir.mkdir(exist_ok=True)
-
-            if hls_dir.exists():
-                # On sauvegarde la playlist actuelle si elle existe
-                playlist = hls_dir / "playlist.m3u8"
-                if playlist.exists():
-                    shutil.copy2(playlist, temp_dir / "playlist.m3u8")
-                # On sauvegarde les 3 derniers segments
-                segments = sorted(
-                    list(hls_dir.glob("segment_*.ts")),
-                    key=lambda x: x.stat().st_mtime,
-                    reverse=True,
-                )[:3]
-                for seg in segments:
-                    shutil.copy2(seg, temp_dir / seg.name)
-
-            # On nettoie le dossier HLS
-            self._clean_hls_directory()
-
-            # On restaure la playlist et les segments sauvegardés
-            if temp_dir.exists():
-                for item in temp_dir.iterdir():
-                    shutil.copy2(item, hls_dir / item.name)
-                shutil.rmtree(temp_dir)
-
-            # On restaure l'état de la séquence média
-            self.media_sequence = current_state["media_sequence"]
-            self.segment_count = current_state["segment_count"]
-            self.error_count = 0
-
-            # Activation du mode fallback si ce n'est pas déjà fait
-            if not self.fallback_mode:
-                logger.info(
-                    "Activation du mode ré-encodage (fallback mode) pour garantir la compatibilité"
-                )
-                self.fallback_mode = True
-
-            # On recrée le fichier de concaténation pour FFmpeg
-            concat_file = self._create_concat_file()
-            if not concat_file:
-                logger.error("Échec de la recréation du fichier de concaténation")
-                return False
-
-            # Petite pause avant de redémarrer
-            time.sleep(self.restart_delay)
-
-            # On lance le stream avec la nouvelle configuration
-            stream_started = self.start_stream()
-
-            # Optionnel : on attend que le fichier playlist.m3u8 soit bien créé (timeout 10s)
-            timeout = 10
-            start_time = time.time()
-            playlist_path = hls_dir / "playlist.m3u8"
-            while not playlist_path.exists() and (time.time() - start_time < timeout):
-                time.sleep(0.5)
-            if not playlist_path.exists():
-                logger.error(
-                    f"La playlist {playlist_path} n'a pas été créée dans le délai imparti"
-                )
-                return False
-
-            return stream_started
-        except Exception as e:
-            logger.error(f"Erreur lors du redémarrage du stream {self.name}: {e}")
-            return False
 
     def start_processing(self):
         """Start asynchronous video processing"""

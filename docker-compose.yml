@@ -9,6 +9,7 @@ services:
       - ${PWD}/hls:/app/hls
       - ${PWD}/iptv_manager.py:/app/iptv_manager.py
       - ${PWD}/crash_timer.log:/crash_timer.log:rw
+      - ${PWD}/logs/ffmpeg:/app/logs/ffmpeg:rw  
     runtime: nvidia
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
