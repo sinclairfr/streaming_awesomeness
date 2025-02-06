@@ -90,6 +90,7 @@ class ChannelEventHandler(FileSystemEventHandler):
 # Traitement et normalisation des vidéos
 # -----------------------------------------------------------------------------
 class VideoProcessor:
+
     def __init__(self, channel_dir: str, use_gpu: bool = False):
         self.channel_dir = Path(channel_dir)
         self.use_gpu = use_gpu
@@ -98,119 +99,6 @@ class VideoProcessor:
         self.processed_dir.mkdir(exist_ok=True)
         self.processing_thread = None
         self.processing_complete = threading.Event()
-        # Enhanced logging setup
-        self.process_log = self.channel_dir / "process.log"
-        self.file_handler = logging.FileHandler(self.process_log)
-        self.file_handler.setFormatter(
-            logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-        )
-        self.logger = logging.getLogger(f"processor_{self.channel_dir.name}")
-        self.logger.addHandler(self.file_handler)
-        self.logger.setLevel(logging.DEBUG)
-
-    def _validate_directory_structure(self):
-        """Validate and fix directory structure"""
-        try:
-            if not self.processed_dir.exists():
-                self.logger.warning(
-                    f"Creating missing processed directory: {self.processed_dir}"
-                )
-                self.processed_dir.mkdir(parents=True, exist_ok=True)
-
-            # Verify write permissions
-            test_file = self.processed_dir / ".test"
-            try:
-                test_file.touch()
-                test_file.unlink()
-            except Exception as e:
-                self.logger.error(f"No write permission in processed directory: {e}")
-                raise
-
-        except Exception as e:
-            self.logger.error(f"Directory structure validation failed: {e}")
-            raise
-
-    def check_file_integrity(self, video_path: Path) -> bool:
-        """Verify video file integrity using ffprobe"""
-        try:
-            cmd = [
-                "ffprobe",
-                "-v",
-                "error",
-                "-select_streams",
-                "v:0",
-                "-show_entries",
-                "stream=codec_type",
-                "-of",
-                "default=noprint_wrappers=1:nokey=1",
-                str(video_path),
-            ]
-            result = subprocess.run(cmd, capture_output=True, text=True)
-
-            if result.returncode != 0:
-                self.logger.error(
-                    f"File integrity check failed for {video_path}: {result.stderr}"
-                )
-                return False
-
-            if not result.stdout.strip():
-                self.logger.error(f"No video stream found in {video_path}")
-                return False
-
-            file_size = video_path.stat().st_size
-            if file_size < 1024:  # Less than 1KB
-                self.logger.error(f"File too small: {video_path} ({file_size} bytes)")
-                return False
-
-            return True
-        except Exception as e:
-            self.logger.error(f"Integrity check error for {video_path}: {str(e)}")
-            return False
-
-    def process_videos(self):
-        """Process videos with enhanced error logging and integrity checks"""
-        self.logger.info(f"Starting video processing in {self.channel_dir}")
-        self._validate_directory_structure()
-        try:
-            source_files = []
-            for ext in self.video_extensions:
-                source_files.extend(self.channel_dir.glob(f"*{ext}"))
-
-            source_files = sorted(source_files)
-            self.logger.info(f"Found {len(source_files)} source files")
-
-            if not source_files:
-                self.logger.warning("No source files found")
-                return []
-
-            processed_files = []
-            for source_file in source_files:
-                try:
-                    self.logger.info(f"Processing {source_file}")
-
-                    if not self.check_file_integrity(source_file):
-                        self.logger.error(f"Integrity check failed for {source_file}")
-                        continue
-
-                    processed = self._normalize_video(source_file, NORMALIZATION_PARAMS)
-                    if processed:
-                        processed_files.append(processed)
-                        self.logger.info(f"Successfully processed {source_file}")
-                    elif self._is_already_normalized(source_file, NORMALIZATION_PARAMS):
-                        normalized_path = self.processed_dir / f"{source_file.stem}.mp4"
-                        processed_files.append(normalized_path)
-                        self.logger.info(f"File already normalized: {source_file}")
-                except Exception as e:
-                    self.logger.error(f"Error processing {source_file}: {str(e)}")
-                    self.logger.error(traceback.format_exc())
-
-            self.processed_videos = processed_files
-            return processed_files
-
-        except Exception as e:
-            self.logger.error(f"Fatal error in process_videos: {str(e)}")
-            self.logger.error(traceback.format_exc())
-            return []
 
     def process_videos_async(self) -> None:
         """Start asynchronous video processing"""
@@ -436,8 +324,6 @@ class VideoProcessor:
 # -----------------------------------------------------------------------------
 # Gestion d'une chaîne IPTV (streaming et surveillance)
 # -----------------------------------------------------------------------------
-
-
 class IPTVChannel:
     def __init__(self, name: str, video_dir: str, use_gpu: bool = False):
         self.use_gpu = use_gpu
@@ -453,84 +339,22 @@ class IPTVChannel:
         self.last_segment_time = 0
         self.error_count = 0
         self.max_errors = 3
-        self.restart_delay = 30  # Increased from 5 to 30 seconds
-        self.fallback_mode = False  # Initialize fallback mode
-        self.segment_buffer = 15  # Number of segments to keep
-        self.min_segment_size = 1024  # Minimum segment size in bytes
-        self.current_segments = {}  # Track active segments
-        self.last_playlist = None  # Last valid playlist backup
+        self.restart_delay = 5  # en secondes
         self.last_successful_segment = 0
-        self.segment_check_interval = 5  # Increased from 2 to 5 seconds
-        self.segment_timeout = 20  # Increased from 10 to 20 seconds
-
-        # Enhanced error tracking
-        self.error_log = Path(f"hls/{self.name}/error.log")
-        self.error_handler = logging.FileHandler(self.error_log)
-        self.error_handler.setFormatter(
-            logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-        )
-        self.logger = logging.getLogger(f"channel_{self.name}")
-        self.logger.addHandler(self.error_handler)
-        self.logger.setLevel(logging.DEBUG)
-
-        self.is_ready = False  # Nouvel attribut pour tracker l'état
-        self.is_processing = False  # Pour suivre l'état de normalisation
-
-    def _monitor_ffmpeg(self, hls_dir: str):
-        self.last_segment_time = time.time()
-        last_segment_number = -1
-        consecutive_errors = 0
-        max_consecutive_errors = 3
-
-        while (
-            not self.stop_event.is_set()
-            and self.ffmpeg_process
-            and self.ffmpeg_process.poll() is None
-        ):
-            try:
-                current_time = time.time()
-                segments = sorted(Path(hls_dir).glob("segment_*.ts"))
-
-                if segments:
-                    newest_segment = max(segments, key=lambda x: x.stat().st_mtime)
-
-                    # Check segment size
-                    if newest_segment.stat().st_size < self.min_segment_size:
-                        self.logger.error(f"Segment too small: {newest_segment}")
-                        consecutive_errors += 1
-                    else:
-                        consecutive_errors = 0
-
-                    try:
-                        current_segment = int(newest_segment.stem.split("_")[1])
-                        if current_segment != last_segment_number:
-                            self.last_segment_time = current_time
-                            last_segment_number = current_segment
-                            self.error_count = 0
-                            self.logger.info(
-                                f"New segment generated: {current_segment}"
-                            )
-                    except ValueError as e:
-                        self.logger.error(f"Invalid segment number: {e}")
-                        consecutive_errors += 1
-                else:
-                    consecutive_errors += 1
-                    self.logger.warning("No segments found")
-
-                if consecutive_errors >= max_consecutive_errors:
-                    self.logger.error("Too many consecutive errors, triggering restart")
-                    return self._restart_stream()
-
-                time.sleep(self.segment_check_interval)
-
-            except Exception as e:
-                self.logger.error(f"Monitor error: {str(e)}")
-                self.logger.error(traceback.format_exc())
-                time.sleep(1)
-
-    def _restart_stream(self):
-        """Enhanced restart with backoff and logging"""
-        self.logger.info("Initiating stream restart")
+        self.segment_check_interval = 2  # Vérifier toutes les 2 secondes
+        self.segment_timeout = 10  # Réduire le timeout à 10s au lieu de 30s
+        self.target_duration = 4  # Durée cible des segments
+        self.wrap_threshold = 20  # Seuil de rotation des segments
+        self.media_sequence = 0  # Séquence média initiale
+        self.segment_buffer = 15
+        self.min_segment_size = 1024  # 1KB minimum
+        self.current_segments = {}  # Pour tracker les segments actifs
+        self.last_playlist = None  # Garder une copie de la dernière playlist valide
+        self.stream_start_time = None
+        self.media_sequence = 0
+        self.segment_count = 0
+        self.wrap_count = 20
+        self.fallback_mode = False  # False = mode stream copy, True = mode ré-encodage
 
     def start_stream(self) -> bool:
         with self.lock:
@@ -543,31 +367,26 @@ class IPTVChannel:
                         f"❌ Ressources système insuffisantes pour {self.name}"
                     )
                     return False
-
                 hls_dir = f"hls/{self.name}"
-                self._clean_hls_directory()
+                self._clean_hls_directory()  # On vide le dossier HLS avant de démarrer
                 cmd = self._build_ffmpeg_command(hls_dir)
                 self.ffmpeg_process = self._start_ffmpeg_process(cmd)
                 if not self.ffmpeg_process:
-                    self.is_ready = False
                     return False
-
                 self._start_monitoring(hls_dir)
-                self.is_ready = True  # On marque la chaîne comme prête
                 return True
             except Exception as e:
                 logger.error(
                     f"Erreur lors du démarrage du stream pour {self.name} : {e}"
                 )
                 self._clean_processes()
-                self.is_ready = False
                 return False
 
     def _check_system_resources(self) -> bool:
         try:
             cpu_percent = psutil.cpu_percent()
             memory_percent = psutil.virtual_memory().percent
-            if cpu_percent > 95 and memory_percent > 95:
+            if cpu_percent > 98 and memory_percent > 95:
                 logger.warning(
                     f"Ressources critiques - CPU: {cpu_percent}%, RAM: {memory_percent}%"
                 )
@@ -769,6 +588,51 @@ class IPTVChannel:
         )
         return cmd
 
+    def _monitor_ffmpeg(self, hls_dir: str):
+        self.last_segment_time = time.time()
+        last_segment_number = -1
+        hls_dir = Path(hls_dir)
+        crash_threshold = 10  # Seuil en secondes avant de logger le bug
+
+        while (
+            not self.stop_event.is_set()
+            and self.ffmpeg_process
+            and self.ffmpeg_process.poll() is None
+        ):
+            try:
+                current_time = time.time()
+                segments = sorted(hls_dir.glob("segment_*.ts"))
+                if segments:
+                    newest_segment = max(segments, key=lambda x: x.stat().st_mtime)
+                    try:
+                        current_segment = int(newest_segment.stem.split("_")[1])
+                    except ValueError:
+                        current_segment = -1
+                    if current_segment != last_segment_number:
+                        self.last_segment_time = current_time
+                        last_segment_number = current_segment
+                        self.error_count = 0
+
+                        # Mise à jour de la playlist HLS
+                        playlist_content = self._generate_playlist(segments)
+                        playlist_path = hls_dir / "playlist.m3u8"
+                        temp_playlist = playlist_path.with_suffix(".m3u8.tmp")
+                        temp_playlist.write_text(playlist_content)
+                        temp_playlist.replace(playlist_path)
+
+                        # (Optionnel) Nettoyage des anciens segments ici...
+
+                elapsed = current_time - self.last_segment_time
+                if elapsed > crash_threshold:
+                    message = f"[{self.name}] Aucune mise à jour de segment depuis {elapsed:.1f} secondes."
+                    print(message)
+                    crash_logger.info(message)
+
+                time.sleep(1)
+            except Exception as e:
+                logger.error(f"Erreur monitoring {self.name} : {e}")
+                time.sleep(1)
+
     def _generate_playlist(self, segments: list) -> str:
         """Génère une playlist HLS avec PDT et séquence média."""
         segments = sorted(segments, key=lambda x: int(x.stem.split("_")[1]))
@@ -809,6 +673,87 @@ class IPTVChannel:
             )
 
         return "\n".join(playlist)
+
+    def _restart_stream(self):
+        try:
+            logger.info(f"🔄 Redémarrage du stream {self.name}")
+            # On sauvegarde l'état actuel (séquence média et nombre de segments)
+            current_state = {
+                "media_sequence": self.media_sequence,
+                "segment_count": self.segment_count,
+            }
+
+            # On arrête proprement le processus FFmpeg en cours
+            self._clean_processes()
+
+            # On prépare un dossier temporaire pour sauvegarder la playlist et quelques segments
+            hls_dir = Path(f"hls/{self.name}")
+            temp_dir = hls_dir / "temp"
+            temp_dir.mkdir(exist_ok=True)
+
+            if hls_dir.exists():
+                # On sauvegarde la playlist actuelle si elle existe
+                playlist = hls_dir / "playlist.m3u8"
+                if playlist.exists():
+                    shutil.copy2(playlist, temp_dir / "playlist.m3u8")
+                # On sauvegarde les 3 derniers segments
+                segments = sorted(
+                    list(hls_dir.glob("segment_*.ts")),
+                    key=lambda x: x.stat().st_mtime,
+                    reverse=True,
+                )[:3]
+                for seg in segments:
+                    shutil.copy2(seg, temp_dir / seg.name)
+
+            # On nettoie le dossier HLS
+            self._clean_hls_directory()
+
+            # On restaure la playlist et les segments sauvegardés
+            if temp_dir.exists():
+                for item in temp_dir.iterdir():
+                    shutil.copy2(item, hls_dir / item.name)
+                shutil.rmtree(temp_dir)
+
+            # On restaure l'état de la séquence média
+            self.media_sequence = current_state["media_sequence"]
+            self.segment_count = current_state["segment_count"]
+            self.error_count = 0
+
+            # Activation du mode fallback si ce n'est pas déjà fait
+            if not self.fallback_mode:
+                logger.info(
+                    "Activation du mode ré-encodage (fallback mode) pour garantir la compatibilité"
+                )
+                self.fallback_mode = True
+
+            # On recrée le fichier de concaténation pour FFmpeg
+            concat_file = self._create_concat_file()
+            if not concat_file:
+                logger.error("Échec de la recréation du fichier de concaténation")
+                return False
+
+            # Petite pause avant de redémarrer
+            time.sleep(self.restart_delay)
+
+            # On lance le stream avec la nouvelle configuration
+            stream_started = self.start_stream()
+
+            # Optionnel : on attend que le fichier playlist.m3u8 soit bien créé (timeout 10s)
+            timeout = 10
+            start_time = time.time()
+            playlist_path = hls_dir / "playlist.m3u8"
+            while not playlist_path.exists() and (time.time() - start_time < timeout):
+                time.sleep(0.5)
+            if not playlist_path.exists():
+                logger.error(
+                    f"La playlist {playlist_path} n'a pas été créée dans le délai imparti"
+                )
+                return False
+
+            return stream_started
+        except Exception as e:
+            logger.error(f"Erreur lors du redémarrage du stream {self.name}: {e}")
+            return False
 
     def start_processing(self):
         """Start asynchronous video processing"""
@@ -895,9 +840,6 @@ class IPTVManager:
             target=self._master_playlist_loop, daemon=True
         )
         self.master_playlist_updater.start()
-        self.processing_channels = (
-            set()
-        )  # Pour suivre les chaînes en cours de normalisation
 
     def _start_playlist_updater(self):
         # Cancelle l'ancien updater si existant
@@ -908,23 +850,6 @@ class IPTVManager:
         self.playlist_timer = threading.Timer(10, self._update_master_playlist)
         self.playlist_timer.daemon = True
         self.playlist_timer.start()
-
-    def _is_channel_ready(self, channel_dir: Path) -> bool:
-        """Vérifie si une chaîne a déjà ses fichiers normalisés"""
-        processed_dir = channel_dir / "processed"
-        if not processed_dir.exists():
-            return False
-
-        # On vérifie s'il y a des fichiers MP4 sources
-        source_files = list(channel_dir.glob("*.mp4"))
-        if not source_files:
-            return False
-
-        # On vérifie si tous les fichiers sont déjà normalisés
-        processed_files = set(f.stem for f in processed_dir.glob("*.mp4"))
-        source_files_stems = set(f.stem for f in source_files)
-
-        return len(processed_files) >= len(source_files_stems)
 
     def scan_channels(self, force: bool = False, initial: bool = False):
         with self.scan_lock:
@@ -939,103 +864,59 @@ class IPTVManager:
                 self._start_playlist_updater()
 
                 channel_dirs = [d for d in content_path.iterdir() if d.is_dir()]
+                processing_channels = []
+                processed_channels = set()
 
-                # On sépare les chaînes en deux catégories
-                ready_channels = []
-                pending_channels = []
-
-                # Première phase : identification des chaînes
+                # Rest of the existing code stays the same
                 for channel_dir in channel_dirs:
                     try:
                         channel_name = channel_dir.name
+                        video_files = list(channel_dir.glob("*.mp4"))
 
-                        # Si la chaîne existe déjà
+                        if not video_files:
+                            logger.warning(f"Aucun fichier MP4 dans {channel_name}")
+                            continue
+
                         if channel_name in self.channels:
                             channel = self.channels[channel_name]
                             if force or initial or self._needs_update(channel_dir):
-                                if self._is_channel_ready(channel_dir):
-                                    ready_channels.append((channel_name, channel_dir))
-                                else:
-                                    pending_channels.append((channel_name, channel_dir))
+                                logger.info(f"Mise à jour du contenu: {channel_name}")
+                                self._update_channel_playlist(channel, channel_dir)
                         else:
-                            # Nouvelle chaîne
-                            if self._is_channel_ready(channel_dir):
-                                ready_channels.append((channel_name, channel_dir))
-                            else:
-                                pending_channels.append((channel_name, channel_dir))
+                            logger.info(f"Nouvelle chaîne: {channel_name}")
+                            channel = IPTVChannel(
+                                channel_name, str(channel_dir), use_gpu=self.use_gpu
+                            )
+                            self.channels[channel_name] = channel
+                            channel.start_processing()
+                            processing_channels.append(channel)
 
                     except Exception as e:
                         logger.error(f"Erreur traitement {channel_dir.name}: {e}")
                         continue
 
-                # Deuxième phase : démarrage des chaînes prêtes
-                logger.info(f"Démarrage des {len(ready_channels)} chaînes prêtes...")
-                for name, channel_dir in ready_channels:
-                    try:
-                        if name not in self.channels:
-                            channel = IPTVChannel(
-                                name, str(channel_dir), use_gpu=self.use_gpu
-                            )
-                            channel.processed_videos = sorted(
-                                list((channel_dir / "processed").glob("*.mp4"))
-                            )
-                            self.channels[name] = channel
-
-                        if not self.channels[name].start_stream():
-                            logger.error(f"Échec démarrage stream pour {name}")
-
-                    except Exception as e:
-                        logger.error(f"Erreur démarrage {name}: {e}")
-
-                # Troisième phase : traitement des chaînes en attente
-                logger.info(
-                    f"Traitement des {len(pending_channels)} chaînes en attente de normalisation..."
-                )
-                processing_channels = []
-
-                # Pendant la normalisation
-                for name, channel_dir in pending_channels:
-                    try:
-                        if name not in self.channels:
-                            channel = IPTVChannel(
-                                name, str(channel_dir), use_gpu=self.use_gpu
-                            )
-                            self.channels[name] = channel
-
-                        channel = self.channels[name]
-                        channel.is_processing = (
-                            True  # On marque comme en cours de traitement
-                        )
-                        self.processing_channels.add(name)
-                        channel.start_processing()
-                        processing_channels.append(channel)
-
-                    except Exception as e:
-                        logger.error(f"Erreur initialisation processing {name}: {e}")
-
-                # Après la normalisation
-                for channel in processing_channels:
-                    try:
-                        channel.wait_for_processing()
-                        channel.is_processing = False  # Traitement terminé
-                        self.processing_channels.remove(channel.name)
-
+                # Second pass: Start streams for already processed channels
+                for name, channel in self.channels.items():
+                    if channel not in processing_channels and channel.processed_videos:
                         if channel.start_stream():
-                            logger.info(f"Stream démarré pour {channel.name}")
-                            channel.is_ready = True  # Chaîne prête et diffusant
-                        else:
-                            logger.error(f"Échec démarrage stream pour {channel.name}")
-                            channel.is_ready = False
+                            processed_channels.add(name)
 
-                    except Exception as e:
-                        logger.error(f"Erreur post-processing {channel.name}: {e}")
-                        channel.is_processing = False
-                        channel.is_ready = False
-                        if channel.name in self.processing_channels:
-                            self.processing_channels.remove(channel.name)
+                # Third pass: Wait for processing and start remaining streams
+                for channel in processing_channels:
+                    channel.wait_for_processing()
+                    if channel.start_stream():
+                        processed_channels.add(channel.name)
 
-                # Mise à jour finale
+                # Final status update
+                logger.info(f"\nRésumé du traitement:")
+                logger.info(f"Total dossiers: {len(channel_dirs)}")
+                logger.info(f"Chaînes actives: {len(processed_channels)}")
+                logger.info(f"Chaînes: {', '.join(processed_channels)}")
+
+                # Update master playlist
                 self.generate_master_playlist()
+
+                # Verify channel health
                 self._verify_channels_health()
 
             except Exception as e:
@@ -1171,40 +1052,25 @@ class IPTVManager:
         try:
             playlist_path = os.path.abspath("./hls/playlist.m3u")
             logger.info(f"On génère la master playlist à {playlist_path}")
-
-            # On ne prend que les chaînes prêtes
-            ready_channels = {
-                name: channel
-                for name, channel in self.channels.items()
-                if channel.is_ready and not channel.is_processing
-            }
-
-            if not ready_channels:
-                logger.warning("Aucune chaîne prête pour la playlist principale")
-                return
-
             with open(playlist_path, "w", encoding="utf-8") as f:
                 f.write("#EXTM3U\n")
-                for name, channel in sorted(ready_channels.items()):
+                for name, channel in sorted(self.channels.items()):
                     hls_playlist = f"./hls/{name}/playlist.m3u8"
-                    if os.path.exists(hls_playlist):
-                        logger.info(f"Ajout de la chaîne {name} à la master playlist")
-                        f.write(
-                            f'#EXTINF:-1 tvg-id="{name}" tvg-name="{name}",{name}\n'
-                        )
-                        f.write(f"http://{SERVER_URL}/hls/{name}/playlist.m3u8\n")
-                    else:
+                    if not os.path.exists(hls_playlist):
                         logger.warning(
-                            f"Playlist manquante pour {name}, chaîne ignorée"
+                            f"Playlist HLS manquante pour {name}, tentative de redémarrage"
                         )
-                        channel.is_ready = False  # On met à jour l'état
-
+                        channel.start_stream()
+                    logger.info(f"Ajout de la chaîne {name} à la master playlist")
+                    f.write(f'#EXTINF:-1 tvg-id="{name}" tvg-name="{name}",{name}\n')
+                    f.write(f"http://{SERVER_URL}/hls/{name}/playlist.m3u8\n")
             logger.info(
-                f"Master playlist mise à jour avec {len(ready_channels)} chaînes"
+                f"Master playlist mise à jour avec {len(self.channels)} chaînes"
             )
-
         except Exception as e:
             logger.error(f"Erreur lors de la génération de la master playlist : {e}")
+            import traceback
+
             logger.error(traceback.format_exc())
 
     def _needs_update(self, channel_dir: Path) -> bool:
