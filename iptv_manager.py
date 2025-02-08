@@ -15,6 +15,10 @@ from tqdm import tqdm  # Pour la barre de progression CLI
 import traceback
 import json
 from queue import Queue
+from typing import Optional, List
+import logging
+import glob
+import random
 
 # -----------------------------------------------------------------------------
 # Configuration du logging et constantes globales
@@ -87,6 +91,216 @@ class ChannelEventHandler(FileSystemEventHandler):
             # Attendre un peu que les fichiers soient copiés
             time.sleep(2)
             self._handle_event(event)
+
+
+# -----------------------------------------------------------------------------
+# Nettoyage des segments
+# -----------------------------------------------------------------------------
+class HLSCleaner:
+    """Gestionnaire unique de nettoyage des segments HLS"""
+
+    def __init__(
+        self,
+        base_hls_dir: str,
+        max_segment_age: int = 300,
+        min_free_space_gb: float = 10.0,
+    ):
+        self.base_hls_dir = Path(base_hls_dir)
+        self.max_segment_age = max_segment_age
+        self.min_free_space_gb = min_free_space_gb
+        self.cleanup_interval = 60
+        self.stop_event = threading.Event()
+        self.cleanup_thread = None
+        self.lock = threading.Lock()  # Pour les opérations concurrentes
+
+    def initial_cleanup(self):
+        """Nettoyage initial au démarrage du système"""
+        with self.lock:
+            try:
+                logger.info("🧹 Nettoyage initial HLS...")
+                if self.base_hls_dir.exists():
+                    shutil.rmtree(self.base_hls_dir)
+                self.base_hls_dir.mkdir(parents=True, exist_ok=True)
+                logger.info("✨ Dossier HLS réinitialisé")
+            except Exception as e:
+                logger.error(f"Erreur nettoyage initial HLS: {e}")
+
+    def cleanup_channel(self, channel_name: str):
+        """Nettoie les segments d'une chaîne spécifique"""
+        with self.lock:
+            channel_dir = self.base_hls_dir / channel_name
+            if channel_dir.exists():
+                try:
+                    shutil.rmtree(channel_dir)
+                    channel_dir.mkdir(parents=True, exist_ok=True)
+                    logger.info(f"✨ Chaîne {channel_name} nettoyée")
+                except Exception as e:
+                    logger.error(f"Erreur nettoyage chaîne {channel_name}: {e}")
+
+    def start(self):
+        """Démarre la surveillance et le nettoyage périodique"""
+        if not self.cleanup_thread or not self.cleanup_thread.is_alive():
+            self.stop_event.clear()
+            self.cleanup_thread = threading.Thread(
+                target=self._cleanup_loop, daemon=True
+            )
+            self.cleanup_thread.start()
+            logger.info("🔄 Démarrage monitoring HLS")
+
+    def stop(self):
+        """Arrête la surveillance"""
+        if self.cleanup_thread:
+            self.stop_event.set()
+            self.cleanup_thread.join()
+            self.cleanup_thread = None
+            logger.info("⏹️ Arrêt monitoring HLS")
+
+    def _cleanup_loop(self):
+        while not self.stop_event.is_set():
+            try:
+                self._check_disk_space()
+                self._cleanup_old_segments()
+                self._cleanup_orphaned_segments()
+                time.sleep(self.cleanup_interval)
+            except Exception as e:
+                logger.error(f"Erreur boucle nettoyage: {e}")
+
+    def _check_disk_space(self):
+        """Vérifie l'espace disque et nettoie si nécessaire"""
+        try:
+            disk_usage = shutil.disk_usage(self.base_hls_dir)
+            free_space_gb = disk_usage.free / (1024**3)
+
+            if free_space_gb < self.min_free_space_gb:
+                logger.warning(f"⚠️ Espace disque critique: {free_space_gb:.2f} GB")
+                self._aggressive_cleanup()
+
+        except Exception as e:
+            logger.error(f"Erreur vérification espace disque: {e}")
+
+    def _aggressive_cleanup(self):
+        """Nettoyage agressif quand l'espace disque est critique"""
+        try:
+            segments = self._get_all_segments()
+            # On garde seulement les 3 segments les plus récents par chaîne
+            segments_by_channel = {}
+
+            for segment in segments:
+                channel = segment.parent.name
+                if channel not in segments_by_channel:
+                    segments_by_channel[channel] = []
+                segments_by_channel[channel].append(segment)
+
+            for channel, segs in segments_by_channel.items():
+                # Trie par date de modification
+                sorted_segs = sorted(
+                    segs, key=lambda x: x.stat().st_mtime, reverse=True
+                )
+                # Supprime tous sauf les 3 plus récents
+                for seg in sorted_segs[3:]:
+                    try:
+                        seg.unlink()
+                        logger.debug(f"Segment supprimé (espace critique): {seg}")
+                    except Exception as e:
+                        logger.error(f"Erreur suppression segment {seg}: {e}")
+
+            logger.info("Nettoyage agressif des segments terminé")
+
+        except Exception as e:
+            logger.error(f"Erreur nettoyage agressif: {e}")
+
+    def _cleanup_old_segments(self):
+        """Nettoie les segments plus vieux que max_segment_age"""
+        try:
+            current_time = time.time()
+            old_segments = []
+
+            for segment in self._get_all_segments():
+                try:
+                    if current_time - segment.stat().st_mtime > self.max_segment_age:
+                        old_segments.append(segment)
+                except Exception:
+                    # Si on ne peut pas lire les stats, on considère le segment comme périmé
+                    old_segments.append(segment)
+
+            for segment in old_segments:
+                try:
+                    segment.unlink()
+                    logger.debug(f"Segment périmé supprimé: {segment}")
+                except Exception as e:
+                    logger.error(f"Erreur suppression segment périmé {segment}: {e}")
+
+            if old_segments:
+                logger.info(f"🧹 {len(old_segments)} segments périmés supprimés")
+
+        except Exception as e:
+            logger.error(f"Erreur nettoyage segments périmés: {e}")
+
+    def _cleanup_orphaned_segments(self):
+        """Nettoie les segments qui ne sont plus référencés dans les playlists"""
+        try:
+            for channel_dir in self.base_hls_dir.iterdir():
+                if not channel_dir.is_dir():
+                    continue
+
+                try:
+                    playlist_path = channel_dir / "playlist.m3u8"
+                    if not playlist_path.exists():
+                        # Si pas de playlist, on considère tous les segments comme orphelins
+                        for segment in channel_dir.glob("*.ts"):
+                            try:
+                                segment.unlink()
+                                logger.debug(f"Segment orphelin supprimé: {segment}")
+                            except Exception as e:
+                                logger.error(
+                                    f"Erreur suppression segment orphelin {segment}: {e}"
+                                )
+                        continue
+
+                    # Lecture de la playlist
+                    with open(playlist_path, "r") as f:
+                        playlist_content = f.read()
+
+                    # Liste des segments référencés
+                    referenced_segments = {
+                        line.strip()
+                        for line in playlist_content.splitlines()
+                        if line.strip().endswith(".ts")
+                    }
+
+                    # Suppression des segments non référencés
+                    for segment in channel_dir.glob("*.ts"):
+                        if segment.name not in referenced_segments:
+                            try:
+                                segment.unlink()
+                                logger.debug(
+                                    f"Segment non référencé supprimé: {segment}"
+                                )
+                            except Exception as e:
+                                logger.error(
+                                    f"Erreur suppression segment non référencé {segment}: {e}"
+                                )
+
+                except Exception as e:
+                    logger.error(f"Erreur nettoyage chaîne {channel_dir.name}: {e}")
+
+        except Exception as e:
+            logger.error(f"Erreur nettoyage segments orphelins: {e}")
+
+    def _get_all_segments(self) -> List[Path]:
+        """Retourne tous les segments HLS"""
+        segments = []
+        try:
+            for channel_dir in self.base_hls_dir.iterdir():
+                if channel_dir.is_dir():
+                    segments.extend(channel_dir.glob("*.ts"))
+        except Exception as e:
+            logger.error(f"Erreur lecture segments: {e}")
+        return segments
+
+    def _clean_hls_directory(self):
+        """Délègue le nettoyage au HLSCleaner"""
+        self.hls_cleaner._clean_hls_directory(self.name)
 
 
 # -----------------------------------------------------------------------------
@@ -242,7 +456,7 @@ class VideoProcessor:
                     ]
                 )
             else:
-                cmd.extend(["-c:v", "libx264", "-preset", "medium", "-crf", "23"])
+                cmd.extend(["-c:v", "libx264", "-preset", "fast", "-crf", "22"])
 
             # Paramètres communs
             cmd.extend(
@@ -407,36 +621,16 @@ class VideoProcessor:
 # -----------------------------------------------------------------------------
 # Gestion d'une chaîne IPTV (streaming et surveillance)
 # -----------------------------------------------------------------------------
-from typing import Optional, List
-import subprocess
-import logging
-import threading
-import time
-import datetime
-from pathlib import Path
-import shutil
-import os
-
-logger = logging.getLogger(__name__)
-
-from typing import Optional, List
-import subprocess
-import logging
-import threading
-import time
-import datetime
-from pathlib import Path
-import shutil
-import os
-
-logger = logging.getLogger(__name__)
-
-
 class IPTVChannel:
-    def __init__(self, name: str, video_dir: str, use_gpu: bool = False):
+    def __init__(
+        self, name: str, video_dir: str, hls_cleaner: HLSCleaner, use_gpu: bool = False
+    ):
+
         self.name = name
         self.video_dir = video_dir
         self.use_gpu = use_gpu
+        self.hls_cleaner = hls_cleaner  # Instance partagée du nettoyeur
+
         self.processed_videos = []
         self.video_extensions = (".mp4", ".avi", ".mkv", ".mov")
 
@@ -450,9 +644,9 @@ class IPTVChannel:
 
         # Configuration HLS
         self.hls_time = 6
-        self.hls_list_size = 4
-        self.hls_delete_threshold = 1
-        self.target_duration = 6  # Ajout de l'attribut manquant
+        self.hls_list_size = 10
+        self.hls_delete_threshold = 3
+        self.target_duration = 8
 
         # Paramètres d'encodage
         self.video_bitrate = "2800k"
@@ -461,12 +655,12 @@ class IPTVChannel:
         self.gop_size = 48
         self.keyint_min = 48
         self.sc_threshold = 0
-        self.crf = 20
+        self.crf = 22
 
         # Autres initialisations
         self.restart_count = 0
         self.max_restarts = 3
-        self.restart_cooldown = 30
+        self.restart_cooldown = 60
         self.error_count = 0
         self.min_segment_size = 1024
         self.ffmpeg_process = None
@@ -475,6 +669,8 @@ class IPTVChannel:
         self.fallback_mode = False
         self.monitoring_thread = None
         self.last_segment_time = 0
+
+        self.start_offset = 0
 
     def _build_ffmpeg_command(self, hls_dir: str) -> list:
         # Base commune pour tous les modes
@@ -487,15 +683,26 @@ class IPTVChannel:
             "-re",
             "-fflags",
             "+genpts+igndts",
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-stream_loop",
-            "-1",
-            "-i",
-            str(self._create_concat_file()),
         ]
+
+        # Ajout de l'offset uniquement si défini et non nul
+        if self.start_offset > 0:
+            base_cmd.extend(["-ss", f"{self.start_offset}"])
+            # On réinitialise pour éviter de réutiliser l'offset lors des redémarrages
+            self.start_offset = 0
+
+        base_cmd.extend(
+            [
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-stream_loop",
+                "-1",
+                "-i",
+                str(self._create_concat_file()),
+            ]
+        )
 
         if self.fallback_mode:
             # Mode ré-encodage complet
@@ -985,94 +1192,12 @@ class IPTVChannel:
     def _create_channel_directory(self):
         Path(f"hls/{self.name}").mkdir(parents=True, exist_ok=True)
 
-    def _clean_hls_directory(self):
-        try:
-            hls_dir = Path(f"hls/{self.name}")
-            if hls_dir.exists():
-                for item in hls_dir.iterdir():
-                    try:
-                        if item.is_file():
-                            item.unlink()
-                        elif item.is_dir():
-                            shutil.rmtree(item)
-                    except OSError:
-                        pass
-        except Exception as e:
-            logger.error(
-                f"Erreur lors du nettoyage du dossier HLS pour {self.name} : {e}"
-            )
-
-    def _start_monitoring(self, hls_dir: str):
-        if self.monitoring_thread is None:
-            self.monitoring_thread = threading.Thread(
-                target=self._monitor_ffmpeg, args=(hls_dir,), daemon=True
-            )
-            self.monitoring_thread.start()
-
-    def _generate_playlist(self, segments: list) -> str:
-        """Génère une playlist HLS avec PDT et séquence média."""
-        segments = sorted(segments, key=lambda x: int(x.stem.split("_")[1]))
-
-        if not segments:
-            return ""
-
-        # Calcul des paramètres de base
-        first_segment = min(int(s.stem.split("_")[1]) for s in segments)
-        segment_count = len(segments)
-
-        # En-tête de la playlist
-        playlist = [
-            "#EXTM3U",
-            "#EXT-X-VERSION:3",
-            f"#EXT-X-TARGETDURATION:{self.target_duration}",
-            f"#EXT-X-MEDIA-SEQUENCE:{first_segment}",
-            "#EXT-X-ALLOW-CACHE:NO",
-        ]
-
-        # Calcul du temps de base pour PDT
-        base_time = datetime.datetime.utcnow() - datetime.timedelta(
-            seconds=segment_count * self.target_duration
-        )
-
-        # Génération des segments
-        for idx, segment in enumerate(segments):
-            segment_time = (
-                base_time + datetime.timedelta(seconds=idx * self.target_duration)
-            ).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-
-            playlist.extend(
-                [
-                    f"#EXT-X-PROGRAM-DATE-TIME:{segment_time}",
-                    f"#EXTINF:{self.target_duration:.3f},",
-                    segment.name,
-                ]
-            )
-
-        return "\n".join(playlist)
-
-    def start_processing(self):
-        """Start asynchronous video processing"""
-        self.processor.process_videos_async()
-
-    def wait_for_processing(self):
-        """Wait for video processing to complete"""
-        self.processed_videos = self.processor.wait_for_completion()
-
-    def _check_stream_health(self) -> bool:
-        """Vérifie l'état du stream"""
-        try:
-            if not self.ffmpeg_process:
-                return False
-            return self.ffmpeg_process.poll() is None
-        except Exception as e:
-            logger.error(f"Erreur vérification santé {self.name}: {e}")
-            return False
-
 
 # -----------------------------------------------------------------------------
 # Gestionnaire de monitoring des clients (IP des viewers)
 # -----------------------------------------------------------------------------
 class ClientMonitor(threading.Thread):
+
     def __init__(self, log_file: str):
         super().__init__(daemon=True)
         self.log_file = log_file
@@ -1080,7 +1205,8 @@ class ClientMonitor(threading.Thread):
     def run(self):
         if not os.path.exists(self.log_file):
             logger.warning(
-                f"Fichier log introuvable pour le monitoring des clients : {self.log_file}"
+                "Fichier log introuvable pour le monitoring des clients : %s",
+                self.log_file,
             )
             return
         with open(self.log_file, "r") as f:
@@ -1109,6 +1235,14 @@ class IPTVManager:
         self.content_dir = content_dir
         self.use_gpu = use_gpu
         self.channels = {}
+
+        # Instance unique du nettoyeur HLS
+        self.hls_cleaner = HLSCleaner("./hls")
+        # Nettoyage initial
+        self.hls_cleaner.initial_cleanup()
+        # Démarrage du monitoring
+        self.hls_cleaner.start()
+
         self.scan_lock = threading.Lock()
         self.failing_channels = set()
         self.channel_queue = Queue()
@@ -1340,6 +1474,7 @@ class IPTVManager:
     def _clean_channel(self, channel_name: str):
         """Nettoyage approfondi d'une chaîne en échec"""
         try:
+            self.hls_cleaner.cleanup_channel(channel_name)
             # Nettoyage des fichiers HLS
             hls_dir = Path(f"./hls/{channel_name}")
             if hls_dir.exists():
@@ -1399,12 +1534,7 @@ class IPTVManager:
                     logger.error(f"Le dossier {content_path} n'existe pas!")
                     return
 
-                # On lance la playlist initiale immédiatement
-                self.generate_master_playlist()
-
                 channel_dirs = [d for d in content_path.iterdir() if d.is_dir()]
-
-                # File d'attente pour le traitement asynchrone
                 processing_queue = []
 
                 # Première phase : démarrage immédiat des chaînes prêtes
@@ -1413,19 +1543,20 @@ class IPTVManager:
                         channel_name = channel_dir.name
                         processed_dir = channel_dir / "processed"
 
-                        # On vérifie si la chaîne a déjà des vidéos traitées
                         if processed_dir.exists() and list(processed_dir.glob("*.mp4")):
                             if channel_name not in self.channels:
+                                # On passe le hls_cleaner à la création de la chaîne
                                 channel = IPTVChannel(
-                                    channel_name, str(channel_dir), use_gpu=self.use_gpu
+                                    channel_name,
+                                    str(channel_dir),
+                                    hls_cleaner=self.hls_cleaner,  # Ajout ici
+                                    use_gpu=self.use_gpu,
                                 )
                                 self.channels[channel_name] = channel
-                                # Démarrage immédiat si les vidéos sont prêtes
                                 threading.Thread(
                                     target=self._start_ready_channel, args=(channel,)
                                 ).start()
                             else:
-                                # Mise à jour si nécessaire
                                 if force or initial or self._needs_update(channel_dir):
                                     channel = self.channels[channel_name]
                                     threading.Thread(
@@ -1433,14 +1564,12 @@ class IPTVManager:
                                         args=(channel, channel_dir),
                                     ).start()
                         else:
-                            # Chaîne nécessitant un traitement
                             processing_queue.append(channel_dir)
 
                     except Exception as e:
                         logger.error(f"Erreur traitement {channel_dir.name}: {e}")
                         continue
 
-                # Deuxième phase : traitement asynchrone des nouvelles chaînes
                 if processing_queue:
                     threading.Thread(
                         target=self._process_new_channels, args=(processing_queue,)
@@ -1448,46 +1577,109 @@ class IPTVManager:
 
             except Exception as e:
                 logger.error(f"Erreur scan des chaînes: {e}")
-                logger.error(traceback.format_exc())
 
     def _start_ready_channel(self, channel: IPTVChannel):
-        """Démarre une chaîne dont les vidéos sont déjà traitées"""
+        """Démarre une chaîne avec un offset aléatoire"""
         try:
             logger.info(f"Démarrage rapide de la chaîne {channel.name}")
-            if channel._scan_videos() and channel.start_stream():
-                logger.info(f"✅ Chaîne {channel.name} démarrée avec succès")
-                # Mise à jour immédiate de la playlist
-                self.generate_master_playlist()
+            if channel._scan_videos():
+                # Calcul de la durée totale des vidéos
+                total_duration = 0
+                for video in channel.processed_videos:
+                    try:
+                        cmd = [
+                            "ffprobe",
+                            "-v",
+                            "error",
+                            "-show_entries",
+                            "format=duration",
+                            "-of",
+                            "default=noprint_wrappers=1:nokey=1",
+                            str(video),
+                        ]
+                        result = subprocess.run(cmd, capture_output=True, text=True)
+                        duration = float(result.stdout.strip())
+                        total_duration += duration
+                    except Exception as e:
+                        logger.error(f"Erreur lecture durée {video}: {e}")
+                        continue
+
+                # Génération d'un offset aléatoire
+                if total_duration > 0:
+                    channel.start_offset = random.uniform(0, total_duration)
+                    logger.info(
+                        f"Démarrage de {channel.name} à {channel.start_offset:.2f}s"
+                    )
+
+                if channel.start_stream():
+                    logger.info(f"✅ Chaîne {channel.name} démarrée avec succès")
+                    self.generate_master_playlist()
+                else:
+                    logger.error(f"❌ Échec démarrage {channel.name}")
             else:
-                logger.error(f"❌ Échec du démarrage rapide de {channel.name}")
+                logger.error(f"❌ Échec scan vidéos {channel.name}")
         except Exception as e:
-            logger.error(f"Erreur démarrage rapide {channel.name}: {e}")
+            logger.error(f"Erreur démarrage {channel.name}: {e}")
 
     def _process_new_channels(self, channel_dirs: List[Path]):
-        """Traite les nouvelles chaînes en arrière-plan"""
+        """Traite les nouvelles chaînes avec démarrage aléatoire"""
         for channel_dir in channel_dirs:
             try:
                 channel_name = channel_dir.name
-                logger.info(f"Traitement en arrière-plan de {channel_name}")
+                logger.info(f"Traitement de {channel_name}")
 
+                # Création du canal
                 channel = IPTVChannel(
-                    channel_name, str(channel_dir), use_gpu=self.use_gpu
+                    channel_name,
+                    str(channel_dir),
+                    hls_cleaner=self.hls_cleaner,
+                    use_gpu=self.use_gpu,
                 )
                 self.channels[channel_name] = channel
 
-                # Lancement du traitement
+                # On attend la fin du traitement des vidéos
                 channel.start_processing()
                 channel.wait_for_processing()
 
                 if channel.processed_videos:
+                    # Calcul de la durée totale
+                    total_duration = 0
+                    for video in channel.processed_videos:
+                        try:
+                            cmd = [
+                                "ffprobe",
+                                "-v",
+                                "error",
+                                "-show_entries",
+                                "format=duration",
+                                "-of",
+                                "default=noprint_wrappers=1:nokey=1",
+                                str(video),
+                            ]
+                            result = subprocess.run(cmd, capture_output=True, text=True)
+                            duration = float(result.stdout.strip())
+                            total_duration += duration
+                        except Exception as e:
+                            logger.error(f"Erreur lecture durée {video}: {e}")
+                            continue
+
+                    # Génération d'un offset aléatoire
+                    if total_duration > 0:
+                        random_offset = random.uniform(0, total_duration)
+                        # On stocke l'offset dans le canal pour utilisation dans _build_ffmpeg_command
+                        channel.start_offset = random_offset
+                        logger.info(
+                            f"Offset initial pour {channel_name}: {random_offset:.2f}s"
+                        )
+
                     if channel.start_stream():
-                        logger.info(f"✅ Nouvelle chaîne {channel_name} démarrée")
+                        logger.info(f"✅ Chaîne {channel_name} démarrée")
                         self.generate_master_playlist()
                     else:
                         logger.error(f"❌ Échec démarrage {channel_name}")
 
             except Exception as e:
-                logger.error(f"Erreur traitement différé {channel_dir.name}: {e}")
+                logger.error(f"Erreur traitement {channel_dir.name}: {e}")
                 continue
 
     def _start_playlist_updater(self):
@@ -1587,6 +1779,11 @@ class IPTVManager:
 
     def cleanup(self):
         logger.info("Début du nettoyage...")
+        # Arrêt du nettoyeur HLS
+        if hasattr(self, "hls_cleaner"):
+            logger.info("Arrêt du nettoyeur HLS...")
+            self.hls_cleaner.stop()
+
         if hasattr(self, "observer"):
             logger.info("On arrête l'observer...")
             self.observer.stop()
