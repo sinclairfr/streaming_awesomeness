@@ -1,6 +1,7 @@
-cache/
-content/
-hls/
-.env
+app/cache/
+app/content/
+app/hls/
+app/.env
 env
 rebus/
+app/logs

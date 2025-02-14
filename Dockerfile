@@ -10,9 +10,10 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt /app/
+COPY app/*.py /app/
 RUN pip3 install -r /app/requirements.txt
 
 WORKDIR /app
 RUN mkdir -p ./hls ./cache ./content && chmod 777 ./hls ./cache ./content
     
-CMD ["python3", "-u", "iptv_manager.py"]
+CMD ["python3", "-u", "main.py"]

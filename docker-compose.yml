@@ -5,16 +5,15 @@ services:
       context: .
       dockerfile: Dockerfile
     volumes:
-      - ${PWD}/content:/app/content
-      - ${PWD}/hls:/app/hls
-      - ${PWD}/iptv_manager.py:/app/iptv_manager.py
-      - ${PWD}/crash_timer.log:/crash_timer.log:rw
-      - ${PWD}/logs/ffmpeg:/app/logs/ffmpeg:rw  
-    runtime: nvidia
+      - ./app/content:/app/content
+      - ./app/hls:/app/hls
+      - ./app/logs/crash_timer.log:/app/logs/crash_timer.log:rw
+      - ./app/logs/ffmpeg:/app/logs/ffmpeg:rw  
+    #runtime: nvidia
     environment:
-      - NVIDIA_VISIBLE_DEVICES=all
+    #  - NVIDIA_VISIBLE_DEVICES=all
       - USE_GPU=auto
-      - SERVER_URL=192.168.10.183
+      - SERVER_URL=192.168.10.120
     restart: unless-stopped
 
   nginx:
@@ -23,8 +22,8 @@ services:
     ports:
       - "80:80"
     volumes:
-      - ${PWD}/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ${PWD}/hls:/hls:ro
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./app/hls:/hls:ro
     depends_on:
       - iptv-manager
     restart: unless-stopped
