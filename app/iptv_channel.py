@@ -42,8 +42,8 @@ class IPTVChannel:
 
         # Configuration HLS
         self.hls_time = 6
-        self.hls_list_size = 10
-        self.hls_delete_threshold = 3
+        self.hls_list_size = 20
+        self.hls_delete_threshold = 6
         self.target_duration = 8
 
         # Paramètres d'encodage
@@ -70,6 +70,36 @@ class IPTVChannel:
         self.last_segment_time = 0
         self.start_offset = 0
 
+        # On scanne les vidéos pour remplir self.processed_videos
+        self._scan_videos()
+
+        # On calcule une fois la durée totale
+        total_duration = self._calculate_total_duration()
+        if total_duration > 0:
+            # On définit l'offset aléatoire une seule fois
+            self.start_offset = random.uniform(0, total_duration)
+            logger.info(f"[{self.name}] Offset initial = {self.start_offset:.2f}s")
+        else:
+            self.start_offset = 0
+    
+    def _calculate_total_duration(self) -> float:
+        """# Calcule la somme des durées de toutes les vidéos traitées pour cette chaîne."""
+        total_duration = 0.0
+        for video in self.processed_videos:
+            try:
+                cmd = [
+                    "ffprobe", "-v", "error",
+                    "-show_entries", "format=duration",
+                    "-of", "default=noprint_wrappers=1:nokey=1",
+                    str(video)
+                ]
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                duration = float(result.stdout.strip())
+                total_duration += duration
+            except Exception as e:
+                logger.error(f"[{self.name}] Erreur durant la lecture de {video}: {e}")
+        return total_duration
+           
     def _build_ffmpeg_command(self, hls_dir: str) -> list:
         """
         # On construit la commande FFmpeg pour streamer
@@ -86,9 +116,8 @@ class IPTVChannel:
 
         # On applique l'offset si défini
         if self.start_offset > 0:
+            logger.info(f"[{self.name}] Lancement avec un offset de {self.start_offset:.2f}s")
             base_cmd.extend(["-ss", f"{self.start_offset}"])
-            # On réinitialise l'offset pour éviter les offsets successifs
-            self.start_offset = 0
 
         base_cmd.extend([
             "-f", "concat",
@@ -212,9 +241,9 @@ class IPTVChannel:
                                 self.last_segment_time = current_time
                                 last_segment_number = current_segment
                                 self.error_count = 0
-                                logger.debug(
-                                    f"✨ Nouveau segment {current_segment} pour {self.name}"
-                                )
+                                #logger.debug(
+                                #    f"✨ Nouveau segment {current_segment} pour {self.name}"
+                                #)
                     except ValueError:
                         logger.error(f"Format de segment invalide: {newest_segment.name}")
                         self.error_count += 1

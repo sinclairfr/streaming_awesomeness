@@ -215,25 +215,6 @@ class IPTVManager:
         try:
             logger.info(f"Démarrage rapide de la chaîne {channel.name}")
             if channel._scan_videos():
-                total_duration = 0
-                for video in channel.processed_videos:
-                    try:
-                        cmd = [
-                            "ffprobe", "-v", "error",
-                            "-show_entries", "format=duration",
-                            "-of", "default=noprint_wrappers=1:nokey=1",
-                            str(video)
-                        ]
-                        result = subprocess.run(cmd, capture_output=True, text=True)
-                        duration = float(result.stdout.strip())
-                        total_duration += duration
-                    except Exception as e:
-                        logger.error(f"Erreur durée {video}: {e}")
-
-                if total_duration > 0:
-                    channel.start_offset = random.uniform(0, total_duration)
-                    logger.info(f"Offset {channel.start_offset:.2f}s pour {channel.name}")
-
                 if channel.start_stream():
                     logger.info(f"✅ {channel.name} démarrée")
                     self.generate_master_playlist()
@@ -259,34 +240,12 @@ class IPTVManager:
                 )
                 self.channels[channel_name] = channel
 
-                # On scanne les vidéos
-                channel._scan_videos()
-
-                if channel.processed_videos:
-                    total_duration = 0
-                    for video in channel.processed_videos:
-                        try:
-                            cmd = [
-                                "ffprobe", "-v", "error",
-                                "-show_entries", "format=duration",
-                                "-of", "default=noprint_wrappers=1:nokey=1",
-                                str(video)
-                            ]
-                            result = subprocess.run(cmd, capture_output=True, text=True)
-                            duration = float(result.stdout.strip())
-                            total_duration += duration
-                        except Exception as e:
-                            logger.error(f"Erreur durée {video}: {e}")
-
-                    if total_duration > 0:
-                        channel.start_offset = random.uniform(0, total_duration)
-                        logger.info(f"Offset {channel.start_offset:.2f}s pour {channel_name}")
-
-                    if channel.start_stream():
-                        logger.info(f"✅ Chaîne {channel_name} démarrée")
-                        self.generate_master_playlist()
-                    else:
-                        logger.error(f"❌ Échec démarrage {channel_name}")
+                # Démarrage direct
+                if channel.processed_videos and channel.start_stream():
+                    logger.info(f"✅ Chaîne {channel_name} démarrée")
+                    self.generate_master_playlist()
+                else:
+                    logger.error(f"❌ Échec démarrage {channel_name}")
             except Exception as e:
                 logger.error(f"Erreur {channel_dir.name}: {e}")
 
@@ -368,7 +327,7 @@ class IPTVManager:
         try:
             new_videos = self._scan_new_videos(channel_dir)
             if not new_videos:
-                logger.info(f"Pas de nouveau contenu pour {channel.name}")
+                logger.debug(f"Pas de nouveau contenu pour {channel.name}")
                 return
 
             from video_processor import VideoProcessor
@@ -451,7 +410,7 @@ class IPTVManager:
         while True:
             try:
                 self.generate_master_playlist()
-                time.sleep(10)
+                time.sleep(60)
             except Exception as e:
                 logger.error(f"Erreur maj master playlist: {e}")
 

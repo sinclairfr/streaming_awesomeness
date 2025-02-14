@@ -11,7 +11,7 @@ class ResourceMonitor(threading.Thread):
 
     def __init__(self):
         super().__init__(daemon=True)
-        self.interval = 20  # On fixe un intervalle de 20 secondes
+        self.interval = 60  # On fixe un intervalle de 20 secondes
 
     def run(self):
         while True:
