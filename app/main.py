@@ -7,6 +7,24 @@ import time
 from pathlib import Path
 from iptv_manager import IPTVManager
 from config import logger
+import threading
+import time
+
+def background_ffmpeg_check(app):
+    """ On vérifie les processus FFmpeg toutes les 60s même si aucune chaîne n'est regardée """
+    while app.manager is None:
+        logger.warning("⏳ Attente de l'initialisation du manager IPTV...")
+        time.sleep(5)
+
+    counter = 0
+    while True:
+        counter += 1
+        # On ne log qu'une seule fois par itération
+        logger.warning(f"🔥 DEBUG: Vérification FFmpeg (itération {counter})")
+        for channel in app.manager.channels.values():
+            channel.log_ffmpeg_processes()
+        time.sleep(60)  # On attend une minute complète
+
 
 class Application:
     def __init__(self):
@@ -82,4 +100,5 @@ class Application:
 
 if __name__ == "__main__":
     app = Application()
+    threading.Thread(target=background_ffmpeg_check, args=(app,), daemon=True).start()
     sys.exit(app.run())

@@ -41,5 +41,5 @@ class ChannelEventHandler(FileSystemEventHandler):
         if event.is_directory:
             logger.info(f"🔍 Nouveau dossier détecté: {event.src_path}")
             # On attend un peu que les fichiers soient copiés
-            time.sleep(2)
+            time.sleep(60)
             self._handle_event(event)

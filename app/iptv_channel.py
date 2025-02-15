@@ -32,6 +32,8 @@ class IPTVChannel:
         self.use_gpu = use_gpu
         self.hls_cleaner = hls_cleaner  # On stocke l'instance partagée du nettoyeur
 
+        self.active_ffmpeg_pids = set()  # Pour traquer les PIDs actifs
+
         # On initialise le VideoProcessor
         self.processor = VideoProcessor(self.video_dir)
 
@@ -114,7 +116,7 @@ class IPTVChannel:
         base_cmd = [
             "ffmpeg",
             "-hide_banner",
-            "-loglevel", "warning",  # On réduit les logs console
+            "-loglevel", "warning",
             "-y",
             "-re",
             "-fflags", "+genpts+igndts",
@@ -180,30 +182,51 @@ class IPTVChannel:
             logger.info(f"🚀 Démarrage FFmpeg pour {self.name}")
             logger.info(f"[{self.name}] FFmpeg command: {' '.join(cmd)}")
 
-            with open(self.ffmpeg_log_file, "a") as ffmpeg_log:
+            # On nettoie d'abord les anciens processus
+            for pid in self.active_ffmpeg_pids.copy():
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                    logger.info(f"🔥 Ancien processus {pid} tué au démarrage")
+                    self.active_ffmpeg_pids.remove(pid)
+                except ProcessLookupError:
+                    self.active_ffmpeg_pids.remove(pid)
+                    
+            # Vérifier que le dossier des logs FFmpeg existe
+            self.ffmpeg_log_file.parent.mkdir(parents=True, exist_ok=True)
+            self.ffmpeg_log_file.touch(exist_ok=True)
+
+            # Lancer FFmpeg
+            with open(self.ffmpeg_log_file, "a", buffering=1) as ffmpeg_log:
                 process = subprocess.Popen(
                     cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=ffmpeg_log,
+                    stdout=ffmpeg_log,
+                    stderr=subprocess.STDOUT,  # Capture stderr dans stdout
+                    bufsize=1,
                     universal_newlines=True
                 )
 
-            logger.info(f"[{self.name}] FFmpeg lancé, attente des segments...")
+            self.ffmpeg_pid = process.pid
+            self.active_ffmpeg_pids.add(process.pid)
+            logger.info(f"[{self.name}] FFmpeg lancé avec PID: {self.ffmpeg_pid}")
 
-            time.sleep(2)  # Attendre un minimum pour voir si le process survit
+            # Vérification du process FFmpeg
+            time.sleep(2)  # Attendre un minimum pour voir si FFmpeg survit
             if process.poll() is not None:
                 logger.error(f"[{self.name}] ❌ FFmpeg s'est arrêté immédiatement. Vérifie {self.ffmpeg_log_file}")
                 return None
 
+            # Vérification de l'apparition des segments HLS
             start_time = time.time()
             hls_dir = Path(f"hls/{self.name}")
+
             while time.time() - start_time < 20:  # Timeout prolongé à 20 secondes
                 if list(hls_dir.glob("segment_*.ts")):
                     self.stream_start_time = time.time()
-                    logger.info(f"✅ FFmpeg démarré pour {self.name} (PID: {process.pid})")
+                    logger.info(f"✅ FFmpeg démarré pour {self.name} (PID: {self.ffmpeg_pid})")
                     return process
                 time.sleep(0.5)  # Vérification moins agressive
 
+            # Timeout si aucun segment généré
             logger.error(f"❌ Timeout en attendant les segments pour {self.name}")
             if process.poll() is None:
                 logger.warning(f"[{self.name}] FFmpeg tourne encore mais n'a pas généré de segments.")
@@ -213,15 +236,12 @@ class IPTVChannel:
             logger.error(f"Erreur démarrage FFmpeg pour {self.name}: {e}")
             return None
 
-
     def _monitor_ffmpeg(self, hls_dir: str):
-        """
-        # On surveille FFmpeg et les segments HLS
-        """
         self.last_segment_time = time.time()
         last_segment_number = -1
         hls_dir = Path(hls_dir)
         crash_threshold = 10
+        timeout_no_viewers = 60  
 
         while (
             not self.stop_event.is_set()
@@ -238,10 +258,7 @@ class IPTVChannel:
                         current_segment = int(newest_segment.stem.split("_")[1])
                         segment_size = newest_segment.stat().st_size
 
-                        # On logge des infos de segment
-                        with open(
-                            self.ffmpeg_log_dir / f"{self.name}_segments.log", "a"
-                        ) as seg_log:
+                        with open(self.ffmpeg_log_dir / f"{self.name}_segments.log", "a") as seg_log:
                             seg_log.write(
                                 f"{datetime.datetime.now()} - "
                                 f"Segment {current_segment}: {segment_size} bytes\n"
@@ -257,33 +274,31 @@ class IPTVChannel:
                                 self.last_segment_time = current_time
                                 last_segment_number = current_segment
                                 self.error_count = 0
-                                #logger.debug(
-                                #    f"✨ Nouveau segment {current_segment} pour {self.name}"
-                                #)
+
                     except ValueError:
                         logger.error(f"Format de segment invalide: {newest_segment.name}")
                         self.error_count += 1
                 else:
                     self.error_count += 1
 
+                # 🔹 Vérification si plus de watchers depuis 60s
+                if hasattr(self, 'last_watcher_time') and (current_time - self.last_watcher_time) > timeout_no_viewers:
+                    logger.info(f"⏹️ Arrêt FFmpeg pour {self.name} (aucun watcher depuis {timeout_no_viewers}s).")
+                    self._clean_processes()
+                    return  
+
                 elapsed = current_time - self.last_segment_time
                 if elapsed > crash_threshold:
-                    logger.error(
-                        f"🔥 Pas de nouveau segment pour {self.name} depuis {elapsed:.1f}s"
-                    )
+                    logger.error(f"🔥 Pas de nouveau segment pour {self.name} depuis {elapsed:.1f}s")
                     if self.restart_count < self.max_restarts:
                         self.restart_count += 1
-                        logger.info(
-                            f"🔄 Tentative de redémarrage {self.restart_count}/{self.max_restarts}"
-                        )
+                        logger.info(f"🔄 Tentative de redémarrage {self.restart_count}/{self.max_restarts}")
                         if self._restart_stream():
                             self.error_count = 0
                         else:
                             logger.error(f"❌ Échec du redémarrage pour {self.name}")
                     else:
-                        logger.critical(
-                            f"⛔️ Nombre maximum de redémarrages atteint pour {self.name}"
-                        )
+                        logger.critical(f"⛔️ Nombre maximum de redémarrages atteint pour {self.name}")
 
                 time.sleep(1)
             except Exception as e:
@@ -315,23 +330,85 @@ class IPTVChannel:
         except Exception as e:
             logger.error(f"Erreur lors du redémarrage de {self.name}: {e}")
             return False
+        
+    def log_ffmpeg_processes(self):
+        """On vérifie et log le nombre de processus FFmpeg uniquement s'il y a un changement"""
+        ffmpeg_count = sum(1 for proc in psutil.process_iter(attrs=["name", "cmdline"]) 
+                        if "ffmpeg" in proc.info["name"].lower() 
+                        and any(self.name in str(arg) for arg in proc.info["cmdline"]))
+        
+        # On stocke le dernier count connu
+        if not hasattr(self, '_last_ffmpeg_count'):
+            self._last_ffmpeg_count = -1
+        
+        # On log uniquement si le nombre a changé
+        if ffmpeg_count != self._last_ffmpeg_count:
+            logger.warning(f"📊 {self.name}: {ffmpeg_count} processus FFmpeg actifs")
+            self._last_ffmpeg_count = ffmpeg_count     
 
     def _clean_processes(self):
-        """# On arrête proprement le process FFmpeg"""
         with self.lock:
-            if self.ffmpeg_process:
-                try:
-                    self.stop_event.set()
-                    self.ffmpeg_process.terminate()
+            try:
+                # On récupère d'abord tous les PIDs des processus FFmpeg de cette chaîne
+                ffmpeg_pids = []
+                for proc in psutil.process_iter(attrs=["pid", "name", "cmdline"]):
                     try:
-                        self.ffmpeg_process.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        self.ffmpeg_process.kill()
-                    finally:
-                        self.ffmpeg_process = None
-                except Exception as e:
-                    logger.error(f"Erreur lors du nettoyage FFmpeg pour {self.name}: {e}")
+                        if ("ffmpeg" in proc.info["name"].lower() and 
+                            any(self.name in str(arg) for arg in proc.info["cmdline"])):
+                            ffmpeg_pids.append(proc.info["pid"])
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        continue
 
+                if not ffmpeg_pids:
+                    logger.info(f"[{self.name}] Aucun processus FFmpeg à nettoyer")
+                    return
+
+                logger.info(f"🔴 Nettoyage de {len(ffmpeg_pids)} processus FFmpeg pour {self.name}")
+
+                # SIGTERM d'abord
+                for pid in ffmpeg_pids:
+                    try:
+                        os.kill(pid, signal.SIGTERM)
+                        logger.info(f"🟡 SIGTERM envoyé au PID {pid}")
+                    except ProcessLookupError:
+                        continue
+
+                # On attend un peu
+                time.sleep(2)
+
+                # On vérifie et on force avec SIGKILL si nécessaire
+                for pid in ffmpeg_pids:
+                    try:
+                        # On vérifie si le processus existe encore
+                        os.kill(pid, 0)  # Ne tue pas le processus, vérifie juste s'il existe
+                        # S'il existe encore, on envoie SIGKILL
+                        os.kill(pid, signal.SIGKILL)
+                        logger.info(f"🔥 SIGKILL envoyé au PID {pid}")
+                    except ProcessLookupError:
+                        # Le processus n'existe plus, c'est bon
+                        continue
+
+                # Vérification finale
+                time.sleep(1)
+                surviving_pids = []
+                for pid in ffmpeg_pids:
+                    try:
+                        os.kill(pid, 0)
+                        surviving_pids.append(pid)
+                    except ProcessLookupError:
+                        continue
+
+                if surviving_pids:
+                    logger.error(f"⚠️ {len(surviving_pids)} processus FFmpeg survivants pour {self.name}: {surviving_pids}")
+                else:
+                    logger.info(f"✅ Tous les processus FFmpeg nettoyés pour {self.name}")
+
+                self.ffmpeg_process = None
+                self.ffmpeg_pid = None
+
+            except Exception as e:
+                logger.error(f"❌ Erreur nettoyage FFmpeg pour {self.name}: {e}")
+    
     def _create_concat_file(self) -> Optional[Path]:
         """Crée le fichier de concaténation avec les bons chemins"""
         try:
@@ -361,60 +438,30 @@ class IPTVChannel:
             return None
 
     def start_stream(self) -> bool:
-        """Démarre le stream avec FFmpeg"""
+        """ Démarre le stream avec FFmpeg """
         logger.info(f"[{self.name}] 🚀 start_stream() appelé !")
+        self.ffmpeg_log_file.parent.mkdir(parents=True, exist_ok=True)
+        self.ffmpeg_log_file.touch(exist_ok=True)
 
         with self.lock:
             logger.info(f"[{self.name}] 🔄 Tentative de démarrage du stream...")
 
             # Vérification que le dossier HLS existe
             hls_dir = Path(f"/app/hls/{self.name}")
-            if not hls_dir.exists():
-                logger.info(f"[{self.name}] 📂 Création du dossier HLS")
-                hls_dir.mkdir(parents=True, exist_ok=True)
+            hls_dir.mkdir(parents=True, exist_ok=True)
 
             # Vérifier si _playlist.txt est bien généré
             concat_file = self._create_concat_file()
             if not concat_file or not concat_file.exists():
-                logger.error(f"[{self.name}] ❌ _playlist.txt manquant, arrêt du stream.")
+                logger.error(f"[{self.name}] ❌ _playlist.txt introuvable, arrêt du stream.")
                 return False
-
-            # Vérifier si les fichiers vidéo existent bien
-            for video in self.processed_videos:
-                if not Path(video).exists():
-                    logger.error(f"[{self.name}] ❌ Fichier vidéo manquant : {video}")
-                    return False
 
             # Construire la commande FFmpeg
             cmd = self._build_ffmpeg_command(hls_dir)
             logger.debug(f"[{self.name}] 📝 Commande FFmpeg : {' '.join(cmd)}")
 
-            # 🔹 Vérifier que la commande est exécutée
-            try:
-                self.ffmpeg_process = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    universal_newlines=True
-                )
-
-                logger.info(f"[{self.name}] 🚀 FFmpeg lancé (PID: {self.ffmpeg_process.pid})")
-
-                time.sleep(3)  # Attendre un peu pour voir si FFmpeg crash immédiatement
-
-                if self.ffmpeg_process.poll() is not None:
-                    stdout, stderr = self.ffmpeg_process.communicate()
-                    logger.error(f"[{self.name}] ❌ FFmpeg s'est arrêté immédiatement")
-                    logger.error(f"[{self.name}] Stdout: {stdout}")
-                    logger.error(f"[{self.name}] Stderr: {stderr}")
-                    return False
-
-                logger.info(f"[{self.name}] ✅ FFmpeg tourne bien (PID: {self.ffmpeg_process.pid})")
-                return True
-
-            except Exception as e:
-                logger.error(f"[{self.name}] ❌ Erreur critique lors du lancement de FFmpeg: {e}")
-                return False
+            self.ffmpeg_process = self._start_ffmpeg_process(cmd)
+            return self.ffmpeg_process is not None
 
     def _scan_videos(self) -> bool:
         """
@@ -675,6 +722,7 @@ class IPTVChannel:
                 self._clean_processes()
 
     def start_stream_if_needed(self) -> bool:
+
         with self.lock:
             if self.ffmpeg_process is not None:
                 return True  # Déjà en cours

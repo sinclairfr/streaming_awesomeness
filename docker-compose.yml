@@ -1,29 +1,26 @@
 services:
   iptv-manager:
-    user: "0:0"
     container_name: iptv-manager
     build: 
       context: .
       dockerfile: Dockerfile
-    command: ["python3", "-u", "main.py"]
+    user: "1000:1000"  # Exécuter en tant qu'utilisateur non-root (streamer)
+    entrypoint: ["/bin/bash", "-c", "chown -R streamer:streamer /app /var/log/nginx && chmod -R 777 /app /var/log/nginx && exec python3 main.py"]
     volumes:
       - ./app/content:/app/content:rw
       - ./app/hls:/app/hls:rw
       - ./app/logs:/app/logs:rw
-      - ./nginx_logs:/var/log/nginx:ro
-      - ./app/test_stream.py:/app/test_stream.py:rw
-      - ./app/iptv_channel.py:/app/iptv_channel.py:rw
-      - ./app/iptv_manager.py:/app/iptv_manager.py:rw
-      - ./app/video_processor.py:/app/video_processor.py:rw
-      - ./app/client_monitor.py:/app/client_monitor.py:rw
-
+      - ./nginx_logs:/var/log/nginx:rw
+      - ./app:/app:rw  # Regroupe tous les fichiers de l'application
     environment:
+      - PUID=1000
+      - PGID=1000
       - USE_GPU=False
       - SERVER_URL=192.168.10.120
     restart: unless-stopped
 
   nginx:
-    user: "0:0"
+    user: root
     container_name: iptv-nginx
     image: nginx:alpine
     ports:
@@ -32,6 +29,9 @@ services:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - ./app/hls:/hls:ro
       - ./nginx_logs:/var/log/nginx:rw
+    tmpfs:
+      - /var/run/nginx
+      - /var/cache/nginx
     depends_on:
       - iptv-manager
     restart: unless-stopped

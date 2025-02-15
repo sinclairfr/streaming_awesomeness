@@ -76,7 +76,7 @@ class IPTVManager:
         self.scan_channels(initial=True, force=True)
 
         # Moniteur clients
-        self.client_monitor = ClientMonitor(NGINX_ACCESS_LOG, self.update_watchers)
+        self.client_monitor = ClientMonitor(NGINX_ACCESS_LOG, self.update_watchers, self)
         self.client_monitor.start()
 
         # Moniteur ressources
@@ -102,53 +102,111 @@ class IPTVManager:
         while True:
             try:
                 current_time = time.time()
+                # On récupère d'abord tous les processus FFmpeg actifs
+                ffmpeg_processes = {}
+                for proc in psutil.process_iter(attrs=["pid", "name", "cmdline"]):
+                    try:
+                        if "ffmpeg" in proc.info["name"].lower():
+                            # On extrait le nom de la chaîne des arguments FFmpeg
+                            for arg in proc.info["cmdline"]:
+                                if "/hls/" in str(arg):
+                                    channel_name = str(arg).split("/hls/")[1].split("/")[0]
+                                    if channel_name not in ffmpeg_processes:
+                                        ffmpeg_processes[channel_name] = []
+                                    ffmpeg_processes[channel_name].append(proc.info["pid"])
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        continue
+
+                # Pour chaque chaîne, on vérifie son état
                 for channel_name, channel in self.channels.items():
-                    if channel.watchers_count > 0:
-                        time_since_last_segment = current_time - channel.last_segment_request
+                    if channel_name in ffmpeg_processes:
+                        time_since_last_segment = current_time - channel.last_watcher_time
                         if time_since_last_segment > 60:  # Aucun segment `.ts` demandé depuis 60s
-                            logger.info(f"⏳ Aucun segment demandé depuis {time_since_last_segment:.1f}s, arrêt de {channel_name}")
-                            channel.stop_stream_if_needed()
+                            logger.warning(f"⚠️ {channel_name}: {len(ffmpeg_processes[channel_name])} processus FFmpeg actifs mais inactif depuis {time_since_last_segment:.1f}s")
+                            self._force_clean_channel(channel_name, ffmpeg_processes[channel_name])
+
+                time.sleep(10)  # Vérification toutes les 10s
 
             except Exception as e:
                 logger.error(f"❌ Erreur watchers_loop: {e}")
+                time.sleep(10)
 
-            time.sleep(10)  # Vérification toutes les 10s
+    def _force_clean_channel(self, channel_name: str, pids: list):
+        """Nettoyage forcé des processus FFmpeg d'une chaîne"""
+        logger.warning(f"🧹 Nettoyage forcé de {len(pids)} processus pour {channel_name}")
+        
+        # SIGTERM d'abord
+        for pid in pids:
+            try:
+                os.kill(pid, signal.SIGTERM)
+                logger.info(f"🟡 SIGTERM envoyé au PID {pid}")
+            except ProcessLookupError:
+                continue
 
-    def log_ffmpeg_processes(self):
-        """Logge le nombre de processus FFmpeg en cours"""
-        ffmpeg_count = sum(1 for p in psutil.process_iter() if 'ffmpeg' in p.name().lower())
-        logger.info(f"📊 {ffmpeg_count} processus ffmpeg actuellement actif(s)")
+        # On attend un peu
+        time.sleep(2)
 
+        # SIGKILL pour les récalcitrants 
+        for pid in pids:
+            try:
+                os.kill(pid, signal.SIGKILL)
+                logger.info(f"🔥 SIGKILL envoyé au PID {pid}")
+            except ProcessLookupError:
+                continue
+
+        # Vérification finale
+        time.sleep(1)
+        for pid in pids:
+            try:
+                os.kill(pid, 0)
+                logger.error(f"⛔️ Le processus {pid} refuse de mourir!")
+            except ProcessLookupError:
+                logger.info(f"✅ Processus {pid} terminé")
     def update_watchers(self, channel_name: str, count: int, request_path: str):
         """Met à jour les watchers en fonction des requêtes m3u8 et ts"""
         try:
-            logger.info(f"📊 Mise à jour {channel_name}: {count} watchers")
-
             if channel_name not in self.channels:
                 logger.error(f"❌ Chaîne inconnue: {channel_name}")
                 return
 
             channel = self.channels[channel_name]
+            
+            # On vérifie si l'état a vraiment changé
+            if not hasattr(channel, '_last_update_state'):
+                channel._last_update_state = {'count': -1, 'time': 0}
+                
+            current_time = time.time()
+            
+            # On évite les mises à jour trop rapprochées avec les mêmes valeurs
+            if (count == channel._last_update_state['count'] and 
+                current_time - channel._last_update_state['time'] < 1):
+                return
+                
+            # On met à jour l'état
+            channel._last_update_state['count'] = count
+            channel._last_update_state['time'] = current_time
+            
             old_count = channel.watchers_count
-
-            # On met à jour le nombre de watchers
             channel.watchers_count = count
 
             if ".ts" in request_path:
-                channel.last_segment_request = time.time()  # Dernière requête `.ts`
+                channel.last_segment_request = current_time
 
-            if old_count == 0 and count > 0:
-                logger.info(f"[{channel_name}] 🔥 APPEL de start_stream() (0 -> 1 watcher)")
-                if not channel.start_stream():
-                    logger.error(f"[{channel_name}] ❌ Échec démarrage stream")
-
-            elif old_count > 0 and count == 0:
-                logger.info(f"[{channel_name}] 🛑 Plus aucun watcher, arrêt du stream...")
-                channel.stop_stream_if_needed()
+            # On ne log que si quelque chose a vraiment changé
+            if old_count != count:
+                logger.info(f"📊 Mise à jour {channel_name}: {count} watchers")
+                
+                if old_count == 0 and count > 0:
+                    logger.info(f"[{channel_name}] 🔥 APPEL de start_stream() (0 -> 1 watcher)")
+                    if not channel.start_stream():
+                        logger.error(f"[{channel_name}] ❌ Échec démarrage stream")
+                elif old_count > 0 and count == 0:
+                    logger.info(f"[{channel_name}] 🛑 Plus aucun watcher, arrêt du stream...")
+                    channel.stop_stream_if_needed()
 
         except Exception as e:
             logger.error(f"❌ Erreur update_watchers: {e}")
-
+   
     def _clean_startup(self):
         """# On nettoie avant de démarrer"""
         try:
@@ -541,43 +599,44 @@ class IPTVManager:
                     self.start_stream()
             time.sleep(30)  # Vérifier toutes les 30 secondes
 
-    def start_stream(self) -> bool:
-        with self.lock:
-            try:
-                logger.info(f"[{self.name}] 🔄 Début du start_stream()")
+    # def start_stream(self) -> bool:
+    #     with self.lock:
+    #         try:
+    #             logger.info(f"[{self.name}] 🔄 Début du start_stream()")
 
-                # Assurer que le dossier HLS existe
-                hls_dir = f"/app/hls/{self.name}"
-                if not os.path.exists(hls_dir):
-                    logger.info(f"[{self.name}] 📂 Création du dossier HLS : {hls_dir}")
-                    os.makedirs(hls_dir, exist_ok=True)
+    #             # Assurer que le dossier HLS existe
+    #             hls_dir = f"/app/hls/{self.name}"
+    #             if not os.path.exists(hls_dir):
+    #                 logger.info(f"[{self.name}] 📂 Création du dossier HLS : {hls_dir}")
+    #                 os.makedirs(hls_dir, exist_ok=True)
 
-                # Vérifier si _playlist.txt est bien généré
-                concat_file = self._create_concat_file()
-                if not concat_file or not concat_file.exists():
-                    logger.error(f"[{self.name}] ❌ _playlist.txt manquant, arrêt du stream.")
-                    return False
+    #             # Vérifier si _playlist.txt est bien généré
+    #             concat_file = self._create_concat_file()
+    #             if not concat_file or not concat_file.exists():
+    #                 logger.error(f"[{self.name}] ❌ _playlist.txt manquant, arrêt du stream.")
+    #                 return False
 
-                # Vérifier si les fichiers vidéo existent bien
-                for video in self.processed_videos:
-                    if not os.path.exists(video):
-                        logger.error(f"[{self.name}] ❌ Fichier vidéo manquant : {video}")
-                        return False
+    #             # Vérifier si les fichiers vidéo existent bien
+    #             for video in self.processed_videos:
+    #                 if not os.path.exists(video):
+    #                     logger.error(f"[{self.name}] ❌ Fichier vidéo manquant : {video}")
+    #                     return False
 
-                # Lancer FFmpeg
-                cmd = self._build_ffmpeg_command(hls_dir)
-                logger.debug(f"[{self.name}] 📝 Commande FFmpeg : {' '.join(cmd)}")
-                self.ffmpeg_process = self._start_ffmpeg_process(cmd)
+    #             # Lancer FFmpeg
+    #             cmd = self._build_ffmpeg_command(hls_dir)
+    #             logger.debug(f"[{self.name}] 📝 Commande FFmpeg : {' '.join(cmd)}")
+    #             self.ffmpeg_process = self._start_ffmpeg_process(cmd)
 
-                if not self.ffmpeg_process:
-                    logger.error(f"[{self.name}] ❌ Échec du démarrage de FFmpeg")
-                    return False
+    #             if not self.ffmpeg_process:
+    #                 logger.info(f"🔍 Vérification: Aucun processus FFmpeg actif pour {self.name}")
+    #             else:
+    #                 logger.warning(f"⚠️ FFmpeg tourne encore après tentative d'arrêt ! PID: {self.ffmpeg_process.pid}")
 
-                return True
-            except Exception as e:
-                logger.error(f"[{self.name}] ❌ Erreur critique dans start_stream : {e}")
-                self._clean_processes()
-                return False
+    #             return True
+    #         except Exception as e:
+    #             logger.error(f"[{self.name}] ❌ Erreur critique dans start_stream : {e}")
+    #             self._clean_processes()
+    #             return False
 
     def handle_request(self, client_ip, request_path):
         """

@@ -1,38 +1,37 @@
+# Utiliser l'image NVIDIA CUDA pour l'accélération matérielle
 FROM nvidia/cuda:11.8.0-base-ubuntu22.04
 
+# Passer en root pour l'installation des paquets
 USER root
 
-# Installation des dépendances
+# Installation des dépendances système
 RUN apt-get update && apt-get install -y \
-    python3 \
-    python3-pip \
-    software-properties-common \
-    && add-apt-repository ppa:ubuntuhandbook1/ffmpeg6 \
+    python3 python3-pip software-properties-common tree nano \
+    && add-apt-repository -y ppa:ubuntuhandbook1/ffmpeg6 \
     && apt-get update \
-    && apt-get install -y ffmpeg \
+    && apt-get install -y ffmpeg strace \
     && rm -rf /var/lib/apt/lists/*
 
-RUN add-apt-repository universe -y
-RUN apt install -y tree nano
+# Création d'un utilisateur non-root pour éviter les problèmes de permissions
+RUN useradd -m -s /bin/bash streamer
 
-# Configuration de l'application
+# Définir les répertoires nécessaires et fixer les permissions
+RUN mkdir -p /app/hls /app/content /app/logs/ffmpeg && \
+    chown -R streamer:streamer /app && \
+    chmod -R 777 /app/hls /app/content /app/logs
+
+# Passer à l'utilisateur non-root
+USER streamer
+
+# Définir le répertoire de travail
 WORKDIR /app
 
-# Copie des fichiers
-COPY requirements.txt /app/
-COPY app/*.py /app/
+# Copier les fichiers nécessaires à l'application
+COPY --chown=streamer:streamer requirements.txt /app/
+COPY --chown=streamer:streamer app/*.py /app/
 
 # Installation des dépendances Python
-RUN pip3 install -r /app/requirements.txt
+RUN pip3 install --no-cache-dir -r /app/requirements.txt
 
-# Création de la structure des dossiers avec les bonnes permissions
-RUN mkdir -p /app/hls /app/content /app/logs/ffmpeg && \
-    # On donne les droits à tous les utilisateurs
-    chmod -R 777 /app && \
-    # On s'assure que les dossiers sont accessibles en écriture
-    chmod 777 /app/hls && \
-    chmod 777 /app/content && \
-    chmod 777 /app/logs
-
-# Point d'entrée
-CMD ["python3", "-u", "main.py"]
+# Point d'entrée : lancement du service avec correction des permissions au runtime
+ENTRYPOINT ["/bin/bash", "-c", "chown -R streamer:streamer /app && chmod -R 777 /app && exec python3 main.py"]
