@@ -13,6 +13,7 @@ from typing import Optional
 from video_processor import VideoProcessor
 from hls_cleaner import HLSCleaner
 from config import logger
+import json
 
 class IPTVChannel:
     """
@@ -32,7 +33,7 @@ class IPTVChannel:
         self.hls_cleaner = hls_cleaner  # On stocke l'instance partagée du nettoyeur
 
         # On initialise le VideoProcessor
-        self.processor = VideoProcessor(self.video_dir, self.use_gpu)
+        self.processor = VideoProcessor(self.video_dir)
 
         # On paramètre les logs FFmpeg
         self.ffmpeg_log_dir = Path("logs/ffmpeg")
@@ -386,7 +387,7 @@ class IPTVChannel:
 
             # Construire la commande FFmpeg
             cmd = self._build_ffmpeg_command(hls_dir)
-            logger.info(f"[{self.name}] 📝 Commande FFmpeg : {' '.join(cmd)}")
+            logger.debug(f"[{self.name}] 📝 Commande FFmpeg : {' '.join(cmd)}")
 
             # 🔹 Vérifier que la commande est exécutée
             try:
@@ -436,15 +437,27 @@ class IPTVChannel:
 
             # On vérifie les fichiers déjà normalisés
             self.processed_videos = []
+
             for source in source_files:
                 processed_file = processed_dir / f"{source.stem}.mp4"
+
+                # ⚠️ Vérifier si le fichier est déjà dans processed/
                 if processed_file.exists():
+                    logger.info(f"🔄 Vidéo déjà présente dans processed/, pas besoin de traitement : {source.name}")
+                    self.processed_videos.append(processed_file)
+                    continue
+
+                # Vérification avec video_processor
+                if self.processor.is_already_optimized(source):
+                    logger.info(f"✅ Vidéo déjà optimisée : {source.name}, copie directe.")
+                    shutil.copy2(source, processed_file)
                     self.processed_videos.append(processed_file)
                 else:
-                    # On lance la normalisation
-                    processed = self._process_video(source, processed_file)
+                    # Lancer la normalisation via video_processor
+                    processed = self.processor.process_video(source)
                     if processed:
-                        self.processed_videos.append(processed_file)
+                        self.processed_videos.append(processed)
+
 
             if not self.processed_videos:
                 logger.error(f"Aucune vidéo traitée disponible pour {self.name}")
@@ -455,6 +468,55 @@ class IPTVChannel:
 
         except Exception as e:
             logger.error(f"Erreur lors du scan des vidéos pour {self.name}: {e}")
+            return False
+
+    def _is_already_normalized(self, video_path: Path) -> bool:
+        """
+        Vérifie si une vidéo est déjà en H.264, ≤ 1080p, ≤ 30 FPS, et en AAC.
+        Si oui, la normalisation est inutile.
+        """
+        import json
+
+        logger.info(f"🔍 Vérification du format de {video_path.name}")
+
+        cmd = [
+            "ffprobe", "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=codec_name,width,height,r_frame_rate",
+            "-show_entries", "stream=codec_name:stream=sample_rate",
+            "-of", "json",
+            str(video_path)
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+
+        try:
+            video_info = json.loads(result.stdout)
+            streams = video_info.get("streams", [])
+
+            if not streams:
+                logger.warning(f"⚠️ Impossible de lire {video_path}, normalisation forcée.")
+                return False
+
+            video_stream = streams[0]
+            codec = video_stream.get("codec_name", "").lower()
+            width = int(video_stream.get("width", 0))
+            height = int(video_stream.get("height", 0))
+            framerate = video_stream.get("r_frame_rate", "0/1").split("/")
+            fps = round(int(framerate[0]) / int(framerate[1])) if len(framerate) == 2 else 0
+
+            audio_codec = None
+            for stream in streams:
+                if stream.get("codec_name") and stream.get("codec_name") != codec:
+                    audio_codec = stream.get("codec_name").lower()
+
+            # Vérification des critères
+            if codec == "h264" and width <= 1920 and height <= 1080 and fps <= 30 and (audio_codec is None or audio_codec == "aac"):
+                return True  # ✅ Vidéo optimisée, pas besoin de normaliser
+
+            return False  # ❌ Vidéo à normaliser
+
+        except json.JSONDecodeError as e:
+            logger.error(f"❌ Erreur JSON avec ffprobe: {e}")
             return False
 
     def _process_video(self, source: Path, dest: Path) -> bool:
@@ -499,8 +561,6 @@ class IPTVChannel:
                     "-c:v", "h264_nvenc",
                     "-preset", "p4",
                     "-profile:v", "high",
-                    "-rc", "vbr",
-                    "-cq", "23"
                 ])
             else:
                 ffmpeg_cmd.extend(["-c:v", "libx264", "-preset", "medium", "-crf", "23"])

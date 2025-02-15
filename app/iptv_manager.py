@@ -12,7 +12,9 @@ import traceback
 from queue import Queue
 from pathlib import Path
 from watchdog.observers import Observer
-
+import psutil
+import threading
+import psutil
 from config import (
     logger,
     SERVER_URL,
@@ -74,7 +76,7 @@ class IPTVManager:
         self.scan_channels(initial=True, force=True)
 
         # Moniteur clients
-        self.client_monitor = ClientMonitor(NGINX_ACCESS_LOG, self)
+        self.client_monitor = ClientMonitor(NGINX_ACCESS_LOG, self.update_watchers)
         self.client_monitor.start()
 
         # Moniteur ressources
@@ -94,27 +96,31 @@ class IPTVManager:
             daemon=True
         )
         self.watchers_thread.start()
+    
     def _watchers_loop(self):
-        """
-        Boucle qui vérifie périodiquement si watchers_count=0 depuis plus de 60s,
-        et arrête FFmpeg pour économiser des ressources.
-        """
+        """Surveille l'activité des watchers et arrête les streams inutilisés"""
         while True:
             try:
+                current_time = time.time()
                 for channel_name, channel in self.channels.items():
-                    if channel.watchers_count == 0:
-                        # personne ne regarde
-                        # Est-ce qu'on est à 0 depuis plus de 60s ?
-                        idle_time = time.time() - channel.last_watcher_time
-                        if idle_time > 60:
+                    if channel.watchers_count > 0:
+                        time_since_last_segment = current_time - channel.last_segment_request
+                        if time_since_last_segment > 60:  # Aucun segment `.ts` demandé depuis 60s
+                            logger.info(f"⏳ Aucun segment demandé depuis {time_since_last_segment:.1f}s, arrêt de {channel_name}")
                             channel.stop_stream_if_needed()
+
             except Exception as e:
-                logger.error(f"Erreur watchers_loop: {e}")
+                logger.error(f"❌ Erreur watchers_loop: {e}")
 
-            time.sleep(10)  # on vérifie toutes les 10s
+            time.sleep(10)  # Vérification toutes les 10s
 
-    def update_watchers(self, channel_name: str, count: int):
-        """Met à jour le nombre de watchers et gère le stream"""
+    def log_ffmpeg_processes(self):
+        """Logge le nombre de processus FFmpeg en cours"""
+        ffmpeg_count = sum(1 for p in psutil.process_iter() if 'ffmpeg' in p.name().lower())
+        logger.info(f"📊 {ffmpeg_count} processus ffmpeg actuellement actif(s)")
+
+    def update_watchers(self, channel_name: str, count: int, request_path: str):
+        """Met à jour les watchers en fonction des requêtes m3u8 et ts"""
         try:
             logger.info(f"📊 Mise à jour {channel_name}: {count} watchers")
 
@@ -125,14 +131,12 @@ class IPTVManager:
             channel = self.channels[channel_name]
             old_count = channel.watchers_count
 
-            # Mise à jour du nombre de watchers
+            # On met à jour le nombre de watchers
             channel.watchers_count = count
-            if count > 0:
-                channel.last_watcher_time = time.time()
 
-            logger.info(f"[{channel_name}] Watchers: {old_count} -> {count}")
+            if ".ts" in request_path:
+                channel.last_segment_request = time.time()  # Dernière requête `.ts`
 
-            # 🔥 LOGS POUR DEBUG 🔥
             if old_count == 0 and count > 0:
                 logger.info(f"[{channel_name}] 🔥 APPEL de start_stream() (0 -> 1 watcher)")
                 if not channel.start_stream():
@@ -141,9 +145,6 @@ class IPTVManager:
             elif old_count > 0 and count == 0:
                 logger.info(f"[{channel_name}] 🛑 Plus aucun watcher, arrêt du stream...")
                 channel.stop_stream_if_needed()
-
-            # On met à jour la master playlist
-            self.generate_master_playlist()
 
         except Exception as e:
             logger.error(f"❌ Erreur update_watchers: {e}")
@@ -532,9 +533,6 @@ class IPTVManager:
             except Exception as e:
                 logger.error(f"Erreur suppression {item}: {e}")
 
-    import psutil
-    import threading
-
     def monitor_ffmpeg(self):
         while True:
             if self.ffmpeg_process:
@@ -568,7 +566,7 @@ class IPTVManager:
 
                 # Lancer FFmpeg
                 cmd = self._build_ffmpeg_command(hls_dir)
-                logger.info(f"[{self.name}] 📝 Commande FFmpeg : {' '.join(cmd)}")
+                logger.debug(f"[{self.name}] 📝 Commande FFmpeg : {' '.join(cmd)}")
                 self.ffmpeg_process = self._start_ffmpeg_process(cmd)
 
                 if not self.ffmpeg_process:
@@ -580,3 +578,14 @@ class IPTVManager:
                 logger.error(f"[{self.name}] ❌ Erreur critique dans start_stream : {e}")
                 self._clean_processes()
                 return False
+
+    def handle_request(self, client_ip, request_path):
+        """
+        Traite les requêtes HTTP des clients et met à jour les watchers
+        """
+        channel_name = self._extract_channel_name(request_path)
+        if not channel_name:
+            return
+
+        if ".m3u8" in request_path or ".ts" in request_path:
+            self.update_watchers(channel_name, 1, request_path)

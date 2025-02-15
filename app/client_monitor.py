@@ -8,50 +8,38 @@ from typing import Dict, Tuple
 import re
 
 class ClientMonitor(threading.Thread):
-    def __init__(self, log_file: str, manager):
+    def __init__(self, log_path, update_watchers_callback):
         super().__init__(daemon=True)
-        self.log_file = log_file
-        self.manager = manager
-        self.watchers: Dict[Tuple[str, str], float] = {}
-        self.lock = threading.Lock()
-        
-        # Debug
-        self.last_line = None
-        logger.info(f"📊 Moniteur clients initialisé sur {log_file}")
+        self.log_path = log_path
+        self.update_watchers = update_watchers_callback  # 🔥 On stocke la fonction
+
 
     def run(self):
-        try:
-            # On s'assure que le fichier et le dossier existent
-            log_path = Path(self.log_file)
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-            if not log_path.exists():
-                log_path.touch()
-
-            logger.info("🔄 Démarrage monitoring clients")
-            
+        logger.info("👀 Surveillance des requêtes clients en cours...")
+        with open(self.log_path, "r") as f:
+            f.seek(0, 2)  # Aller à la fin du fichier pour lire les nouvelles lignes
             while True:
-                try:
-                    # On ouvre en mode lecture et on va à la fin
-                    with open(self.log_file, "r") as f:
-                        f.seek(0, 2)
-                        logger.info("👀 Monitor actif, en attente de requêtes...")
-                        
-                        while True:
-                            line = f.readline()
-                            if not line:
-                                time.sleep(0.1)
-                                continue
-                                
-                            self.last_line = line.strip()
-                            self._process_log_line(line)
-                except Exception as e:
-                    logger.error(f"❌ Erreur lecture log: {e}")
-                    time.sleep(1)
+                line = f.readline().strip()
+                if not line:
+                    time.sleep(0.5)
                     continue
 
-        except Exception as e:
-            logger.error(f"❌ Erreur fatale monitor: {e}")
-            raise
+                # Analyse de la ligne (format access.log de Nginx)
+                parts = line.split(" ")
+                if len(parts) > 6:
+                    ip_address = parts[0]
+                    request_path = parts[6]  # Chemin de la requête HTTP
+
+                    # 🔥 Extraire le nom de la chaîne depuis `request_path`
+                    match = re.search(r'/hls/([^/]+)/', request_path)
+                    if match:
+                        channel_name = match.group(1)
+                        logger.info(f"🔍 Requête détectée: {ip_address} -> {channel_name} ({request_path})")
+
+                        # ✅ Correction : Fournir les 3 arguments à `update_watchers`
+                        self.update_watchers(channel_name, 1, request_path)
+                    else:
+                        logger.warning(f"⚠️ Impossible d'extraire le channel depuis la requête : {request_path}")
 
     def _process_log_line(self, line: str):
         """Traite une ligne de log nginx"""
@@ -91,7 +79,7 @@ class ClientMonitor(threading.Thread):
                 
                 if old_count != new_count:
                     logger.info(f"👥 Changement watchers {channel}: {old_count} -> {new_count}")
-                    self.manager.update_watchers(channel, new_count)
+                    self.update_watchers(channel, new_count, request_path)
                     
         except Exception as e:
             logger.error(f"❌ Erreur traitement ligne: {e}")
@@ -118,4 +106,4 @@ class ClientMonitor(threading.Thread):
             for channel in channels:
                 count = len([1 for (ch, _), _ in self.watchers.items() 
                            if ch == channel])
-                self.manager.update_watchers(channel, count)
+                self.manager.update_watchers(channel, count, request_path)

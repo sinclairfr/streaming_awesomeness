@@ -14,9 +14,11 @@ services:
       - ./app/test_stream.py:/app/test_stream.py:rw
       - ./app/iptv_channel.py:/app/iptv_channel.py:rw
       - ./app/iptv_manager.py:/app/iptv_manager.py:rw
+      - ./app/video_processor.py:/app/video_processor.py:rw
+      - ./app/client_monitor.py:/app/client_monitor.py:rw
 
     environment:
-      - USE_GPU=auto
+      - USE_GPU=False
       - SERVER_URL=192.168.10.120
     restart: unless-stopped
 
