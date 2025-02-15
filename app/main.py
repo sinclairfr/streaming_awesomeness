@@ -1,46 +1,85 @@
 #!/usr/bin/env python3
 
-# On importe la librairie standard
 import os
 import sys
-import shutil
-import time
-import json
-import glob
-import random
-import logging
-import datetime
-import subprocess
-import threading
-import traceback
-from queue import Queue
-from pathlib import Path
-from typing import Optional, List
-
-# On importe les librairies tierces
-import psutil
-from tqdm import tqdm  # On affiche la barre de progression CLI
-from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler
-
-# main.py
 import signal
+import time
+from pathlib import Path
 from iptv_manager import IPTVManager
 from config import logger
 
-def handle_signal(signum, frame):
-    # On gère les signaux système pour un arrêt propre
-    logger.info(f"Signal {signum} reçu, nettoyage et arrêt...")
-    manager.cleanup()
-    exit(0)
+class Application:
+    def __init__(self):
+        self.manager = None
+        self.running = True
+        
+        # On gère SIGTERM et SIGINT
+        signal.signal(signal.SIGTERM, self.handle_signal)
+        signal.signal(signal.SIGINT, self.handle_signal)
+        
+    def handle_signal(self, signum, frame):
+        """On gère les signaux système pour un arrêt propre"""
+        logger.info(f"Signal {signum} reçu, nettoyage et arrêt...")
+        self.running = False
+        if self.manager:
+            self.manager.cleanup()
+    
+    def setup(self):
+        """On initialise l'environnement"""
+        try:
+            # On vérifie/crée les dossiers requis
+            for d in ["/app/content", "/app/hls", "/app/logs", "/app/logs/ffmpeg"]:
+                Path(d).mkdir(parents=True, exist_ok=True)
+                
+            # On vérifie les permissions
+            for d in ["/app/content", "/app/hls", "/app/logs"]:
+                path = Path(d)
+                if not os.access(str(path), os.W_OK):
+                    logger.error(f"❌ Pas de droits d'écriture sur {d}")
+                    return False
+                    
+            return True
+            
+        except Exception as e:
+            logger.error(f"Erreur setup: {e}")
+            return False
+            
+    def run(self):
+        """Boucle principale avec gestion des erreurs"""
+        if not self.setup():
+            logger.critical("❌ Échec de l'initialisation, arrêt.")
+            return 1
+            
+        retry_count = 0
+        max_retries = 3
+        
+        while self.running:
+            try:
+                if not self.manager:
+                    # On instancie le manager avec le chemin du contenu
+                    use_gpu = os.getenv("USE_GPU", "auto").lower() == "auto"
+                    self.manager = IPTVManager("/app/content", use_gpu=use_gpu)
+                
+                # On lance le manager
+                self.manager.run()
+                
+            except Exception as e:
+                logger.error(f"Erreur critique: {e}")
+                if self.manager:
+                    self.manager.cleanup()
+                    self.manager = None
+                    
+                retry_count += 1
+                if retry_count >= max_retries:
+                    logger.critical(f"❌ Trop d'erreurs ({retry_count}), arrêt.")
+                    return 1
+                    
+                # On attend avant de réessayer
+                time.sleep(5)
+                continue
+                
+        return 0
 
 if __name__ == "__main__":
-    # On instancie le manager avec le chemin du contenu et l'option GPU
-    manager = IPTVManager("./content", use_gpu=False)
-
-    # On attache les signaux SIGTERM et SIGINT pour un arrêt propre
-    signal.signal(signal.SIGTERM, handle_signal)
-    signal.signal(signal.SIGINT, handle_signal)
-
-    # On lance le manager dans sa boucle principale
-    manager.run()
+    app = Application()
+    sys.exit(app.run())

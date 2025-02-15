@@ -307,17 +307,3 @@ class VideoProcessor:
             )
             return True
         return False
-
-    def create_concat_file(self, video_files: list) -> Optional[Path]:
-        """# On crée un fichier de concaténation pour FFmpeg"""
-        try:
-            concat_file = self.processed_dir / "concat.txt"
-            with open(concat_file, "w", encoding="utf-8") as f:
-                for video in video_files:
-                    f.write(f"file '{video.absolute()}'\n")
-            return concat_file
-        except Exception as e:
-            logger.error(
-                f"Erreur lors de la création du fichier de concaténation : {e}"
-            )
-            return None

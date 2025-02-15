@@ -23,6 +23,19 @@ from hls_cleaner import HLSCleaner
 from client_monitor import ClientMonitor
 from resource_monitor import ResourceMonitor
 from iptv_channel import IPTVChannel
+import os
+from pathlib import Path
+
+def ensure_persistent_hls():
+    """Crée et fixe les permissions du dossier HLS au démarrage"""
+    hls_path = Path("/app/hls")
+    if not hls_path.exists():
+        print("📂 Création du dossier HLS...")
+        hls_path.mkdir(parents=True, exist_ok=True)
+    
+    os.chmod(hls_path, 0o777)  # Assure que FFmpeg pourra écrire dedans
+
+ensure_persistent_hls()
 
 class IPTVManager:
     """
@@ -39,8 +52,8 @@ class IPTVManager:
         self.use_gpu = use_gpu
         self.channels = {}
 
-        # On crée un nettoyeur HLS unique
-        self.hls_cleaner = HLSCleaner("./hls")
+        # On initialise le nettoyeur HLS avec le bon chemin
+        self.hls_cleaner = HLSCleaner("/app/hls")
         self.hls_cleaner.initial_cleanup()
         self.hls_cleaner.start()
 
@@ -51,24 +64,17 @@ class IPTVManager:
         logger.info("Initialisation du gestionnaire IPTV")
         self._clean_startup()
 
-        # Thread de traitement de la file d'attente de chaînes
-        self.queue_processor = threading.Thread(
-            target=self._process_channel_queue,
-            daemon=True
-        )
-        self.queue_processor.start()
-
-        # On paramètre l'observer pour détecter les changements de contenu
+        # Observer
         self.observer = Observer()
         event_handler = ChannelEventHandler(self)
         self.observer.schedule(event_handler, self.content_dir, recursive=True)
 
-        # Scan initial du contenu
+        # On crée tous les objets IPTVChannel mais SANS démarrer FFmpeg
         logger.info(f"Scan initial dans {self.content_dir}")
         self.scan_channels(initial=True, force=True)
 
         # Moniteur clients
-        self.client_monitor = ClientMonitor(NGINX_ACCESS_LOG)
+        self.client_monitor = ClientMonitor(NGINX_ACCESS_LOG, self)
         self.client_monitor.start()
 
         # Moniteur ressources
@@ -82,15 +88,75 @@ class IPTVManager:
         )
         self.master_playlist_updater.start()
 
+        # Thread qui vérifie les watchers
+        self.watchers_thread = threading.Thread(
+            target=self._watchers_loop,
+            daemon=True
+        )
+        self.watchers_thread.start()
+    def _watchers_loop(self):
+        """
+        Boucle qui vérifie périodiquement si watchers_count=0 depuis plus de 60s,
+        et arrête FFmpeg pour économiser des ressources.
+        """
+        while True:
+            try:
+                for channel_name, channel in self.channels.items():
+                    if channel.watchers_count == 0:
+                        # personne ne regarde
+                        # Est-ce qu'on est à 0 depuis plus de 60s ?
+                        idle_time = time.time() - channel.last_watcher_time
+                        if idle_time > 60:
+                            channel.stop_stream_if_needed()
+            except Exception as e:
+                logger.error(f"Erreur watchers_loop: {e}")
+
+            time.sleep(10)  # on vérifie toutes les 10s
+
+    def update_watchers(self, channel_name: str, count: int):
+        """Met à jour le nombre de watchers et gère le stream"""
+        try:
+            logger.info(f"📊 Mise à jour {channel_name}: {count} watchers")
+
+            if channel_name not in self.channels:
+                logger.error(f"❌ Chaîne inconnue: {channel_name}")
+                return
+
+            channel = self.channels[channel_name]
+            old_count = channel.watchers_count
+
+            # Mise à jour du nombre de watchers
+            channel.watchers_count = count
+            if count > 0:
+                channel.last_watcher_time = time.time()
+
+            logger.info(f"[{channel_name}] Watchers: {old_count} -> {count}")
+
+            # 🔥 LOGS POUR DEBUG 🔥
+            if old_count == 0 and count > 0:
+                logger.info(f"[{channel_name}] 🔥 APPEL de start_stream() (0 -> 1 watcher)")
+                if not channel.start_stream():
+                    logger.error(f"[{channel_name}] ❌ Échec démarrage stream")
+
+            elif old_count > 0 and count == 0:
+                logger.info(f"[{channel_name}] 🛑 Plus aucun watcher, arrêt du stream...")
+                channel.stop_stream_if_needed()
+
+            # On met à jour la master playlist
+            self.generate_master_playlist()
+
+        except Exception as e:
+            logger.error(f"❌ Erreur update_watchers: {e}")
+
     def _clean_startup(self):
         """# On nettoie avant de démarrer"""
         try:
             logger.info("🧹 Nettoyage initial...")
             patterns_to_clean = [
-                ("./hls/**/*", "Fichiers HLS"),
-                ("./content/**/_playlist.txt", "Playlists"),
-                ("./content/**/*.vtt", "Fichiers VTT"),
-                ("./content/**/temp_*", "Fichiers temporaires"),
+                ("/app/hls/**/*", "Fichiers HLS"),
+                ("/app/content/**/_playlist.txt", "Playlists"),
+                ("/app/content/**/*.vtt", "Fichiers VTT"),
+                ("/app/content/**/temp_*", "Fichiers temporaires"),
             ]
             for pattern, desc in patterns_to_clean:
                 count = 0
@@ -104,7 +170,7 @@ class IPTVManager:
                     except Exception as e:
                         logger.error(f"Erreur nettoyage {f}: {e}")
                 logger.info(f"✨ {count} {desc} supprimés")
-            os.makedirs("./hls", exist_ok=True)
+            os.makedirs("/app/hls", exist_ok=True)
         except Exception as e:
             logger.error(f"Erreur nettoyage initial: {e}")
 
@@ -153,7 +219,7 @@ class IPTVManager:
 
             # On attend l'apparition des segments
             while time.time() - start_time < 10:
-                if list(Path(f"./hls/{channel.name}").glob("*.ts")):
+                if list(Path(f"/app/hls/{channel.name}").glob("*.ts")):
                     logger.info(f"✅ Chaîne {channel.name} démarrée avec succès")
                     return True
                 time.sleep(0.5)
@@ -165,7 +231,9 @@ class IPTVManager:
             return False
 
     def scan_channels(self, force: bool = False, initial: bool = False):
-        """# On scanne les dossiers de chaînes et lance le traitement"""
+        """
+        On scanne le contenu pour détecter les nouveaux dossiers (chaînes).
+        """
         with self.scan_lock:
             try:
                 content_path = Path(self.content_dir)
@@ -174,39 +242,25 @@ class IPTVManager:
                     return
 
                 channel_dirs = [d for d in content_path.iterdir() if d.is_dir()]
-                processing_queue = []
 
+                logger.info(f"📡 Scan des chaînes disponibles...")
                 for channel_dir in channel_dirs:
                     channel_name = channel_dir.name
-                    processed_dir = channel_dir / "processed"
-                    if processed_dir.exists() and list(processed_dir.glob("*.mp4")):
-                        if channel_name not in self.channels:
-                            channel = IPTVChannel(
-                                channel_name,
-                                str(channel_dir),
-                                hls_cleaner=self.hls_cleaner,
-                                use_gpu=self.use_gpu
-                            )
-                            self.channels[channel_name] = channel
-                            threading.Thread(
-                                target=self._start_ready_channel,
-                                args=(channel,)
-                            ).start()
-                        else:
-                            if force or initial or self._needs_update(channel_dir):
-                                channel = self.channels[channel_name]
-                                threading.Thread(
-                                    target=self._update_channel_playlist,
-                                    args=(channel, channel_dir)
-                                ).start()
-                    else:
-                        processing_queue.append(channel_dir)
 
-                if processing_queue:
-                    threading.Thread(
-                        target=self._process_new_channels,
-                        args=(processing_queue,)
-                    ).start()
+                    if channel_name in self.channels:
+                        logger.info(f"🔄 Chaîne existante : {channel_name}")
+                        continue
+
+                    logger.info(f"✅ Nouvelle chaîne trouvée : {channel_name}")
+                    self.channels[channel_name] = IPTVChannel(
+                        channel_name,
+                        str(channel_dir),
+                        hls_cleaner=self.hls_cleaner,
+                        use_gpu=self.use_gpu
+                    )
+
+                logger.info(f"📡 Scan terminé, {len(self.channels)} chaînes enregistrées.")
+
             except Exception as e:
                 logger.error(f"Erreur scan des chaînes: {e}")
 
@@ -224,6 +278,14 @@ class IPTVManager:
                 logger.error(f"❌ Échec scan vidéos {channel.name}")
         except Exception as e:
             logger.error(f"Erreur démarrage {channel.name}: {e}")
+
+    def ensure_hls_directory(self, channel_name: str):
+        """Crée le dossier HLS si inexistant avec les bonnes permissions"""
+        hls_path = Path(f"/app/hls/{channel_name}")
+        if not hls_path.exists():
+            logger.info(f"📂 Création du dossier HLS pour {channel_name}")
+            hls_path.mkdir(parents=True, exist_ok=True)
+            os.chmod(hls_path, 0o777)  # Autorise tout le monde à écrire
 
     def _process_new_channels(self, channel_dirs):
         """# On traite de nouvelles chaînes sans vidéo traitée"""
@@ -250,28 +312,20 @@ class IPTVManager:
                 logger.error(f"Erreur {channel_dir.name}: {e}")
 
     def generate_master_playlist(self):
-        """# On génère la playlist principale avec les chaînes prêtes"""
         try:
-            playlist_path = os.path.abspath("./hls/playlist.m3u")
+            playlist_path = os.path.abspath("/app/hls/playlist.m3u")
             logger.info(f"On génère la master playlist: {playlist_path}")
-
-            ready_channels = []
-            for name, channel in sorted(self.channels.items()):
-                if self._verify_channel(channel):
-                    ready_channels.append(name)
-                    logger.info(f"Chaîne {name} prête")
-                else:
-                    logger.debug(f"{name} pas prête")
-                    if name not in self.failing_channels:
-                        self.channel_queue.put(channel)
 
             with open(playlist_path, "w", encoding="utf-8") as f:
                 f.write("#EXTM3U\n")
-                for name in ready_channels:
+
+                # On référence TOUTES les chaînes self.channels
+                for name, channel in sorted(self.channels.items()):
+                    # Ajout direct dans la playlist, même si FFmpeg n’est pas lancé
                     f.write(f'#EXTINF:-1 tvg-id="{name}" tvg-name="{name}",{name}\n')
                     f.write(f"http://{SERVER_URL}/hls/{name}/playlist.m3u8\n")
 
-            logger.info(f"Playlist mise à jour ({len(ready_channels)} chaînes)")
+            logger.info(f"Playlist mise à jour ({len(self.channels)} chaînes)")
         except Exception as e:
             logger.error(f"Erreur génération master playlist: {e}")
             logger.error(traceback.format_exc())
@@ -281,7 +335,7 @@ class IPTVManager:
         try:
             if not self._is_channel_ready(channel.name):
                 return False
-            hls_dir = Path(f"./hls/{channel.name}")
+            hls_dir = Path(f"/app/hls/{channel.name}")
             if not hls_dir.exists():
                 return False
             ts_files = list(hls_dir.glob("*.ts"))
@@ -298,7 +352,7 @@ class IPTVManager:
     def _is_channel_ready(self, channel_name: str) -> bool:
         """# On vérifie si une chaîne a des vidéos traitées"""
         try:
-            channel_dir = Path(f"./content/{channel_name}")
+            channel_dir = Path(f"/app/content/{channel_name}")
             processed_dir = channel_dir / "processed"
             if not processed_dir.exists():
                 return False
@@ -374,12 +428,12 @@ class IPTVManager:
         """# Nettoyage approfondi d'une chaîne"""
         try:
             self.hls_cleaner.cleanup_channel(channel_name)
-            hls_dir = Path(f"./hls/{channel_name}")
+            hls_dir = Path(f"/app/hls/{channel_name}")
             if hls_dir.exists():
                 shutil.rmtree(hls_dir)
             hls_dir.mkdir(parents=True, exist_ok=True)
 
-            channel_dir = Path(f"./content/{channel_name}")
+            channel_dir = Path(f"/app/content/{channel_name}")
             if channel_dir.exists():
                 for pattern in ["_playlist.txt", "*.vtt", "temp_*"]:
                     for f in channel_dir.glob(pattern):
@@ -406,7 +460,6 @@ class IPTVManager:
             return True
 
     def _master_playlist_loop(self):
-        """# Boucle de mise à jour continue de la playlist"""
         while True:
             try:
                 self.generate_master_playlist()
@@ -415,46 +468,38 @@ class IPTVManager:
                 logger.error(f"Erreur maj master playlist: {e}")
 
     def cleanup(self):
-        """# On arrête le nettoyeur, l'observer et on nettoie tout"""
         logger.info("Début du nettoyage...")
         if hasattr(self, "hls_cleaner"):
-            logger.info("Arrêt du nettoyeur HLS...")
             self.hls_cleaner.stop()
 
         if hasattr(self, "observer"):
-            logger.info("On arrête l'observer...")
             self.observer.stop()
             self.observer.join()
 
         for name, channel in self.channels.items():
-            logger.info(f"Nettoyage canal {name}...")
             channel._clean_processes()
 
         logger.info("Nettoyage terminé")
 
-    def _signal_handler(self, signum, frame):
-        """# On gère les signaux système"""
-        logger.info(f"Signal {signum} reçu, nettoyage...")
-        self.cleanup()
-        sys.exit(0)
-
     def run(self):
-        """# On exécute la boucle principale"""
         try:
             self.scan_channels()
             self.generate_master_playlist()
             self.observer.start()
-
-            cpu_thread = threading.Thread(target=self._cpu_monitor, daemon=True)
-            cpu_thread.start()
 
             while True:
                 time.sleep(1)
         except KeyboardInterrupt:
             self.cleanup()
         except Exception as e:
-            logger.error(f"🔥 Erreur dans le gestionnaire IPTV : {e}")
+            logger.error(f"🔥 Erreur manager : {e}")
             self.cleanup()
+            
+    def _signal_handler(self, signum, frame):
+        """# On gère les signaux système"""
+        logger.info(f"Signal {signum} reçu, nettoyage...")
+        self.cleanup()
+        sys.exit(0)
 
     def _cpu_monitor(self):
         """# On surveille la CPU sur 1 minute"""
@@ -487,3 +532,51 @@ class IPTVManager:
             except Exception as e:
                 logger.error(f"Erreur suppression {item}: {e}")
 
+    import psutil
+    import threading
+
+    def monitor_ffmpeg(self):
+        while True:
+            if self.ffmpeg_process:
+                if not psutil.pid_exists(self.ffmpeg_process.pid):
+                    logger.warning(f"[{self.name}] ⚠️ FFmpeg s'est arrêté ! Relance en cours...")
+                    self.start_stream()
+            time.sleep(30)  # Vérifier toutes les 30 secondes
+
+    def start_stream(self) -> bool:
+        with self.lock:
+            try:
+                logger.info(f"[{self.name}] 🔄 Début du start_stream()")
+
+                # Assurer que le dossier HLS existe
+                hls_dir = f"/app/hls/{self.name}"
+                if not os.path.exists(hls_dir):
+                    logger.info(f"[{self.name}] 📂 Création du dossier HLS : {hls_dir}")
+                    os.makedirs(hls_dir, exist_ok=True)
+
+                # Vérifier si _playlist.txt est bien généré
+                concat_file = self._create_concat_file()
+                if not concat_file or not concat_file.exists():
+                    logger.error(f"[{self.name}] ❌ _playlist.txt manquant, arrêt du stream.")
+                    return False
+
+                # Vérifier si les fichiers vidéo existent bien
+                for video in self.processed_videos:
+                    if not os.path.exists(video):
+                        logger.error(f"[{self.name}] ❌ Fichier vidéo manquant : {video}")
+                        return False
+
+                # Lancer FFmpeg
+                cmd = self._build_ffmpeg_command(hls_dir)
+                logger.info(f"[{self.name}] 📝 Commande FFmpeg : {' '.join(cmd)}")
+                self.ffmpeg_process = self._start_ffmpeg_process(cmd)
+
+                if not self.ffmpeg_process:
+                    logger.error(f"[{self.name}] ❌ Échec du démarrage de FFmpeg")
+                    return False
+
+                return True
+            except Exception as e:
+                logger.error(f"[{self.name}] ❌ Erreur critique dans start_stream : {e}")
+                self._clean_processes()
+                return False
