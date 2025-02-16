@@ -14,6 +14,8 @@ from video_processor import VideoProcessor
 from hls_cleaner import HLSCleaner
 from config import logger
 import json
+from ffmpeg_logger import FFmpegLogger
+from stream_error_handler import StreamErrorHandler
 
 class IPTVChannel:
     """
@@ -31,16 +33,13 @@ class IPTVChannel:
         self.video_dir = video_dir
         self.use_gpu = use_gpu
         self.hls_cleaner = hls_cleaner  # On stocke l'instance partagée du nettoyeur
+        self.error_handler = StreamErrorHandler(self.name)
 
         self.active_ffmpeg_pids = set()  # Pour traquer les PIDs actifs
+        self.logger = FFmpegLogger(name)  # Une seule ligne pour gérer tous les logs
 
         # On initialise le VideoProcessor
         self.processor = VideoProcessor(self.video_dir)
-
-        # On paramètre les logs FFmpeg
-        self.ffmpeg_log_dir = Path("logs/ffmpeg")
-        self.ffmpeg_log_dir.mkdir(parents=True, exist_ok=True)
-        self.ffmpeg_log_file = self.ffmpeg_log_dir / f"{self.name}_ffmpeg.log"
 
         # Configuration HLS
         self.hls_time = 6
@@ -108,50 +107,35 @@ class IPTVChannel:
                 logger.error(f"[{self.name}] Erreur durant la lecture de {video}: {e}")
         return total_duration
            
-    def _build_ffmpeg_command(self, hls_dir: str) -> list:
-        """
-        # On construit la commande FFmpeg pour streamer
-        # hls_dir est le dossier de sortie HLS
-        """
-        self.ffmpeg_log_file.parent.mkdir(parents=True, exist_ok=True)
-        self.ffmpeg_log_file.touch(exist_ok=True)
-        
-        # Define the progress file path
-        progress_file = self.ffmpeg_log_dir / f"{self.name}_progress.log"
-
-        # Ensure the directory for the progress file exists
-        progress_file.parent.mkdir(parents=True, exist_ok=True)
-
-        # Create the progress file if it doesn't exist
-        progress_file.touch(exist_ok=True)
-
-
-        base_cmd = [
+    def _build_input_params(self) -> list:
+        """On construit les paramètres d'entrée FFmpeg"""
+        params = [
             "ffmpeg",
-            "-hide_banner",
+            "-hide_banner", 
             "-loglevel", "warning",
             "-y",
             "-re",
-            "-progress", str(progress_file),  # On ajoute le tracking de progression
+            "-progress", str(self.logger.get_progress_file()),
             "-fflags", "+genpts+igndts",
         ]
-
-        # On applique l'offset si défini
+        
         if self.start_offset > 0:
             logger.info(f"[{self.name}] Lancement avec un offset de {self.start_offset:.2f}s")
-            base_cmd.extend(["-ss", f"{self.start_offset}"])
+            params.extend(["-ss", f"{self.start_offset}"])
 
-        base_cmd.extend([
+        params.extend([
             "-f", "concat",
             "-safe", "0",
-            "-stream_loop", "-1",  # Doit rester ici car c'est une option d'entrée
+            "-stream_loop", "-1",
             "-i", str(self._create_concat_file()),
         ])
+        
+        return params
 
-        # On choisit le mode encodage complet (fallback) ou copie directe
+    def _build_encoding_params(self) -> list:
+        """On définit les paramètres d'encodage selon le mode"""
         if self.fallback_mode:
-            # Mode ré-encodage
-            encoding_params = [
+            return [
                 "-map", "0:v:0",
                 "-map", "0:a:0",
                 "-vf", "scale=w=1280:h=720:force_original_aspect_ratio=decrease",
@@ -168,14 +152,11 @@ class IPTVChannel:
                 "-ar", "48000",
                 "-b:a", "128k",
             ]
-        else:
-            # Mode copie
-            encoding_params = [
-                "-c:v", "copy",
-                "-c:a", "copy",
-            ]
+        return ["-c:v", "copy", "-c:a", "copy"]
 
-        hls_params = [
+    def _build_hls_params(self, hls_dir: str) -> list:
+        """On configure les paramètres HLS"""
+        return [
             "-f", "hls",
             "-hls_time", str(self.hls_time),
             "-hls_list_size", str(self.hls_list_size),
@@ -186,7 +167,14 @@ class IPTVChannel:
             f"{hls_dir}/playlist.m3u8",
         ]
 
-        return base_cmd + encoding_params + hls_params
+    def _build_ffmpeg_command(self, hls_dir: str) -> list:
+        """On construit la commande FFmpeg complète"""
+        return (
+            self._build_input_params() +
+            self._build_encoding_params() +
+            self._build_hls_params(hls_dir)
+        )
+
 
     def _start_ffmpeg_process(self, cmd: list) -> Optional[subprocess.Popen]:
         """
@@ -205,12 +193,9 @@ class IPTVChannel:
                 except ProcessLookupError:
                     self.active_ffmpeg_pids.remove(pid)
                     
-            # Vérifier que le dossier des logs FFmpeg existe
-            self.ffmpeg_log_file.parent.mkdir(parents=True, exist_ok=True)
-            self.ffmpeg_log_file.touch(exist_ok=True)
-
             # Lancer FFmpeg
-            with open(self.ffmpeg_log_file, "a", buffering=1) as ffmpeg_log:
+            with open(self.logger.get_main_log_file(), "a", buffering=1) as ffmpeg_log:
+
                 process = subprocess.Popen(
                     cmd,
                     stdout=ffmpeg_log,
@@ -226,7 +211,7 @@ class IPTVChannel:
             # Vérification du process FFmpeg
             time.sleep(2)  # Attendre un minimum pour voir si FFmpeg survit
             if process.poll() is not None:
-                logger.error(f"[{self.name}] ❌ FFmpeg s'est arrêté immédiatement. Vérifie {self.ffmpeg_log_file}")
+                #logger.error(f"[{self.name}] ❌ FFmpeg s'est arrêté immédiatement. Vérifie {self.ffmpeg_log_file}")
                 return None
 
             # Vérification de l'apparition des segments HLS
@@ -251,10 +236,10 @@ class IPTVChannel:
             return None
 
     def _monitor_ffmpeg(self, hls_dir: str):
-        """# On surveille le process FFmpeg et la génération des segments"""
+        """On surveille le process FFmpeg et la génération des segments"""
         self.last_segment_time = time.time()
         last_segment_number = -1
-        progress_file = self.ffmpeg_log_dir / f"{self.name}_progress.log"
+        progress_file = self.logger.get_progress_file()
         last_position = 0
         loop_count = 0
         hls_dir = Path(hls_dir)
@@ -279,7 +264,7 @@ class IPTVChannel:
                             if position_lines:
                                 current_position = int(position_lines[-1].split('=')[1]) // 1000000  # Conversion en secondes
                                 
-                                # Si on détecte un retour au début (position actuelle < position précédente)
+                                # Si on détecte un retour au début
                                 if current_position < last_position:
                                     loop_count += 1
                                     logger.warning(f"🔄 [{self.name}] Boucle #{loop_count} - Redémarrage de la playlist")
@@ -294,28 +279,29 @@ class IPTVChannel:
                         current_segment = int(newest_segment.stem.split("_")[1])
                         segment_size = newest_segment.stat().st_size
 
-                        with open(self.ffmpeg_log_dir / f"{self.name}_segments.log", "a") as seg_log:
-                            seg_log.write(
-                                f"{datetime.datetime.now()} - "
-                                f"Segment {current_segment}: {segment_size} bytes\n"
-                            )
+                        self.logger.log_segment(current_segment, segment_size)
 
                         if segment_size < self.min_segment_size:
-                            logger.warning(
-                                f"⚠️ Segment {newest_segment.name} trop petit ({segment_size} bytes)"
-                            )
-                            self.error_count += 1
+                            logger.warning(f"⚠️ Segment {newest_segment.name} trop petit ({segment_size} bytes)")
+                            if self.error_handler.add_error("small_segment"):
+                                if self._restart_stream():
+                                    self.error_handler.reset()
                         else:
                             if current_segment != last_segment_number:
                                 self.last_segment_time = current_time
                                 last_segment_number = current_segment
-                                self.error_count = 0
+                                if self.error_handler.error_count > 0:
+                                    self.error_handler.reset()  # On reset si tout va bien
 
                     except ValueError:
                         logger.error(f"Format de segment invalide: {newest_segment.name}")
-                        self.error_count += 1
+                        if self.error_handler.add_error("invalid_segment"):
+                            if self._restart_stream():
+                                self.error_handler.reset()
                 else:
-                    self.error_count += 1
+                    if self.error_handler.add_error("no_segments"):
+                        if self._restart_stream():
+                            self.error_handler.reset()
 
                 # Vérification si plus de watchers depuis 60s
                 if hasattr(self, 'last_watcher_time') and (current_time - self.last_watcher_time) > timeout_no_viewers:
@@ -323,23 +309,23 @@ class IPTVChannel:
                     self._clean_processes()
                     return  
 
+                # Vérification du timeout segments
                 elapsed = current_time - self.last_segment_time
                 if elapsed > crash_threshold:
                     logger.error(f"🔥 Pas de nouveau segment pour {self.name} depuis {elapsed:.1f}s")
-                    if self.restart_count < self.max_restarts:
-                        self.restart_count += 1
-                        logger.info(f"🔄 Tentative de redémarrage {self.restart_count}/{self.max_restarts}")
+                    if self.error_handler.add_error("segment_timeout"):
                         if self._restart_stream():
-                            self.error_count = 0
-                        else:
-                            logger.error(f"❌ Échec du redémarrage pour {self.name}")
-                    else:
-                        logger.critical(f"⛔️ Nombre maximum de redémarrages atteint pour {self.name}")
+                            self.error_handler.reset()
 
                 time.sleep(1)
+                
             except Exception as e:
                 logger.error(f"Erreur monitoring {self.name}: {e}")
+                if self.error_handler.add_error("monitoring_error"):
+                    if self._restart_stream():
+                        self.error_handler.reset()
                 time.sleep(1)
+                
     def _restart_stream(self) -> bool:
         """# On redémarre le stream en forçant le cleanup"""
         try:
@@ -452,8 +438,6 @@ class IPTVChannel:
     def start_stream(self) -> bool:
         """ Démarre le stream avec FFmpeg """
         logger.info(f"[{self.name}] 🚀 start_stream() appelé !")
-        self.ffmpeg_log_file.parent.mkdir(parents=True, exist_ok=True)
-        self.ffmpeg_log_file.touch(exist_ok=True)
 
         with self.lock:
             logger.info(f"[{self.name}] 🔄 Tentative de démarrage du stream...")
@@ -476,10 +460,7 @@ class IPTVChannel:
             return self.ffmpeg_process is not None
 
     def _scan_videos(self) -> bool:
-        """
-        # On scanne les fichiers vidéos et on met à jour processed_videos
-        # On effectue la normalisation si nécessaire
-        """
+        """On scanne les fichiers vidéos et met à jour processed_videos en utilisant VideoProcessor"""
         try:
             source_dir = Path(self.video_dir)
             processed_dir = source_dir / "processed"
@@ -494,30 +475,32 @@ class IPTVChannel:
                 logger.warning(f"Aucun fichier vidéo dans {self.video_dir}")
                 return False
 
-            # On vérifie les fichiers déjà normalisés
+            # On repart d'une liste vide
             self.processed_videos = []
 
+            # Pour chaque vidéo source
             for source in source_files:
                 processed_file = processed_dir / f"{source.stem}.mp4"
-
-                # ⚠️ Vérifier si le fichier est déjà dans processed/
+                
+                # Si déjà dans processed/
                 if processed_file.exists():
-                    logger.info(f"🔄 Vidéo déjà présente dans processed/, pas besoin de traitement : {source.name}")
+                    logger.info(f"🔄 Vidéo déjà présente dans processed/: {source.name}")
                     self.processed_videos.append(processed_file)
                     continue
-
-                # Vérification avec video_processor
+                    
+                # On utilise uniquement VideoProcessor pour traiter/vérifier
                 if self.processor.is_already_optimized(source):
-                    logger.info(f"✅ Vidéo déjà optimisée : {source.name}, copie directe.")
+                    logger.info(f"✅ Vidéo déjà optimisée: {source.name}, copie directe")
                     shutil.copy2(source, processed_file)
                     self.processed_videos.append(processed_file)
                 else:
-                    # Lancer la normalisation via video_processor
                     processed = self.processor.process_video(source)
                     if processed:
                         self.processed_videos.append(processed)
+                    else:
+                        logger.error(f"❌ Échec traitement de {source.name}")
 
-
+            # On vérifie qu'on a des vidéos traitées
             if not self.processed_videos:
                 logger.error(f"Aucune vidéo traitée disponible pour {self.name}")
                 return False
@@ -526,199 +509,8 @@ class IPTVChannel:
             return True
 
         except Exception as e:
-            logger.error(f"Erreur lors du scan des vidéos pour {self.name}: {e}")
+            logger.error(f"Erreur scan des vidéos pour {self.name}: {e}")
             return False
-
-    def _is_already_normalized(self, video_path: Path) -> bool:
-        """
-        Vérifie si une vidéo est déjà en H.264, ≤ 1080p, ≤ 30 FPS, et en AAC.
-        Si oui, la normalisation est inutile.
-        """
-        import json
-
-        logger.info(f"🔍 Vérification du format de {video_path.name}")
-
-        cmd = [
-            "ffprobe", "-v", "error",
-            "-select_streams", "v:0",
-            "-show_entries", "stream=codec_name,width,height,r_frame_rate",
-            "-show_entries", "stream=codec_name:stream=sample_rate",
-            "-of", "json",
-            str(video_path)
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-
-        try:
-            video_info = json.loads(result.stdout)
-            streams = video_info.get("streams", [])
-
-            if not streams:
-                logger.warning(f"⚠️ Impossible de lire {video_path}, normalisation forcée.")
-                return False
-
-            video_stream = streams[0]
-            codec = video_stream.get("codec_name", "").lower()
-            width = int(video_stream.get("width", 0))
-            height = int(video_stream.get("height", 0))
-            framerate = video_stream.get("r_frame_rate", "0/1").split("/")
-            fps = round(int(framerate[0]) / int(framerate[1])) if len(framerate) == 2 else 0
-
-            audio_codec = None
-            for stream in streams:
-                if stream.get("codec_name") and stream.get("codec_name") != codec:
-                    audio_codec = stream.get("codec_name").lower()
-
-            # Vérification des critères
-            if codec == "h264" and width <= 1920 and height <= 1080 and fps <= 30 and (audio_codec is None or audio_codec == "aac"):
-                return True  # ✅ Vidéo optimisée, pas besoin de normaliser
-
-            return False  # ❌ Vidéo à normaliser
-
-        except json.JSONDecodeError as e:
-            logger.error(f"❌ Erreur JSON avec ffprobe: {e}")
-            return False
-
-    def _process_video(self, source: Path, dest: Path) -> bool:
-        """
-        # On normalise/transcode une vidéo source et on vérifie la validité du résultat
-        """
-        try:
-            logger.info(f"Début de la normalisation de {source.name}")
-
-            # On force la normalisation
-            cmd = ["ffprobe",
-                   "-v", "error",
-                   "-select_streams", "v:0",
-                   "-show_entries", "stream=codec_name,width,height,r_frame_rate,duration",
-                   "-of", "json",
-                   str(source)]
-            probe_result = subprocess.run(cmd, capture_output=True, text=True)
-            if probe_result.returncode != 0:
-                logger.error(f"Erreur analyse {source.name}: {probe_result.stderr}")
-                return False
-
-            source_info = json.loads(probe_result.stdout)
-            if not source_info.get("streams"):
-                logger.error(f"Pas de flux vidéo dans {source.name}")
-                return False
-
-            # On construit la commande FFmpeg
-            temp_output = dest.parent / f"temp_{dest.name}"
-            ffmpeg_cmd = ["ffmpeg", "-y"]
-
-            if source.suffix.lower() == ".mkv":
-                ffmpeg_cmd.extend([
-                    "-fflags", "+genpts+igndts",
-                    "-analyzeduration", "100M",
-                    "-probesize", "100M"
-                ])
-
-            ffmpeg_cmd.extend(["-i", str(source)])
-
-            if self.use_gpu:
-                ffmpeg_cmd.extend([
-                    "-c:v", "h264_nvenc",
-                    "-preset", "p4",
-                    "-profile:v", "high",
-                ])
-            else:
-                ffmpeg_cmd.extend(["-c:v", "libx264", "-preset", "medium", "-crf", "23"])
-
-            ffmpeg_cmd.extend([
-                "-pix_fmt", "yuv420p",
-                "-movflags", "+faststart",
-                "-max_muxing_queue_size", "1024",
-                "-c:a", "aac",
-                "-b:a", "192k",
-                "-ar", "48000",
-                "-ac", "2",
-                str(temp_output)
-            ])
-
-            logger.info(f"Démarrage FFmpeg pour {source.name}")
-            process = subprocess.run(ffmpeg_cmd, capture_output=True, text=True)
-            if process.returncode != 0:
-                logger.error(f"Erreur FFmpeg pour {source.name}: {process.stderr}")
-                if temp_output.exists():
-                    temp_output.unlink()
-                return False
-
-            if not self._verify_transcoding(temp_output):
-                logger.error(f"Vérification transcoding échouée pour {source.name}")
-                temp_output.unlink()
-                return False
-
-            # On renomme le fichier temporaire
-            temp_output.rename(dest)
-            logger.info(f"✅ Normalisation réussie: {source.name} -> {dest.name}")
-            return True
-
-        except Exception as e:
-            logger.error(f"Erreur traitement {source.name}: {e}")
-            if "temp_output" in locals() and temp_output.exists():
-                temp_output.unlink()
-            return False
-
-    def _verify_transcoding(self, output_file: Path) -> bool:
-        """# On vérifie la validité du fichier de sortie"""
-        try:
-            if output_file.stat().st_size < 1024 * 1024:
-                logger.error(f"Fichier trop petit: {output_file.stat().st_size} bytes")
-                return False
-
-            probe_cmd = [
-                "ffprobe",
-                "-v", "error",
-                "-select_streams", "v:0",
-                "-show_entries", "stream=codec_name,width,height",
-                "-of", "json",
-                str(output_file)
-            ]
-            probe_result = subprocess.run(probe_cmd, capture_output=True, text=True)
-            if probe_result.returncode != 0:
-                logger.error(f"Erreur vérification codec: {probe_result.stderr}")
-                return False
-
-            output_info = json.loads(probe_result.stdout)
-            if not output_info.get("streams"):
-                logger.error("Pas de flux vidéo dans le fichier converti")
-                return False
-
-            duration_cmd = [
-                "ffprobe",
-                "-v", "error",
-                "-show_entries", "format=duration",
-                "-of", "default=noprint_wrappers=1:nokey=1",
-                str(output_file)
-            ]
-            duration_result = subprocess.run(duration_cmd, capture_output=True, text=True)
-            if (
-                duration_result.returncode != 0
-                or float(duration_result.stdout.strip()) < 1
-            ):
-                logger.error("Durée de la vidéo invalide")
-                return False
-
-            return True
-
-        except Exception as e:
-            logger.error(f"Erreur vérification transcoding: {e}")
-            return False
-    
-    def _check_system_resources(self) -> bool:
-        """# On vérifie l'état des ressources système"""
-        try:
-            cpu_percent = psutil.cpu_percent()
-            memory_percent = psutil.virtual_memory().percent
-            if cpu_percent > 98 and memory_percent > 95:
-                logger.warning(
-                    f"Ressources critiques - CPU: {cpu_percent}%, RAM: {memory_percent}%"
-                )
-                return False
-            return True
-        except Exception as e:
-            logger.error(f"Erreur lors de la vérification des ressources : {e}")
-            return True
 
     def _create_channel_directory(self):
         """# On crée le dossier HLS de la chaîne s'il n'existe pas"""

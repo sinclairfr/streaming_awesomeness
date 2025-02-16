@@ -22,14 +22,15 @@ class ClientMonitor(threading.Thread):
         self.cleanup_thread.start()
 
     def _cleanup_loop(self):
-        logger.warning("❤️cleanup loop invoqué❤️")
         """# Vérification toutes les 60s même si personne ne regarde"""
         while True:
             time.sleep(60)
             self._cleanup_inactive()
-
+    
     def run(self):
+        """On surveille les requêtes clients"""
         logger.info("👀 Surveillance des requêtes clients en cours...")
+        
         with open(self.log_path, "r") as f:
             f.seek(0, 2)
             while True:
@@ -38,67 +39,47 @@ class ClientMonitor(threading.Thread):
                     time.sleep(0.5)
                     continue
 
-                parts = line.split(" ")
-                if len(parts) > 6:
-                    ip_address = parts[0]
-                    request_path = parts[6]
-
-                    match = re.search(r'/hls/([^/]+)/', request_path)
-                    if match:
-                        channel_name = match.group(1)
-                        logger.debug(f"🔍 Requête détectée: {ip_address} -> {channel_name} ({request_path})")
-
-                        # 🔹 Vérifier que la chaîne existe
-                        if channel_name in self.manager.channels:
-                            self.manager.channels[channel_name].last_watcher_time = time.time()
-                            self.update_watchers(channel_name, 1, request_path)
-                        else:
-                            logger.warning(f"⚠️ Chaîne inconnue : {channel_name}")
-
-    def _process_log_line(self, line: str):
-        """Traite une ligne de log nginx"""
-        try:
-            # On ne s'intéresse qu'aux requêtes HLS
-            if "GET /hls/" not in line:
-                return
-                
-            # Format: IP - - [date] "GET /hls/CHANNEL/segment_X.ts HTTP/1.1" 200 ...
-            parts = line.split()
-            if len(parts) < 7:
-                return
-                
-            ip = parts[0]
-            request = parts[6].strip('"')  # Retire les guillemets
-            
-            # On extrait le channel
-            match = re.search(r'/hls/([^/]+)/', request)
-            if not match:
-                return
-                
-            channel = match.group(1)
-            logger.debug(f"🔍 Requête détectée: {ip} -> {channel} ({request})")
-            
-            # Mise à jour des watchers
-            with self.lock:
-                # On compte les watchers actuels
-                old_count = len([1 for (ch, _), ts in self.watchers.items() 
-                               if ch == channel])
-                
-                # On met à jour le timestamp
-                self.watchers[(channel, ip)] = time.time()
-                
-                # On recompte
-                new_count = len([1 for (ch, _), ts in self.watchers.items() 
-                               if ch == channel])
-                
-                if old_count != new_count:
-                    logger.info(f"👥 Changement watchers {channel}: {old_count} -> {new_count}")
-                    self.update_watchers(channel, new_count, request_path)
+                try:
+                    # On ne s'intéresse qu'aux requêtes HLS
+                    if "GET /hls/" not in line:
+                        continue
+                        
+                    parts = line.split()
+                    if len(parts) < 7:
+                        continue
+                        
+                    ip = parts[0]
+                    request = parts[6].strip('"')  # Retire les guillemets
                     
-        except Exception as e:
-            logger.error(f"❌ Erreur traitement ligne: {e}")
-            logger.error(f"Ligne: {line}")
-
+                    # On extrait le channel
+                    match = re.search(r'/hls/([^/]+)/', request)
+                    if not match:
+                        continue
+                        
+                    channel = match.group(1)
+                    logger.debug(f"🔍 Requête détectée: {ip} -> {channel} ({request})")
+                    
+                    # Mise à jour des watchers
+                    with self.lock:
+                        # On compte les watchers actuels
+                        old_count = len([1 for (ch, _), ts in self.watchers.items() 
+                                    if ch == channel])
+                        
+                        # On met à jour le timestamp
+                        self.watchers[(channel, ip)] = time.time()
+                        
+                        # On recompte
+                        new_count = len([1 for (ch, _), ts in self.watchers.items() 
+                                    if ch == channel])
+                        
+                        if old_count != new_count:
+                            logger.info(f"👥 Changement watchers {channel}: {old_count} -> {new_count}")
+                            self.update_watchers(channel, new_count, request)
+                    
+                except Exception as e:
+                    logger.error(f"❌ Erreur traitement ligne: {e}")
+                    logger.error(f"Ligne: {line}")
+    
     def _cleanup_inactive(self):
         """# Nettoie les watchers inactifs et met à jour les chaînes non consultées"""
         now = time.time()
