@@ -6,11 +6,16 @@ USER root
 
 # Installation des dépendances système
 RUN apt-get update && apt-get install -y \
-    python3 python3-pip software-properties-common tree nano \
+    python3 python3-pip software-properties-common tree nano sudo \
     && add-apt-repository -y ppa:ubuntuhandbook1/ffmpeg6 \
     && apt-get update \
     && apt-get install -y ffmpeg strace \
     && rm -rf /var/lib/apt/lists/*
+
+RUN apt-get install -y procps
+
+# Permettre à l'utilisateur streamer d'utiliser sudo pour kill
+RUN echo "streamer ALL=(ALL) NOPASSWD: /usr/bin/kill" >> /etc/sudoers
 
 # Création d'un utilisateur non-root pour éviter les problèmes de permissions
 RUN useradd -m -s /bin/bash streamer

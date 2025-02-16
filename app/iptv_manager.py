@@ -27,6 +27,10 @@ from resource_monitor import ResourceMonitor
 from iptv_channel import IPTVChannel
 import os
 from pathlib import Path
+import subprocess  # Ajouter en haut du fichier
+import signal
+import os
+import psutil
 
 def ensure_persistent_hls():
     """Crée et fixe les permissions du dossier HLS au démarrage"""
@@ -96,7 +100,7 @@ class IPTVManager:
             daemon=True
         )
         self.watchers_thread.start()
-    
+
     def _watchers_loop(self):
         """Surveille l'activité des watchers et arrête les streams inutilisés"""
         while True:
@@ -107,13 +111,15 @@ class IPTVManager:
                 for proc in psutil.process_iter(attrs=["pid", "name", "cmdline"]):
                     try:
                         if "ffmpeg" in proc.info["name"].lower():
-                            # On extrait le nom de la chaîne des arguments FFmpeg
-                            for arg in proc.info["cmdline"]:
-                                if "/hls/" in str(arg):
-                                    channel_name = str(arg).split("/hls/")[1].split("/")[0]
-                                    if channel_name not in ffmpeg_processes:
-                                        ffmpeg_processes[channel_name] = []
-                                    ffmpeg_processes[channel_name].append(proc.info["pid"])
+                            # On vérifie que cmdline existe et n'est pas None
+                            if proc.info.get("cmdline"):  # Ajout de cette vérification
+                                # On extrait le nom de la chaîne des arguments FFmpeg
+                                for arg in proc.info["cmdline"]:
+                                    if "/hls/" in str(arg):
+                                        channel_name = str(arg).split("/hls/")[1].split("/")[0]
+                                        if channel_name not in ffmpeg_processes:
+                                            ffmpeg_processes[channel_name] = []
+                                        ffmpeg_processes[channel_name].append(proc.info["pid"])
                     except (psutil.NoSuchProcess, psutil.AccessDenied):
                         continue
 
@@ -121,7 +127,7 @@ class IPTVManager:
                 for channel_name, channel in self.channels.items():
                     if channel_name in ffmpeg_processes:
                         time_since_last_segment = current_time - channel.last_watcher_time
-                        if time_since_last_segment > 60:  # Aucun segment `.ts` demandé depuis 60s
+                        if time_since_last_segment > 20:  # 20 secondes sans activité
                             logger.warning(f"⚠️ {channel_name}: {len(ffmpeg_processes[channel_name])} processus FFmpeg actifs mais inactif depuis {time_since_last_segment:.1f}s")
                             self._force_clean_channel(channel_name, ffmpeg_processes[channel_name])
 
@@ -129,39 +135,74 @@ class IPTVManager:
 
             except Exception as e:
                 logger.error(f"❌ Erreur watchers_loop: {e}")
-                time.sleep(10)
-
+                time.sleep(10)          
+    
     def _force_clean_channel(self, channel_name: str, pids: list):
-        """Nettoyage forcé des processus FFmpeg d'une chaîne"""
-        logger.warning(f"🧹 Nettoyage forcé de {len(pids)} processus pour {channel_name}")
+        """Nettoyage ultra-agressif des processus FFmpeg"""
+        logger.warning(f"🧹 Nettoyage forcé pour {channel_name}")
         
-        # SIGTERM d'abord
-        for pid in pids:
-            try:
-                os.kill(pid, signal.SIGTERM)
-                logger.info(f"🟡 SIGTERM envoyé au PID {pid}")
-            except ProcessLookupError:
-                continue
+        try:
+            # On récupère TOUS les processus FFmpeg liés à cette chaîne
+            ffmpeg_pids = set()
+            for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+                try:
+                    if ("ffmpeg" in proc.info["name"].lower() and 
+                        proc.info.get("cmdline") and 
+                        any(channel_name in str(arg) for arg in proc.info["cmdline"])):
+                        ffmpeg_pids.add(proc.info["pid"])
+                        # On ajoute aussi les enfants
+                        process = psutil.Process(proc.info["pid"])
+                        for child in process.children(recursive=True):
+                            ffmpeg_pids.add(child.pid)
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
 
-        # On attend un peu
-        time.sleep(2)
+            if not ffmpeg_pids:
+                logger.info(f"Aucun processus FFmpeg trouvé pour {channel_name}")
+                return
 
-        # SIGKILL pour les récalcitrants 
-        for pid in pids:
-            try:
-                os.kill(pid, signal.SIGKILL)
-                logger.info(f"🔥 SIGKILL envoyé au PID {pid}")
-            except ProcessLookupError:
-                continue
+            logger.info(f"🎯 Kill de {len(ffmpeg_pids)} processus FFmpeg pour {channel_name}")
 
-        # Vérification finale
-        time.sleep(1)
-        for pid in pids:
-            try:
-                os.kill(pid, 0)
-                logger.error(f"⛔️ Le processus {pid} refuse de mourir!")
-            except ProcessLookupError:
-                logger.info(f"✅ Processus {pid} terminé")
+            # SIGTERM d'abord
+            for pid in ffmpeg_pids:
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                    logger.info(f"SIGTERM envoyé à {pid}")
+                except ProcessLookupError:
+                    continue
+
+            # On attend un peu
+            time.sleep(5)
+
+            # SIGKILL pour les survivants
+            survivors = set()
+            for pid in ffmpeg_pids:
+                try:
+                    os.kill(pid, 0)  # Test si le processus existe
+                    os.kill(pid, signal.SIGKILL)
+                    survivors.add(pid)
+                except ProcessLookupError:
+                    continue
+
+            if survivors:
+                # On force avec pkill en dernier recours
+                logger.warning(f"⚠️ {len(survivors)} processus résistants, utilisation de pkill")
+                subprocess.run(f"pkill -9 -f 'ffmpeg.*{channel_name}'", shell=True)
+                
+                # Dernière vérification
+                time.sleep(5)
+                still_alive = set(pid for pid in survivors if psutil.pid_exists(pid))
+                
+                if still_alive:
+                    logger.critical(f"💥 Impossible de tuer {len(still_alive)} processus, redémarrage forcé")
+                    #os._exit(1)
+                else:
+                    logger.info("✅ Tous les processus ont été tués")
+
+        except Exception as e:
+            logger.error(f"❌ Erreur nettoyage {channel_name}: {e}")
+            os._exit(1)
+                
     def update_watchers(self, channel_name: str, count: int, request_path: str):
         """Met à jour les watchers en fonction des requêtes m3u8 et ts"""
         try:
