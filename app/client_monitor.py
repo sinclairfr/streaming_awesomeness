@@ -6,7 +6,6 @@ from pathlib import Path
 from config import logger
 from typing import Dict, Tuple
 import re
-import threading
 
 class ClientMonitor(threading.Thread):
     def __init__(self, log_path, update_watchers_callback, manager):
@@ -87,7 +86,7 @@ class ClientMonitor(threading.Thread):
                         continue
                             
                     channel = match.group(1)
-                    logger.debug(f"🔍 Requête détectée: {ip} -> {channel} ({request})")
+                    logger.info(f"🔍 Requête détectée: {ip} -> {channel} ({request})")
 
                     # Update des watchers avec logs explicites
                     with self.lock:

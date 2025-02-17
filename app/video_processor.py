@@ -3,17 +3,94 @@ import shutil
 import subprocess
 from pathlib import Path
 from config import logger
+from queue import Queue
+import threading
 
 class VideoProcessor:
-    """
-    Gère la normalisation des vidéos seulement si nécessaire.
-    """
-
     def __init__(self, channel_dir: str):
         self.channel_dir = Path(channel_dir)
         self.processed_dir = self.channel_dir / "processed"
         self.processed_dir.mkdir(exist_ok=True)
+        self.processing_queue = Queue()
+        self.processed_files = []
+        self.processing_thread = None
+        self.processing_lock = threading.Lock()
 
+    def process_videos_async(self, videos: list = None):
+        """
+        Lance le traitement asynchrone des vidéos.
+        Si videos est None, scanne le dossier pour trouver les vidéos à traiter.
+        """
+        if self.processing_thread and self.processing_thread.is_alive():
+            logger.warning("🏃 Traitement déjà en cours")
+            return False
+
+        if videos is None:
+            videos = [
+                f for f in self.channel_dir.glob("*.mp4")
+                if not f.name.startswith("temp_")
+                and f.parent == self.channel_dir
+            ]
+
+        if not videos:
+            logger.warning("⚠️ Aucune vidéo à traiter")
+            return False
+
+        # On vide la queue et la liste des fichiers traités
+        while not self.processing_queue.empty():
+            self.processing_queue.get()
+        self.processed_files.clear()
+
+        # On remplit la queue
+        for video in videos:
+            self.processing_queue.put(video)
+
+        # On lance le thread de traitement
+        self.processing_thread = threading.Thread(
+            target=self._process_queue,
+            daemon=True
+        )
+        self.processing_thread.start()
+        return True
+
+    def _process_queue(self):
+        """Traite les vidéos dans la queue"""
+        while not self.processing_queue.empty():
+            video = self.processing_queue.get()
+            try:
+                processed = self.process_video(video)
+                if processed:
+                    with self.processing_lock:
+                        self.processed_files.append(processed)
+            except Exception as e:
+                logger.error(f"❌ Erreur traitement {video.name}: {e}")
+            finally:
+                self.processing_queue.task_done()
+
+    def wait_for_completion(self, timeout: int = 300) -> list:
+        """
+        Attend la fin du traitement des vidéos.
+        Retourne la liste des fichiers traités.
+        
+        Args:
+            timeout (int): Timeout en secondes
+            
+        Returns:
+            list: Liste des fichiers traités
+        """
+        if not self.processing_thread:
+            return []
+
+        start_time = time.time()
+        while self.processing_thread.is_alive():
+            if time.time() - start_time > timeout:
+                logger.error("⏰ Timeout pendant le traitement des vidéos")
+                return []
+            time.sleep(1)
+
+        with self.processing_lock:
+            processed = self.processed_files.copy()
+        return processed
 
     def is_already_optimized(self, video_path: Path) -> bool:
         """

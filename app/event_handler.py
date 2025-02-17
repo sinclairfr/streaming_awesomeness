@@ -28,7 +28,7 @@ class ChannelEventHandler(FileSystemEventHandler):
 
     def _process_pending_events(self):
         if self.pending_events:
-            logger.info(f"On traite {len(self.pending_events)} événements groupés")
+            logger.debug(f"On traite {len(self.pending_events)} événements groupés")
             self.manager.scan_channels()
             self.pending_events.clear()
             self.last_event_time = time.time()

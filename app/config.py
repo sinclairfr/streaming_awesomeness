@@ -16,12 +16,28 @@ NORMALIZATION_PARAMS = {
     "profile": "baseline",
     "level": "3.0",
 }
+def get_log_level(level_str: str) -> str:
+    """Valide et retourne un niveau de log valide"""
+    valid_levels = {
+        'DEBUG': logging.DEBUG,
+        'INFO': logging.INFO,
+        'WARNING': logging.WARNING,
+        'ERROR': logging.ERROR,
+        'CRITICAL': logging.CRITICAL
+    }
+    
+    # On nettoie la valeur d'entrée
+    level_str = level_str.strip().upper()
+    
+    # On retourne le niveau valide ou INFO par défaut
+    return valid_levels.get(level_str, logging.INFO)
 
 # On configure le niveau de logs
 logging.basicConfig(
-    level=os.getenv("LOG_LEVEL", "INFO"),
+    level=get_log_level(os.getenv("LOG_LEVEL", "INFO")),
     format="%(asctime)s - %(name)s - [%(levelname)s] - %(message)s",
 )
+
 
 logger = logging.getLogger(__name__)
 
