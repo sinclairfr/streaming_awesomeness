@@ -449,21 +449,7 @@ class IPTVManager:
             channel._clean_processes()
 
         logger.info("Nettoyage terminé")
-
-    def run(self):
-        try:
-            self.scan_channels()
-            #self.generate_master_playlist()
-            self.observer.start()
-
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            self.cleanup()
-        except Exception as e:
-            logger.error(f"🔥 Erreur manager : {e}")
-            self.cleanup()
-            
+        
     def _signal_handler(self, signum, frame):
         """# On gère les signaux système"""
         logger.info(f"Signal {signum} reçu, nettoyage...")
@@ -511,3 +497,24 @@ class IPTVManager:
 
         if ".m3u8" in request_path or ".ts" in request_path:
             self.update_watchers(channel_name, 1, request_path)
+    
+    def run(self):
+        try:
+            logger.debug("📥 Scan initial des chaînes...")
+            self.scan_channels()
+            logger.debug("🕵️ Démarrage de l'observer...")
+            self.observer.start()
+
+            # Debug du client_monitor
+            logger.debug("🚀 Démarrage du client_monitor...")
+            if not hasattr(self, 'client_monitor') or not self.client_monitor.is_alive():
+                logger.error("❌ client_monitor n'est pas démarré!")
+                
+            while True:
+                time.sleep(1)
+                
+        except KeyboardInterrupt:
+            self.cleanup()
+        except Exception as e:
+            logger.error(f"🔥 Erreur manager : {e}")
+            self.cleanup()

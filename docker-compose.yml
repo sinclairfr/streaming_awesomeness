@@ -1,6 +1,8 @@
 services:
   iptv-manager:
     container_name: iptv-manager
+    env_file:
+      - .env
     build: 
       context: .
       dockerfile: Dockerfile
@@ -17,14 +19,14 @@ services:
     environment:
       - PUID=1000
       - PGID=1000
-      - USE_GPU=False
-      - SERVER_URL=192.168.10.120
     restart: unless-stopped
 
   nginx:
     user: root
     container_name: iptv-nginx
     image: nginx:alpine
+    env_file:
+      - .env
     ports:
       - "80:80"
     volumes:

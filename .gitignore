@@ -7,3 +7,4 @@ env
 rebus/
 app/logs
 app/__pycache__/*
+app/__pycache__/
