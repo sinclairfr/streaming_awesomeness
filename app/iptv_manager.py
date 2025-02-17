@@ -98,39 +98,69 @@ class IPTVManager:
         while True:
             try:
                 current_time = time.time()
-                # On récupère d'abord tous les processus FFmpeg actifs
+                
+                # On maintient un dict des processus FFmpeg par chaîne
                 ffmpeg_processes = {}
+                
+                # On scanne tous les processus
                 for proc in psutil.process_iter(attrs=["pid", "name", "cmdline"]):
                     try:
                         if "ffmpeg" in proc.info["name"].lower():
-                            # On vérifie que cmdline existe et n'est pas None
-                            if proc.info.get("cmdline"):  # Ajout de cette vérification
-                                # On extrait le nom de la chaîne des arguments FFmpeg
-                                for arg in proc.info["cmdline"]:
-                                    if "/hls/" in str(arg):
-                                        channel_name = str(arg).split("/hls/")[1].split("/")[0]
-                                        if channel_name not in ffmpeg_processes:
-                                            ffmpeg_processes[channel_name] = []
-                                        ffmpeg_processes[channel_name].append(proc.info["pid"])
+                            if not proc.info.get("cmdline"):
+                                continue
+                                
+                            # On ne garde que le premier match pour chaque processus
+                            channel_found = False
+                            cmd_str = " ".join(str(arg) for arg in proc.info["cmdline"])
+                            for channel_name in self.channels:
+                                if f"/hls/{channel_name}/" in cmd_str and not channel_found:
+                                    channel_found = True
+                                    if channel_name not in ffmpeg_processes:
+                                        ffmpeg_processes[channel_name] = set()
+                                    ffmpeg_processes[channel_name].add(proc.info["pid"])
+                                    break  # On sort dès qu'on a trouvé une chaîne
+                                
+                            # Si on n'a pas trouvé de chaîne valide, c'est peut-être un zombie
+                            if not channel_found:
+                                try:
+                                    os.kill(proc.info["pid"], signal.SIGKILL)
+                                    logger.info(f"🧹 Nettoyage processus zombie FFmpeg: {proc.info['pid']}")
+                                except:
+                                    pass
+                                
                     except (psutil.NoSuchProcess, psutil.AccessDenied):
                         continue
 
-                # Pour chaque chaîne, on vérifie son état
+                # Pour chaque chaîne, on vérifie l'état
                 for channel_name, channel in self.channels.items():
-                    if channel_name in ffmpeg_processes:
-                        time_since_last_segment = current_time - channel.last_watcher_time
-                        if time_since_last_segment > 60:  # 20 secondes sans activité
-                            logger.warning(f"⚠️ {channel_name}: {len(ffmpeg_processes[channel_name])} processus FFmpeg actifs mais inactif depuis {time_since_last_segment:.1f}s")
-                            # Après:
-                            if channel_name in self.channels:
-                                self.channels[channel_name]._clean_processes()
+                    pids = ffmpeg_processes.get(channel_name, set())
+                    if len(pids) > 1:  # Plus d'un processus FFmpeg
+                        logger.warning(f"⚠️ {channel_name}: {len(pids)} processus FFmpeg actifs")
+                        
+                        # On garde le processus le plus récent
+                        newest_pid = max(pids, key=lambda pid: psutil.Process(pid).create_time())
+                        logger.info(f"[{channel_name}] Conservation du processus le plus récent: {newest_pid}")
+                        
+                        # On nettoie les autres
+                        for pid in pids:
+                            if pid != newest_pid:
+                                logger.info(f"[{channel_name}] Nettoyage ancien processus: {pid}")
+                                try:
+                                    os.kill(pid, signal.SIGKILL)
+                                except:
+                                    pass
+
+                    if channel.last_watcher_time and current_time - channel.last_watcher_time > 60:
+                        if channel.ffmpeg_process is not None:
+                            logger.info(f"⏹️ Arrêt FFmpeg pour {channel_name} (inactif depuis {current_time - channel.last_watcher_time:.1f}s)")
+                            channel._clean_processes()
 
                 time.sleep(10)  # Vérification toutes les 10s
 
             except Exception as e:
                 logger.error(f"❌ Erreur watchers_loop: {e}")
-                time.sleep(10)          
-
+                time.sleep(10)
+               
     def update_watchers(self, channel_name: str, count: int, request_path: str):
         """Met à jour les watchers en fonction des requêtes m3u8 et ts"""
         try:
@@ -175,6 +205,7 @@ class IPTVManager:
 
         except Exception as e:
             logger.error(f"❌ Erreur update_watchers: {e}")
+
     def _clean_startup(self):
         """# On nettoie avant de démarrer"""
         try:
