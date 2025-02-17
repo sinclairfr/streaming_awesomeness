@@ -9,7 +9,7 @@ from iptv_manager import IPTVManager
 from config import logger
 import threading
 import time
-
+import psutil
 
 class Application:
     def __init__(self):

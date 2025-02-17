@@ -88,23 +88,50 @@ class HLSCleaner:
             logger.error(f"Erreur vérification espace disque: {e}")
 
     def _cleanup_old_segments(self):
-        """Supprime les vieux segments"""
+        """On ne supprime que les segments vraiment obsolètes"""
         try:
             now = time.time()
             deleted_count = 0
-
-            for f in self.hls_dir.glob("**/*"):
-                if f.is_file() and f.suffix in ['.ts', '.m3u8']:
-                    if now - f.stat().st_mtime > self.max_hls_age:
-                        f.unlink()
-                        deleted_count += 1
+            
+            # On vérifie chaque dossier de chaîne
+            for channel_dir in self.hls_dir.glob("*"):
+                if not channel_dir.is_dir():
+                    continue
+                    
+                playlist = channel_dir / "playlist.m3u8"
+                if not playlist.exists():
+                    continue
+                    
+                # On lit la playlist pour identifier les segments actifs
+                active_segments = set()
+                try:
+                    with open(playlist) as f:
+                        for line in f:
+                            if line.strip().endswith('.ts'):
+                                active_segments.add(line.strip())
+                except Exception as e:
+                    logger.error(f"Erreur lecture playlist {playlist}: {e}")
+                    continue
+                    
+                # On ne supprime que les segments inactifs ET vieux
+                for segment in channel_dir.glob("*.ts"):
+                    if (
+                        segment.name not in active_segments 
+                        and now - segment.stat().st_mtime > self.max_hls_age
+                    ):
+                        try:
+                            segment.unlink()
+                            deleted_count += 1
+                            logger.debug(f"Segment supprimé: {segment}")
+                        except Exception as e:
+                            logger.error(f"Erreur suppression {segment}: {e}")
 
             if deleted_count > 0:
-                logger.info(f"🧹 {deleted_count} vieux segments supprimés")
+                logger.info(f"🧹 {deleted_count} segments obsolètes supprimés")
 
         except Exception as e:
             logger.error(f"Erreur nettoyage segments: {e}")
-
+            
     def _cleanup_orphaned_segments(self):
         """Supprime les segments non référencés"""
         try:

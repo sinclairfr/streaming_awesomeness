@@ -1,5 +1,6 @@
 # Utiliser l'image NVIDIA CUDA pour l'accélération matérielle
-FROM nvidia/cuda:11.8.0-base-ubuntu22.04
+#FROM nvidia/cuda:11.8.0-base-ubuntu22.04
+FROM ubuntu:22.04
 
 # Passer en root pour l'installation des paquets
 USER root
@@ -20,10 +21,17 @@ RUN echo "streamer ALL=(ALL) NOPASSWD: /usr/bin/kill" >> /etc/sudoers
 # Création d'un utilisateur non-root pour éviter les problèmes de permissions
 RUN useradd -m -s /bin/bash streamer
 
-# Définir les répertoires nécessaires et fixer les permissions
+# Après la création de l'utilisateur streamer
+RUN usermod -aG sudo streamer && \
+    echo "streamer ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers.d/streamer
+
+# Donne TOUS les droits sur /app
 RUN mkdir -p /app/hls /app/content /app/logs/ffmpeg && \
     chown -R streamer:streamer /app && \
-    chmod -R 777 /app/hls /app/content /app/logs
+    chmod -R 777 /app
+
+RUN sudo pip3 install --upgrade psutil
+RUN sudo pip3 install --upgrade watchdog
 
 # Passer à l'utilisateur non-root
 USER streamer
@@ -33,7 +41,7 @@ WORKDIR /app
 
 # Copier les fichiers nécessaires à l'application
 COPY --chown=streamer:streamer requirements.txt /app/
-COPY --chown=streamer:streamer app/*.py /app/
+#COPY --chown=streamer:streamer app/*.py /app/
 
 # Installation des dépendances Python
 RUN pip3 install --no-cache-dir -r /app/requirements.txt
