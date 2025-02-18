@@ -86,7 +86,7 @@ class ClientMonitor(threading.Thread):
                         continue
                             
                     channel = match.group(1)
-                    logger.info(f"🔍 Requête détectée: {ip} -> {channel} ({request})")
+                    logger.debug(f"🔍 Requête détectée: {ip} -> {channel} ({request})")
 
                     # Update des watchers avec logs explicites
                     with self.lock:
