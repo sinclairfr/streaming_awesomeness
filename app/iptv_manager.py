@@ -28,8 +28,8 @@ from pathlib import Path
 import subprocess  # Ajouter en haut du fichier
 import signal
 import os
-
 from ffmpeg_monitor import FFmpegMonitor 
+
 class IPTVManager:
     """
     # On gère toutes les chaînes, le nettoyage HLS, la playlist principale, etc.
@@ -39,6 +39,7 @@ class IPTVManager:
     VIDEO_EXTENSIONS = (".mp4", ".avi", ".mkv", ".mov")
     CPU_THRESHOLD = 85
     SEGMENT_AGE_THRESHOLD = 30  # En secondes
+    
 
     def __init__(self, content_dir: str, use_gpu: bool = False):
         self.ensure_hls_directory()  # Sans argument pour le dossier principal
@@ -94,6 +95,7 @@ class IPTVManager:
         self.watchers_thread.start()
 
     def _watchers_loop(self):
+        TIMEOUT_NO_VIEWERS = int(os.getenv("TIMEOUT_NO_VIEWERS", "60"))  # Par défaut 60s
         """Surveille l'activité des watchers et arrête les streams inutilisés"""
         while True:
             try:
@@ -150,7 +152,7 @@ class IPTVManager:
                                 except:
                                     pass
 
-                    if channel.last_watcher_time and current_time - channel.last_watcher_time > 60:
+                    if channel.last_watcher_time and current_time - channel.last_watcher_time > TIMEOUT_NO_VIEWERS:
                         if channel.ffmpeg_process is not None:
                             logger.info(f"⏹️ Arrêt FFmpeg pour {channel_name} (inactif depuis {current_time - channel.last_watcher_time:.1f}s)")
                             channel._clean_processes()

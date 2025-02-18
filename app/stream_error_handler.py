@@ -8,7 +8,7 @@ class StreamErrorHandler:
         self.channel_name = channel_name
         self.error_count = 0
         self.restart_count = 0
-        self.max_restarts = 3
+        self.max_restarts = 5
         self.restart_cooldown = 60
         self.last_restart_time = 0
         self.error_types = set()  # Pour tracker les types d'erreurs
@@ -20,6 +20,8 @@ class StreamErrorHandler:
         self.error_count += 1
         self.error_types.add(error_type)
         
+        logger.warning(f"[{self.channel_name}] Erreur détectée: {error_type}, total: {self.error_count}")
+
         # On regroupe les erreurs similaires
         if self.error_count >= 3 and len(self.error_types) >= 2:
             return self.should_restart()

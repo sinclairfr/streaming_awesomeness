@@ -45,6 +45,7 @@ class ResourceMonitor(threading.Thread):
                     f"{gpu_info}"
                 )
             except Exception as e:
+                logger.info(f"🔍 CPU: {cpu_percent}%, RAM: {ram_used_gb:.1f}/{ram_total_gb:.1f}GB")
                 logger.error(f"Erreur monitoring ressources: {e}")
 
             time.sleep(self.interval)

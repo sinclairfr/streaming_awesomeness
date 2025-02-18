@@ -17,6 +17,7 @@ import json
 from ffmpeg_logger import FFmpegLogger
 from stream_error_handler import StreamErrorHandler
 import signal  # On ajoute l'import signal
+import time  # Ajout si nécessaire
 
 class IPTVChannel:
     """
@@ -60,7 +61,7 @@ class IPTVChannel:
         # Variables de surveillance
         self.processed_videos = []
         self.restart_count = 0
-        self.max_restarts = 3
+        self.max_restarts = 5
         self.restart_cooldown = 60
         self.error_count = 0
         self.min_segment_size = 1024
@@ -98,34 +99,51 @@ class IPTVChannel:
         self.current_position = 0  # Pour tracker la position actuelle
         self.last_known_position = 0  # Pour sauvegarder la dernière position connue avant un arrêt
         
-    def _calculate_total_duration(self) -> float:
-        """Calcule la somme des durées de toutes les vidéos traitées pour cette chaîne."""
+    def _get_duration_with_retry(self, video, max_retries=2) -> float:
+        """Tente d'obtenir la durée d'une vidéo via ffprobe, avec plusieurs essais."""
+        for i in range(max_retries + 1):
+            duration = self._get_duration_once(video)
+            if duration > 0:
+                return duration
+            logger.warning(f"[{self.name}] ⚠️ Tentative {i+1}/{max_retries+1} échouée pour {video}")
+            time.sleep(0.5)  # Petit délai entre chaque essai
+        
+        return 0.0
+    
+    def _get_duration_once(self, video) -> float:
+        """Effectue un appel unique à ffprobe pour récupérer la durée d'une vidéo."""
+        cmd = [
+            "ffprobe", "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            str(video)
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        try:
+            return float(result.stdout.strip())
+        except ValueError:
+            return 0.0
+
+    def _calculate_total_duration(self, max_retries=2) -> float:
+        """Calcule la durée totale des vidéos traitées. Retente plusieurs fois avant d’abandonner."""
         total_duration = 0.0
+
         for video in self.processed_videos:
-            try:
-                cmd = [
-                    "ffprobe", "-v", "error",
-                    "-show_entries", "format=duration",
-                    "-of", "default=noprint_wrappers=1:nokey=1",
-                    str(video)
-                ]
-                result = subprocess.run(cmd, capture_output=True, text=True)
-                if result.returncode == 0:  # On vérifie que la commande a réussi
-                    duration = float(result.stdout.strip())
-                    if duration > 0:  # On vérifie que la durée est valide
-                        total_duration += duration
-                    else:
-                        logger.error(f"[{self.name}] Durée invalide pour {video}: {duration}")
-            except Exception as e:
-                logger.error(f"[{self.name}] Erreur durant la lecture de {video}: {e}")
-                
+            duration = self._get_duration_with_retry(video, max_retries)
+            if duration <= 0:
+                logger.error(f"[{self.name}] ❌ Impossible d'obtenir une durée valide pour {video}, on skip.")
+            else:
+                total_duration += duration
+
+        # Si la durée n'est pas trouvée après plusieurs essais, on met 3600s par défaut
         if total_duration <= 0:
-            logger.error(f"[{self.name}] ⚠️ Durée totale nulle ou invalide !")
-            total_duration = 3600  # Durée par défaut d'1h pour éviter les divisions par zéro
-            
+            logger.warning(f"[{self.name}] ⚠️ Durée inconnue, utilisation du fallback 120sec.")
+            return 120.00
+
         logger.info(f"[{self.name}] 📊 Durée totale calculée: {total_duration:.2f}s")
         return total_duration
-    
+
     def _build_input_params(self) -> list:
         """On construit les paramètres d'entrée FFmpeg"""
         params = [
@@ -215,8 +233,8 @@ class IPTVChannel:
         loop_count = 0
         hls_dir = Path(hls_dir)
         crash_threshold = 10
-        timeout_no_viewers = 60  
-
+        TIMEOUT_NO_VIEWERS = int(os.getenv("TIMEOUT_NO_VIEWERS", "60"))  # Par défaut 60s
+    
         while (
             not self.stop_event.is_set()
             and self.ffmpeg_process
@@ -240,7 +258,6 @@ class IPTVChannel:
                     logger.warning(f"📊 {self.name}: {ffmpeg_count} processus FFmpeg actifs")
                     self._last_ffmpeg_count = ffmpeg_count
 
-                # Le reste du code _monitor_ffmpeg existant...
                 # Lecture du fichier de progression et log toutes les 10s
                 if progress_file.exists():
                     with open(progress_file, 'r') as f:
@@ -270,7 +287,7 @@ class IPTVChannel:
                             self.error_handler.reset()
 
                 # Check inactivité viewers
-                if hasattr(self, 'last_watcher_time') and (current_time - self.last_watcher_time) > timeout_no_viewers:
+                if hasattr(self, 'last_watcher_time') and (current_time - self.last_watcher_time) > TIMEOUT_NO_VIEWERS:
                     logger.info(f"⏹️ Sauvegarde position {self.current_position}s et arrêt FFmpeg pour {self.name}")
                     self.last_known_position = self.current_position  # On sauvegarde la position
                     self._clean_processes()
@@ -471,7 +488,7 @@ class IPTVChannel:
         except Exception as e:
             logger.error(f"[{self.name}] ❌ Erreur vérification playlist: {e}")
             return False
-
+    
     def start_stream(self) -> bool:
         """Démarre le stream avec FFmpeg"""
         with self.lock:
@@ -536,8 +553,7 @@ class IPTVChannel:
 
             except Exception as e:
                 logger.error(f"Erreur démarrage stream {self.name}: {e}")
-                return False   
-    
+                return False  
     def _scan_videos(self) -> bool:
         """On scanne les fichiers vidéos et met à jour processed_videos en utilisant VideoProcessor"""
         try:
