@@ -52,7 +52,10 @@ class ResourceMonitor(threading.Thread):
             # Nettoie le dossier principal des logs
             for filename in os.listdir(logs_dir):
                 file_path = os.path.join(logs_dir, filename)
-                if os.path.isfile(file_path) and filename.endswith('.log'):
+                if os.path.isfile(file_path) and (
+                    filename.endswith('.log') or 
+                    '_ffmpeg.log' in filename  # On ajoute cette condition
+                ):
                     try:
                         open(file_path, 'w').close()
                         logger.info(f"🧹 Log nettoyé: {filename}")
@@ -62,7 +65,10 @@ class ResourceMonitor(threading.Thread):
             # Nettoie le dossier ffmpeg
             for filename in os.listdir(ffmpeg_logs_dir):
                 file_path = os.path.join(ffmpeg_logs_dir, filename)
-                if os.path.isfile(file_path) and filename.endswith('.log'):
+                if os.path.isfile(file_path) and (
+                    filename.endswith('.log') or 
+                    '_ffmpeg.log' in filename  # On ajoute cette condition
+                ):
                     try:
                         open(file_path, 'w').close()
                         logger.info(f"🧹 Log ffmpeg nettoyé: {filename}")
@@ -73,7 +79,7 @@ class ResourceMonitor(threading.Thread):
 
         except Exception as e:
             logger.error(f"Erreur lors du nettoyage des logs: {e}")
-
+    
     def run(self):
         try:
             CPU_CHECK_INTERVAL = float(os.getenv("CPU_CHECK_INTERVAL", "1"))

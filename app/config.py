@@ -23,7 +23,8 @@ FFMPEG_LOGS_DIR = os.getenv('FFMPEG_LOGS_DIR', '/app/logs/ffmpeg')
 
 USE_GPU = os.getenv('USE_GPU', 'false')
 
-def get_log_level(level_str: str) -> str:
+def get_log_level(level_str: str) -> int:
+    """Convertit un niveau de log en string vers sa valeur numérique"""
     valid_levels = {
         'DEBUG': logging.DEBUG,
         'INFO': logging.INFO,
@@ -31,12 +32,21 @@ def get_log_level(level_str: str) -> str:
         'ERROR': logging.ERROR,
         'CRITICAL': logging.CRITICAL
     }
+    # On retourne le niveau demandé ou INFO par défaut
+    return valid_levels.get(level_str.upper(), logging.INFO)
 
 logging.basicConfig(
     level=get_log_level(os.getenv("LOG_LEVEL", "INFO")),
     format="%(asctime)s - %(name)s - [%(levelname)s] - %(message)s",
+    handlers=[
+        logging.StreamHandler(),  # Pour afficher dans la console
+        logging.FileHandler("/app/logs/app.log")  # Pour sauvegarder dans un fichier
+    ]
 )
+# On s'assure que tous les loggers utilisent le même niveau
+logging.getLogger().setLevel(get_log_level(os.getenv("LOG_LEVEL", "INFO")))
 
+# On configure le logger pour les crashs
 logger = logging.getLogger(__name__)
 
 crash_logger = logging.getLogger("CrashTimer")

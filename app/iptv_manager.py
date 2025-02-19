@@ -97,8 +97,74 @@ class IPTVManager:
         self.watchers_thread.start()
         self.watchers_thread = threading.Thread(target=self._watchers_loop, daemon=True)
         self.running = True
-
+    
     def _watchers_loop(self):
+        """Surveille l'activité des watchers et arrête les streams inutilisés"""
+        while True:
+            try:
+                current_time = time.time()
+                channels_checked = set()  # Pour éviter les doublons
+
+                # Pour chaque chaîne, on vérifie l'activité
+                for channel_name, channel in self.channels.items():
+                    # On évite de vérifier deux fois la même chaîne
+                    if channel_name in channels_checked:
+                        continue
+                        
+                    if not hasattr(channel, 'last_watcher_time'):
+                        continue
+
+                    inactivity_duration = current_time - channel.last_watcher_time
+
+                    # Si pas de watcher depuis TIMEOUT_NO_VIEWERS secondes
+                    if inactivity_duration > TIMEOUT_NO_VIEWERS:
+                        if channel.ffmpeg_process is not None:
+                            logger.info(
+                                f"[{channel_name}] ⚠️ Inactivité détectée: "
+                                f"{inactivity_duration:.1f}s sans watcher"
+                            )
+                            channel.stop_stream_if_needed()
+                            
+                    channels_checked.add(channel_name)
+
+                # On maintient un dict des processus FFmpeg par chaîne
+                ffmpeg_processes = {}
+                for proc in psutil.process_iter(attrs=["pid", "name", "cmdline"]):
+                    try:
+                        if "ffmpeg" in proc.info["name"].lower():
+                            if not proc.info.get("cmdline"):
+                                continue
+
+                            cmd_str = " ".join(str(arg) for arg in proc.info["cmdline"])
+                            for channel_name in self.channels:
+                                if f"/hls/{channel_name}/" in cmd_str:
+                                    if channel_name not in ffmpeg_processes:
+                                        ffmpeg_processes[channel_name] = set()
+                                    ffmpeg_processes[channel_name].add(proc.info["pid"])
+                                    break
+
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        continue
+
+                # Nettoyage des processus zombies
+                for channel_name, pids in ffmpeg_processes.items():
+                    if len(pids) > 1:
+                        logger.warning(f"⚠️ {channel_name}: {len(pids)} processus FFmpeg actifs")
+                        newest_pid = max(pids, key=lambda pid: psutil.Process(pid).create_time())
+                        
+                        for pid in pids:
+                            if pid != newest_pid:
+                                try:
+                                    os.kill(pid, signal.SIGKILL)
+                                    logger.info(f"[{channel_name}] Nettoyage ancien processus: {pid}")
+                                except:
+                                    pass
+
+                time.sleep(10)  # Vérification toutes les 10s
+
+            except Exception as e:
+                logger.error(f"❌ Erreur watchers_loop: {e}")
+                time.sleep(10)
         """Surveille l'activité des watchers et arrête les streams inutilisés"""
         while True:
             try:
