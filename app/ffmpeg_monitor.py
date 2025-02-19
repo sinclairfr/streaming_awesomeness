@@ -61,13 +61,13 @@ class FFmpegMonitor(threading.Thread):
         # Pour chaque chaîne, on vérifie s'il y a plusieurs PIDs
         for channel_name, pids in ffmpeg_processes.items():
             # Log avant déduplication
-            logger.info(f"[{channel_name}] PIDs bruts (avant dedup) : {pids}")
+            logger.debug(f"[{channel_name}] PIDs bruts (avant dedup) : {pids}")
             
             # Déduplication
             pids = list(set(pids))
             
             # Log après déduplication
-            logger.info(f"[{channel_name}] PIDs après dedup : {pids}")
+            logger.debug(f"[{channel_name}] PIDs après dedup : {pids}")
             
             # On récupère la chaîne et calcule le temps depuis le dernier watcher
             if channel_name not in self.channels:

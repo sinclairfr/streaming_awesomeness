@@ -236,19 +236,9 @@ class IPTVChannel:
         )
 
     def _monitor_ffmpeg(self, hls_dir: str):
-        """On surveille le process FFmpeg et la génération des segments"""
         """
         Surveillance continue du processus FFmpeg et de la génération des segments HLS.
-
-        Cette méthode s'occupe de :
-        - Surveiller la création des segments HLS
-        - Vérifier l'activité des processus FFmpeg
-        - Gérer les timeouts et les erreurs
-        - Sauvegarder la position de lecture
-        - Arrêter le stream en cas d'inactivité
-
-        Args:
-            hls_dir (str): Chemin du dossier contenant les segments HLS
+        Gestion améliorée de la détection d'activité basée sur les requêtes réelles.
         """
         # Initialisation des variables de monitoring
         self.last_segment_time = time.time()
@@ -258,43 +248,40 @@ class IPTVChannel:
         loop_count = 0
         hls_dir = Path(hls_dir)
         crash_threshold = 10
-        TIMEOUT_NO_VIEWERS = int(os.getenv("TIMEOUT_NO_VIEWERS", "120"))  # Par défaut 60s
+        TIMEOUT_NO_VIEWERS = int(os.getenv("TIMEOUT_NO_VIEWERS", "120"))
 
-        # On boucle tant que le processus FFmpeg est actif
         # Boucle principale de surveillance
         while (
-            # On vérifie que le thread n'est pas arrêté
             not self.stop_event.is_set()
-            # On vérifie que la chaîne est active
             and self.ffmpeg_process
-            # On vérifie que le processus est actif
             and self.ffmpeg_process.poll() is None
         ):
             try:
                 current_time = time.time()
 
-                # Ajout du monitoring des processus FFmpeg
-                ffmpeg_count = 0
-                for proc in psutil.process_iter(attrs=["name", "cmdline"]):
-                    try:
-                        if ("ffmpeg" in proc.info["name"].lower() and
-                            proc.info.get("cmdline") and
-                            any(self.name in str(arg) for arg in proc.info["cmdline"])):
-                            ffmpeg_count += 1
-                    except (psutil.NoSuchProcess, psutil.AccessDenied):
-                        continue
-
+                # Vérification de l'inactivité réelle
+                if self._check_inactivity(current_time):
+                    logger.info(f"⏹️ Arrêt de {self.name} pour inactivité réelle")
+                    self._clean_processes()
+                    return
+                
                 # 1. Surveillance des processus FFmpeg
-                self._monitor_ffmpeg_processes()
-
+                ffmpeg_count = self._count_ffmpeg_processes()
                 if ffmpeg_count != getattr(self, '_last_ffmpeg_count', -1):
                     logger.info(f"📊 {self.name}: {ffmpeg_count} processus FFmpeg actifs")
                     self._last_ffmpeg_count = ffmpeg_count
 
-                # 2. Mise à jour de la position de lecture
-                self._update_playback_position(progress_file)
+                # 2. Vérification de l'activité des segments
+                recent_segments = list(Path(hls_dir).glob("*.ts"))
+                if recent_segments:
+                    newest_segment = max(recent_segments, key=lambda x: x.stat().st_mtime)
+                    newest_segment_time = newest_segment.stat().st_mtime
+                    if newest_segment_time > self.last_segment_time:
+                        self.last_segment_time = newest_segment_time
+                        self.last_known_position = self.current_position
+                        logger.debug(f"[{self.name}] 💾 Nouveau segment détecté, position: {self.last_known_position}s")
 
-                # Lecture du fichier de progression et log toutes les 10s
+                # 3. Mise à jour de la position de lecture via le fichier de progression
                 if progress_file.exists():
                     with open(progress_file, 'r') as f:
                         content = f.read()
@@ -303,47 +290,109 @@ class IPTVChannel:
                             if position_lines:
                                 self.current_position = int(position_lines[-1].split('=')[1]) // 1000000
                                 if time.time() % 10 < 1:  # Log toutes les ~10s
-                                    logger.info(f"⏱️ {self.name} - Position actuelle: {self.current_position}s, Dernière position sauvegardée: {self.last_known_position}s")
+                                    logger.debug(f"⏱️ {self.name} - Position: {self.current_position}s")
 
-                # 3. Vérification des segments HLS
-                self._check_segments(hls_dir)
+                # 4. Vérification des timeouts et de l'activité
+                inactive_time = current_time - self.last_watcher_time
+                segment_age = current_time - self.last_segment_time
+                
+                # Lecture de la sortie FFmpeg
+                for line in self.ffmpeg_process.stderr:
+                    if line:
+                        line = line.decode('utf-8').strip()
+                        if "error" in line.lower():
+                            error_type = self._categorize_ffmpeg_error(line)
+                            if self.error_handler.add_error(error_type):
+                                logger.error(f"[{self.name}] Erreur FFmpeg critique: {line}")
+                                self._restart_stream()
+                        elif "warning" in line.lower():
+                            logger.warning(f"[{self.name}] Warning FFmpeg: {line}")
+                        else:
+                            logger.debug(f"[{self.name}] FFmpeg: {line}")
+                            
+                # On ne considère le flux comme inactif que si:
+                # - Pas de requête HTTP récente ET
+                # - Pas de nouveau segment récent
+                if inactive_time > TIMEOUT_NO_VIEWERS and segment_age > TIMEOUT_NO_VIEWERS:
+                    # Double vérification des segments récents
+                    if recent_segments:
+                        newest_segment = max(recent_segments, key=lambda x: x.stat().st_mtime)
+                        last_segment_time = newest_segment.stat().st_mtime
+                        if current_time - last_segment_time > TIMEOUT_NO_VIEWERS:
+                            logger.warning(
+                                f"⚠️ {self.name} - Inactivité détectée:"
+                                f"\n- Dernière requête: il y a {inactive_time:.1f}s"
+                                f"\n- Dernier segment: il y a {current_time - last_segment_time:.1f}s"
+                            )
+                            self._clean_processes()
+                            return
+                    else:
+                        logger.warning(
+                            f"⚠️ {self.name} - Inactivité totale détectée:"
+                            f"\n- Dernière requête: il y a {inactive_time:.1f}s"
+                            f"\n- Aucun segment trouvé"
+                        )
+                        self._clean_processes()
+                        return
 
-                # Vérification segments
-                segments = list(Path(hls_dir).glob("*.ts"))
-                if segments:
-                    newest_segment = max(segments, key=lambda x: x.stat().st_mtime)
-                    if newest_segment.stat().st_mtime > self.last_segment_time:
-                        self.last_segment_time = newest_segment.stat().st_mtime
-                        # On sauvegarde la dernière position connue
-                        self.last_known_position = self.current_position
-                        logger.info(f"[{self.name}] 💾 Position mise à jour: {self.last_known_position}s")
-                # 4. Gestion des timeouts et erreurs
-                if self._handle_timeouts(current_time, crash_threshold):
-                    continue
-
-                # Vérifications timeout
+                # 5. Vérification des erreurs de streaming
                 if current_time - self.last_segment_time > crash_threshold:
-                    logger.error(f"🔥 Pas de nouveau segment pour {self.name} depuis {current_time - self.last_segment_time:.1f}s")
-                    if self.error_handler.add_error("segment_timeout"):
-                        if self._restart_stream():
-                            self.error_handler.reset()
+                    if not recent_segments:
+                        logger.error(f"🔥 {self.name} - Aucun segment généré depuis {crash_threshold}s")
+                        if self.error_handler.add_error("no_segments"):
+                            if self._restart_stream():
+                                self.error_handler.reset()
+                        continue
 
-                # Check inactivité viewers
-                if hasattr(self, 'last_watcher_time') and (current_time - self.last_watcher_time) > TIMEOUT_NO_VIEWERS:
-                    logger.info(f"⏹️ Sauvegarde position {self.current_position}s et arrêt FFmpeg pour {self.name}")
-                    self.last_known_position = self.current_position  # On sauvegarde la position
-                    self._clean_processes()
-                    return
+                # 6. Log périodique des métriques (toutes les 60s)
+                if time.time() % 60 < 1:
+                    try:
+                        stats = self.manager.client_monitor.get_channel_stats(self.name)
+                        logger.info(
+                            f"📊 {self.name} - Métriques:"
+                            f"\n- Segments: {len(recent_segments)}"
+                            f"\n- Dernier segment: il y a {segment_age:.1f}s"
+                            f"\n- Dernière requête: il y a {inactive_time:.1f}s"
+                            f"\n- Position: {self.current_position}s"
+                        )
+                    except:
+                        pass
 
-                # 5. Vérification de l'inactivité des viewers
-                if self._check_viewer_inactivity(current_time, timeout_no_viewers):
-                    return
-                    time.sleep(1)
+                time.sleep(1)
 
             except Exception as e:
                 logger.error(f"Erreur monitoring {self.name}: {e}")
-                logger.error(f"Erreur surveillance {self.name}: {e}")
+                logger.error(traceback.format_exc())
                 time.sleep(1)
+                
+        def _categorize_ffmpeg_error(self, error_line: str) -> str:
+            """Catégorise l'erreur FFmpeg pour un meilleur suivi"""
+            error_line = error_line.lower()
+            if "no such file" in error_line:
+                return "FILE_NOT_FOUND"
+            elif "permission denied" in error_line:
+                return "PERMISSION_ERROR"
+            elif "invalid data" in error_line:
+                return "INVALID_DATA"
+            elif "network" in error_line:
+                return "NETWORK_ERROR"
+            elif "buffer" in error_line:
+                return "BUFFER_ERROR"
+            else:
+                return "UNKNOWN_ERROR"
+            
+        def _count_ffmpeg_processes(self):
+            """Compte les processus FFmpeg pour cette chaîne"""
+            count = 0
+            for proc in psutil.process_iter(attrs=["name", "cmdline"]):
+                try:
+                    if ("ffmpeg" in proc.info["name"].lower() and
+                        proc.info.get("cmdline") and
+                        any(self.name in str(arg) for arg in proc.info["cmdline"])):
+                        count += 1
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+            return count
 
     def _monitor_ffmpeg_processes(self):
         """Compte et log le nombre de processus FFmpeg actifs pour cette chaîne"""
@@ -395,13 +444,24 @@ class IPTVChannel:
         return False
 
     def _check_viewer_inactivity(self, current_time, timeout):
-        """Vérifie l'inactivité des viewers et arrête le stream si nécessaire"""
-        if hasattr(self, 'last_watcher_time') and (current_time - self.last_watcher_time) > timeout:
-            logger.info(f"⏹️ Arrêt FFmpeg pour {self.name} (inactivité) - Position: {self.current_position}s")
-            self.last_known_position = self.current_position
-            self._clean_processes()
+        """Vérifie l'inactivité des viewers et gère l'arrêt du stream"""
+        if not hasattr(self, 'last_watcher_time'):
+            self.last_watcher_time = current_time
+            return False
+
+        # On ne vérifie l'inactivité que si le stream est actif
+        if not self.ffmpeg_process:
+            return False
+
+        inactivity_duration = current_time - self.last_watcher_time
+        
+        # On ajoute une marge de sécurité (120s au lieu de 60s)
+        if inactivity_duration > timeout + 60:  
+            logger.info(f"[{self.name}] ⚠️ Inactivité détectée: {inactivity_duration:.1f}s")
             return True
+            
         return False
+    
     def _restart_stream(self) -> bool:
         """# On redémarre le stream en forçant le cleanup"""
         try:
@@ -729,31 +789,89 @@ class IPTVChannel:
 
                 logger.info(f"Arrêt de FFmpeg pour {self.name} (offset mémorisé: {self.playback_offset:.2f}s)")
                 self._clean_processes()
-
+    
     def start_stream_if_needed(self) -> bool:
         with self.lock:
             if self.ffmpeg_process is not None:
-                return True  # Déjà en cours
+                return True  # Already running
 
-            # On met à jour le moment de reprise
+            # Update timestamps
             self.last_playback_time = time.time()
+            self.last_watcher_time = time.time()
 
-            # On réinitialise aussi le temps du dernier watcher
-            self.last_watcher_time = time.time()  # Ajout de cette ligne
-
-            # 🔹 Vérification automatique du dossier HLS
+            # Ensure HLS directory exists
             hls_path = Path(f"/app/hls/{self.name}")
             if not hls_path.exists():
-                logger.info(f"[{self.name}] 📂 Création automatique du dossier HLS")
+                logger.info(f"[{self.name}] 📂 Creating HLS directory")
                 hls_path.mkdir(parents=True, exist_ok=True)
                 os.chmod(hls_path, 0o777)
 
-            logger.info(f"[{self.name}] 🔄 Création du fichier _playlist.txt AVANT lancement du stream")
+            # Create playlist before starting stream
+            logger.info(f"[{self.name}] 🔄 Creating _playlist.txt")
             concat_file = self._create_concat_file()
 
             if not concat_file or not concat_file.exists():
-                logger.error(f"[{self.name}] ❌ _playlist.txt est introuvable, le stream NE PEUT PAS démarrer")
+                logger.error(f"[{self.name}] ❌ _playlist.txt not found, stream cannot start")
                 return False
 
             return self.start_stream()
 
+    def _check_inactivity(self, current_time: float) -> bool:
+        """Vérifie si le flux est réellement inactif"""
+        TIMEOUT_NO_VIEWERS = int(os.getenv("TIMEOUT_NO_VIEWERS", "120"))
+        
+        # Temps depuis la dernière requête client
+        time_since_last_request = current_time - self.last_watcher_time
+        
+        # Temps depuis le dernier segment demandé
+        time_since_last_segment = current_time - getattr(self, 'last_segment_time', 0)
+        
+        # Si l'un des deux est actif récemment, le flux n'est pas inactif
+        if time_since_last_request < TIMEOUT_NO_VIEWERS or time_since_last_segment < TIMEOUT_NO_VIEWERS:
+            return False
+            
+        logger.warning(
+            f"⚠️ {self.name} - Inactivité détectée:"
+            f"\n- Dernière requête: il y a {time_since_last_request:.1f}s"
+            f"\n- Dernier segment: il y a {time_since_last_segment:.1f}s"
+        )
+        return True
+    
+    def update_watchers(self, count: int):
+        """Mise à jour du nombre de watchers"""
+        with self.lock:
+            old_count = self.watcher_count
+            
+            # On ne log et ne fait rien si le count est identique
+            if old_count == count:
+                # Juste mise à jour du timestamp d'activité
+                self.last_watcher_time = time.time()
+                return
+                
+            # Log uniquement si le nombre change
+            self.watcher_count = count
+            logger.info(f"📊 Mise à jour {self.name}: {old_count} -> {count} watchers")
+                
+            # Actions basées sur le changement
+            if count > 0 and old_count == 0:
+                logger.info(f"[{self.name}] 🔥 Premier watcher, démarrage du stream")
+                self.start_stream_if_needed()
+            elif count == 0 and old_count > 0:
+                logger.info(f"[{self.name}] ⚠️ Plus de watchers recensés")
+        """Mise à jour du nombre de watchers"""
+        with self.lock:
+            old_count = self.watcher_count
+            self.watcher_count = count
+            
+            # Mise à jour du timestamp même si le count ne change pas
+            self.last_watcher_time = time.time()
+            
+            if old_count != count:
+                logger.info(f"📊 Mise à jour {self.name}: {count} watchers")
+                
+            # On ne démarre le stream que si c'est le premier watcher
+            if count > 0 and old_count == 0:
+                logger.info(f"[{self.name}] 🔥 Premier watcher, démarrage du stream")
+                self.start_stream_if_needed()
+            # On ne stoppe plus automatiquement quand count = 0
+            # Le cleanup sera géré par _check_viewer_inactivity

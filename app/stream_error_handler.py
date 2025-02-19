@@ -13,6 +13,19 @@ class StreamErrorHandler:
         self.last_restart_time = 0
         self.error_types = set()  # Pour tracker les types d'erreurs
 
+    def _log_crash(self, error_type: str):
+        """Log un crash dans le fichier crash_timer.log"""
+        try:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            with open(self.crash_log_path, "a") as f:
+                f.write(f"{timestamp} - [{self.channel_name}] Crash détecté: {error_type}\n")
+                f.write(f"  - Erreurs totales: {self.error_count}\n")
+                f.write(f"  - Redémarrages: {self.restart_count}/{self.max_restarts}\n")
+                f.write(f"  - Types d'erreurs: {', '.join(self.error_types)}\n")
+                f.write("-" * 80 + "\n")
+        except Exception as e:
+            logger.error(f"Erreur lors de l'écriture du log de crash: {e}")
+
     def add_error(self, error_type: str) -> bool:
         """
         Ajoute une erreur et retourne True si un restart est nécessaire
@@ -21,6 +34,9 @@ class StreamErrorHandler:
         self.error_types.add(error_type)
         
         logger.warning(f"[{self.channel_name}] Erreur détectée: {error_type}, total: {self.error_count}")
+        
+        # Log le crash
+        self._log_crash(error_type)
 
         # On regroupe les erreurs similaires
         if self.error_count >= 3 and len(self.error_types) >= 2:
@@ -39,7 +55,33 @@ class StreamErrorHandler:
             
         self.restart_count += 1
         self.last_restart_time = current_time
+        
+        # Log le redémarrage
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            with open(self.crash_log_path, "a") as f:
+                f.write(f"{timestamp} - [{self.channel_name}] Redémarrage #{self.restart_count}\n")
+                f.write("-" * 80 + "\n")
+        except Exception as e:
+            logger.error(f"Erreur lors de l'écriture du log de redémarrage: {e}")
+        
         self.error_count = 0
+        self.error_types.clear()
+        return True
+
+    def reset(self):
+        """Reset après un stream stable"""
+        if self.error_count > 0 or self.restart_count > 0:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            try:
+                with open(self.crash_log_path, "a") as f:
+                    f.write(f"{timestamp} - [{self.channel_name}] Reset des erreurs\n")
+                    f.write("-" * 80 + "\n")
+            except Exception as e:
+                logger.error(f"Erreur lors de l'écriture du log de reset: {e}")
+                
+        self.error_count = 0
+        self.restart_count = 0
         self.error_types.clear()
         return True
 

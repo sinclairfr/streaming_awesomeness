@@ -108,6 +108,22 @@ class ResourceMonitor(threading.Thread):
                     f"💻 Ressources - CPU: {cpu_percent}%, RAM: {ram_used_gb:.1f}/{ram_total_gb:.1f}GB ({ram.percent}%)"
                     f"{gpu_info}"
                 )
+                
+                # Monitoring des streams actifs
+                if hasattr(self, 'get_active_streams_status'):
+                    streams_status = self.get_active_streams_status()
+                    if streams_status:
+                        status_details = []
+                        for channel, info in streams_status.items():
+                            if 'error' not in info:
+                                status_details.append(
+                                    f"{channel}(PID:{info['pid']}, "
+                                    f"CPU:{info['cpu_percent']:.1f}%, "
+                                    f"⌚:{info['running_time']:.0f}s, "
+                                    f"👥:{info['watchers']})"
+                                )
+                        if status_details:
+                            logger.info(f"🎥 Streams actifs: {' | '.join(status_details)}")
 
             except Exception as e:
                 logger.error(f"Erreur monitoring ressources: {e}")

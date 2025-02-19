@@ -175,41 +175,30 @@ class IPTVManager:
 
             channel = self.channels[channel_name]
             
-            # On vérifie si l'état a vraiment changé
-            if not hasattr(channel, '_last_update_state'):
-                channel._last_update_state = {'count': -1, 'time': 0}
-                
-            current_time = time.time()
+            # Mise à jour SYSTÉMATIQUE du last_watcher_time à chaque requête
+            channel.last_watcher_time = time.time()
             
-            # On évite les mises à jour trop rapprochées avec les mêmes valeurs
-            if (count == channel._last_update_state['count'] and 
-                current_time - channel._last_update_state['time'] < 1):
-                return
+            # Si c'est une requête de segment, on met aussi à jour last_segment_time
+            if ".ts" in request_path:
+                channel.last_segment_time = time.time()
                 
-            # On met à jour l'état
-            channel._last_update_state['count'] = count
-            channel._last_update_state['time'] = current_time
-            
             old_count = channel.watchers_count
             channel.watchers_count = count
 
-            if ".ts" in request_path:
-                channel.last_segment_request = current_time
-
-            # On ne log que si quelque chose a vraiment changé
             if old_count != count:
                 logger.info(f"📊 Mise à jour {channel_name}: {count} watchers")
                 
                 if old_count == 0 and count > 0:
-                    logger.info(f"[{channel_name}] 🔥 APPEL de start_stream() (0 -> 1 watcher)")
+                    logger.info(f"[{channel_name}] 🔥 Premier watcher, démarrage du stream")
                     if not channel.start_stream():
                         logger.error(f"[{channel_name}] ❌ Échec démarrage stream")
                 elif old_count > 0 and count == 0:
-                    logger.info(f"[{channel_name}] 🛑 Plus aucun watcher, arrêt du stream...")
-                    channel.stop_stream_if_needed()
+                    # On ne coupe PAS immédiatement, on laisse le monitoring gérer ça
+                    logger.info(f"[{channel_name}] ⚠️ Plus de watchers recensés")
 
         except Exception as e:
             logger.error(f"❌ Erreur update_watchers: {e}")
+
 
     def _clean_startup(self):
         """# On nettoie avant de démarrer"""
