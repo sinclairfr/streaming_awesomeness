@@ -6,6 +6,12 @@ from pathlib import Path
 from config import logger
 import os
 import signal
+from config import (
+    TIMEOUT_NO_VIEWERS,
+    FFMPEG_LOG_LEVEL,
+    logger
+)
+
 
 class FFmpegMonitor(threading.Thread):
     """
@@ -29,7 +35,6 @@ class FFmpegMonitor(threading.Thread):
 
     def _check_all_ffmpeg_processes(self):
         
-        TIMEOUT_NO_VIEWERS = int(os.getenv("TIMEOUT_NO_VIEWERS", "120"))  # Par défaut 60s
 
         """
         Parcourt tous les processus pour voir lesquels sont liés à FFmpeg,
@@ -152,7 +157,6 @@ class FFmpegMonitor(threading.Thread):
         """
         Vérifie si un processus est actif en fonction des watchers.
         """
-        TIMEOUT_NO_VIEWERS = int(os.getenv("TIMEOUT_NO_VIEWERS", "120"))  # Par défaut 60s
 
         channel = self.channels.get(channel_name)
         if channel:

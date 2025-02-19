@@ -6,6 +6,8 @@ from pathlib import Path
 import os
 import logging
 
+from config import logger
+
 # Logger
 logger = logging.getLogger("HLS_CLEANER")
 

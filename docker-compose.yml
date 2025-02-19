@@ -1,9 +1,11 @@
+version: '3.8'
+
 services:
   iptv-manager:
     container_name: iptv-manager
     env_file:
       - .env
-    build: 
+    build:
       context: .
       dockerfile: Dockerfile
     #user: "1000:1000"  # Exécuter en tant qu'utilisateur non-root (streamer)
@@ -16,6 +18,7 @@ services:
       - ./nginx_logs:/var/log/nginx:rw
       - ./app:/app:rw  # Regroupe tous les fichiers de l'application
       - ./requirements.txt:/app/requirements.txt:rw
+      - /mnt/videos/streaming_awesomeness:/mnt/videos/streaming_awesomeness
     environment:
       - PUID=1000
       - PGID=1000

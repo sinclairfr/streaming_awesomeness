@@ -4,10 +4,13 @@ import subprocess
 import psutil
 from config import logger
 import os
-from dotenv import load_dotenv
-
-# On charge les variables d'environnement
-load_dotenv()
+from config import (
+    RESOURCES_CHECK_INTERVAL,
+    CPU_CHECK_INTERVAL,
+    CPU_THRESHOLD,
+    logger,
+    FFMPEG_LOGS_DIR
+)
 
 def safe_int_conversion(value, default):
     """Convertit une valeur en int de manière sécurisée"""
@@ -23,11 +26,10 @@ def safe_int_conversion(value, default):
 class ResourceMonitor(threading.Thread):
     def __init__(self):
         try:
-            RESOURCES_CHECK_INTERVAL = float(os.getenv("RESOURCES_CHECK_INTERVAL", "60"))
             CPU_THRESHOLD = float(os.getenv("CPU_THRESHOLD", "95"))
         except ValueError as e:
             logger.error(f"Erreur de conversion des variables d'environnement: {e}")
-            RESOURCES_CHECK_INTERVAL = 60
+            #RESOURCES_CHECK_INTERVAL = 60
             CPU_THRESHOLD = 95
 
         super().__init__()
@@ -38,7 +40,7 @@ class ResourceMonitor(threading.Thread):
 
     def flush_logs(self):
         """Nettoie tous les logs au démarrage"""
-        ffmpeg_logs_dir = os.getenv("FFMPEG_LOGS_DIR", "/app/logs")
+        ffmpeg_logs_dir = FFMPEG_LOGS_DIR
         logs_dir = os.getenv("LOGS_DIR", "/app/logs")
 
         logger.info("✨ Nettoyage des logs en cours...")

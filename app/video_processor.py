@@ -197,23 +197,3 @@ class VideoProcessor:
         else:
             logger.error(f"❌ Erreur FFmpeg: {process.stderr}")
             return None
-
-    def is_large_resolution(self, video_path: Path) -> bool:
-        """
-        Vérifie si la résolution d'une vidéo est > 1080p.
-        """
-        cmd = [
-            "ffprobe", "-v", "error",
-            "-select_streams", "v:0",
-            "-show_entries", "stream=width,height",
-            "-of", "json",
-            str(video_path)
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        try:
-            video_info = json.loads(result.stdout)
-            width = int(video_info["streams"][0]["width"])
-            height = int(video_info["streams"][0]["height"])
-            return width > 1920 or height > 1080
-        except (KeyError, IndexError, json.JSONDecodeError):
-            return False

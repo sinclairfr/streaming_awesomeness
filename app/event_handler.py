@@ -3,6 +3,8 @@ import time
 import threading
 from watchdog.events import FileSystemEventHandler
 from config import logger
+from dotenv import load_dotenv
+load_dotenv()
 
 # Classe pour gérer les événements de changement de fichiers dans le répertoire des chaînes
 class ChannelEventHandler(FileSystemEventHandler):

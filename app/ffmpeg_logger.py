@@ -1,6 +1,8 @@
 # ffmpeg_logger.py
 import logging
 from pathlib import Path
+from config import logger
+
 
 class FFmpegLogger:
     """

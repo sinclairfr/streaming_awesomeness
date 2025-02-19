@@ -10,6 +10,11 @@ from config import logger
 import threading
 import time
 import psutil
+from config import (
+    CONTENT_DIR,
+    USE_GPU,
+    logger
+)
 
 class Application:
     def __init__(self):
@@ -31,11 +36,11 @@ class Application:
         """On initialise l'environnement"""
         try:
             # On vérifie/crée les dossiers requis
-            for d in ["/app/content", "/app/hls", "/app/logs", "/app/logs/ffmpeg"]:
+            for d in [CONTENT_DIR, "/app/hls", "/app/logs", "/app/logs/ffmpeg"]:
                 Path(d).mkdir(parents=True, exist_ok=True)
                 
             # On vérifie les permissions
-            for d in ["/app/content", "/app/hls", "/app/logs"]:
+            for d in [CONTENT_DIR, "/app/hls", "/app/logs"]:
                 path = Path(d)
                 if not os.access(str(path), os.W_OK):
                     logger.error(f"❌ Pas de droits d'écriture sur {d}")
@@ -60,8 +65,8 @@ class Application:
             try:
                 if not self.manager:
                     # On instancie le manager avec le chemin du contenu
-                    use_gpu = os.getenv("USE_GPU", "auto").lower() == "auto"
-                    self.manager = IPTVManager("/app/content", use_gpu=use_gpu)
+                    use_gpu = USE_GPU.lower()
+                    self.manager = IPTVManager(CONTENT_DIR, use_gpu=use_gpu)
                 
                 # On lance le manager
                 self.manager.run()

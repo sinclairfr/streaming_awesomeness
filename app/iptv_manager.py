@@ -13,11 +13,6 @@ from pathlib import Path
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 import threading
-from config import (
-    logger,
-    SERVER_URL,
-    NGINX_ACCESS_LOG
-)
 from event_handler import ChannelEventHandler
 from hls_cleaner import HLSCleaner
 from client_monitor import ClientMonitor
@@ -28,10 +23,14 @@ from pathlib import Path
 import subprocess  # Ajouter en haut du fichier
 import signal
 import os
-from ffmpeg_monitor import FFmpegMonitor 
-from dotenv import load_dotenv
-# On charge les variables d'environnement
-load_dotenv()
+from ffmpeg_monitor import FFmpegMonitor
+from config import (
+    CONTENT_DIR,
+    NGINX_ACCESS_LOG,
+    SERVER_URL,
+    TIMEOUT_NO_VIEWERS,
+    logger
+)
 
 class IPTVManager:
     """
@@ -42,11 +41,11 @@ class IPTVManager:
     VIDEO_EXTENSIONS = (".mp4", ".avi", ".mkv", ".mov")
     CPU_THRESHOLD = 85
     SEGMENT_AGE_THRESHOLD = 30  # En secondes
-    
+
 
     def __init__(self, content_dir: str, use_gpu: bool = False):
         self.ensure_hls_directory()  # Sans argument pour le dossier principal
-        
+
         self.content_dir = content_dir
         self.use_gpu = use_gpu
         self.channels = {}
@@ -96,24 +95,41 @@ class IPTVManager:
             daemon=True
         )
         self.watchers_thread.start()
+        self.watchers_thread = threading.Thread(target=self._watchers_loop, daemon=True)
+        self.running = True
 
     def _watchers_loop(self):
-        TIMEOUT_NO_VIEWERS = int(os.getenv("TIMEOUT_NO_VIEWERS", "120"))  # Par défaut 60s
         """Surveille l'activité des watchers et arrête les streams inutilisés"""
         while True:
             try:
                 current_time = time.time()
-                
+
+                # Pour chaque chaîne, on vérifie l'activité
+                for channel_name, channel in self.channels.items():
+                    if not hasattr(channel, 'last_watcher_time'):
+                        continue
+
+                    inactivity_duration = current_time - channel.last_watcher_time
+
+                    # Si pas de watcher depuis TIMEOUT_NO_VIEWERS secondes
+                    if inactivity_duration > TIMEOUT_NO_VIEWERS:
+                        logger.info(
+                            f"[{channel_name}] ⚠️ Inactivité détectée: "
+                            f"{inactivity_duration:.1f}s sans watcher"
+                        )
+                        # On utilise stop_stream_if_needed au lieu de _clean_processes
+                        channel.stop_stream_if_needed()
+
                 # On maintient un dict des processus FFmpeg par chaîne
                 ffmpeg_processes = {}
-                
+
                 # On scanne tous les processus
                 for proc in psutil.process_iter(attrs=["pid", "name", "cmdline"]):
                     try:
                         if "ffmpeg" in proc.info["name"].lower():
                             if not proc.info.get("cmdline"):
                                 continue
-                                
+
                             # On ne garde que le premier match pour chaque processus
                             channel_found = False
                             cmd_str = " ".join(str(arg) for arg in proc.info["cmdline"])
@@ -124,7 +140,7 @@ class IPTVManager:
                                         ffmpeg_processes[channel_name] = set()
                                     ffmpeg_processes[channel_name].add(proc.info["pid"])
                                     break  # On sort dès qu'on a trouvé une chaîne
-                                
+
                             # Si on n'a pas trouvé de chaîne valide, c'est peut-être un zombie
                             if not channel_found:
                                 try:
@@ -132,7 +148,7 @@ class IPTVManager:
                                     logger.info(f"🧹 Nettoyage processus zombie FFmpeg: {proc.info['pid']}")
                                 except:
                                     pass
-                                
+
                     except (psutil.NoSuchProcess, psutil.AccessDenied):
                         continue
 
@@ -141,11 +157,11 @@ class IPTVManager:
                     pids = ffmpeg_processes.get(channel_name, set())
                     if len(pids) > 1:  # Plus d'un processus FFmpeg
                         logger.warning(f"⚠️ {channel_name}: {len(pids)} processus FFmpeg actifs")
-                        
+
                         # On garde le processus le plus récent
                         newest_pid = max(pids, key=lambda pid: psutil.Process(pid).create_time())
                         logger.info(f"[{channel_name}] Conservation du processus le plus récent: {newest_pid}")
-                        
+
                         # On nettoie les autres
                         for pid in pids:
                             if pid != newest_pid:
@@ -165,7 +181,7 @@ class IPTVManager:
             except Exception as e:
                 logger.error(f"❌ Erreur watchers_loop: {e}")
                 time.sleep(10)
-               
+
     def update_watchers(self, channel_name: str, count: int, request_path: str):
         """Met à jour les watchers en fonction des requêtes m3u8 et ts"""
         try:
@@ -174,20 +190,20 @@ class IPTVManager:
                 return
 
             channel = self.channels[channel_name]
-            
+
             # Mise à jour SYSTÉMATIQUE du last_watcher_time à chaque requête
             channel.last_watcher_time = time.time()
-            
+
             # Si c'est une requête de segment, on met aussi à jour last_segment_time
             if ".ts" in request_path:
                 channel.last_segment_time = time.time()
-                
+
             old_count = channel.watchers_count
             channel.watchers_count = count
 
             if old_count != count:
                 logger.info(f"📊 Mise à jour {channel_name}: {count} watchers")
-                
+
                 if old_count == 0 and count > 0:
                     logger.info(f"[{channel_name}] 🔥 Premier watcher, démarrage du stream")
                     if not channel.start_stream():
@@ -198,7 +214,6 @@ class IPTVManager:
 
         except Exception as e:
             logger.error(f"❌ Erreur update_watchers: {e}")
-
 
     def _clean_startup(self):
         """# On nettoie avant de démarrer"""
@@ -322,11 +337,11 @@ class IPTVManager:
                     os.chmod(channel_hls, 0o777)
         except Exception as e:
             logger.error(f"❌ Erreur création dossiers HLS: {e}")
-            
+
     def _is_channel_ready(self, channel_name: str) -> bool:
         """# On vérifie si une chaîne a des vidéos traitées"""
         try:
-            channel_dir = Path(f"/app/content/{channel_name}")
+            channel_dir = Path(f"{CONTENT_DIR}/{channel_name}")
             processed_dir = channel_dir / "processed"
             if not processed_dir.exists():
                 return False
@@ -393,39 +408,29 @@ class IPTVManager:
             return []
 
     def _clean_channel(self, channel_name: str):
-        """# Nettoyage approfondi d'une chaîne"""
+        """Nettoie une chaîne"""
         try:
-            self.hls_cleaner.cleanup_channel(channel_name)
-            hls_dir = Path(f"/app/hls/{channel_name}")
-            if hls_dir.exists():
-                shutil.rmtree(hls_dir)
-            hls_dir.mkdir(parents=True, exist_ok=True)
+            if channel_name in self.channels:
+                channel = self.channels[channel_name]
 
-            channel_dir = Path(f"/app/content/{channel_name}")
-            if channel_dir.exists():
-                for pattern in ["_playlist.txt", "*.vtt", "temp_*"]:
-                    for f in channel_dir.glob(pattern):
-                        try:
-                            f.unlink()
-                        except Exception as e:
-                            logger.error(f"Erreur suppression {f}: {e}")
+                # Vérifier la playlist avant nettoyage
+                channel._verify_playlist()
 
-            logger.info(f"Nettoyage terminé pour {channel_name}")
+                # Arrêter le stream si actif
+                if channel.ffmpeg_process:
+                    channel.ffmpeg_process.terminate()
+                    channel.ffmpeg_process = None
+
+                # Nettoyer les fichiers HLS
+                if self.hls_cleaner:
+                    self.hls_cleaner.cleanup_channel(channel_name)
+
+                # Supprimer la chaîne
+                del self.channels[channel_name]
+                logger.info(f"🧹 Chaîne nettoyée: {channel_name}")
+
         except Exception as e:
             logger.error(f"Erreur nettoyage {channel_name}: {e}")
-
-    def _needs_update(self, channel_dir: Path) -> bool:
-        """# On vérifie sommairement si un dossier a pu être mis à jour"""
-        try:
-            logger.debug(f"Vérification mises à jour: {channel_dir.name}")
-            video_files = list(channel_dir.glob("*.mp4"))
-            if not video_files:
-                logger.info(f"Aucun fichier dans {channel_dir.name}")
-                return True
-            return True
-        except Exception as e:
-            logger.error(f"Erreur needs_update {channel_dir}: {e}")
-            return True
 
     def _manage_master_playlist(self):
         """
@@ -447,7 +452,7 @@ class IPTVManager:
 
                 logger.info(f"Playlist mise à jour ({len(self.channels)} chaînes)")
                 time.sleep(60)  # On attend 60s avant la prochaine mise à jour
-                
+
             except Exception as e:
                 logger.error(f"Erreur maj master playlist: {e}")
                 logger.error(traceback.format_exc())
@@ -466,7 +471,7 @@ class IPTVManager:
             channel._clean_processes()
 
         logger.info("Nettoyage terminé")
-        
+
     def _signal_handler(self, signum, frame):
         """# On gère les signaux système"""
         logger.info(f"Signal {signum} reçu, nettoyage...")
@@ -475,6 +480,9 @@ class IPTVManager:
 
     def run(self):
         try:
+            # Démarrer la boucle de surveillance des watchers
+            self.watchers_thread.start()
+            logger.info("🔄 Boucle de surveillance des watchers démarrée")
             logger.debug("📥 Scan initial des chaînes...")
             self.scan_channels()
             logger.debug("🕵️ Démarrage de l'observer...")
@@ -484,10 +492,10 @@ class IPTVManager:
             logger.debug("🚀 Démarrage du client_monitor...")
             if not hasattr(self, 'client_monitor') or not self.client_monitor.is_alive():
                 logger.error("❌ client_monitor n'est pas démarré!")
-                
+
             while True:
                 time.sleep(1)
-                
+
         except KeyboardInterrupt:
             self.cleanup()
         except Exception as e:

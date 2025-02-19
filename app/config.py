@@ -1,23 +1,29 @@
 # config.py
-
-# On configure le logging et définit les constantes globales
 import os
 import logging
+from pathlib import Path
+from dotenv import load_dotenv
+load_dotenv()
 
-# On définit les constantes
-SERVER_URL = os.getenv("SERVER_URL", "192.168.10.183")
-NGINX_ACCESS_LOG = os.getenv("NGINX_ACCESS_LOG", "/var/log/nginx/access.log")
 
-# On définit les paramètres de normalisation attendus
-NORMALIZATION_PARAMS = {
-    "codec_name": "h264",
-    "pix_fmt": "yuv420p",
-    "r_frame_rate": "25/1",
-    "profile": "baseline",
-    "level": "3.0",
-}
+# Configuration des chemins
+LOG_DIR = os.getenv("LOG_DIR", "/logs")
+CONTENT_DIR = Path(os.getenv('CONTENT_DIR', '/mnt/videos/streaming_awesomeness/content'))
+NGINX_ACCESS_LOG = os.getenv('NGINX_ACCESS_LOG', '/var/log/nginx/access.log')
+SERVER_URL = os.getenv('SERVER_URL', '192.168.10.183')
+
+# Configuration des timeouts
+TIMEOUT_NO_VIEWERS = int(os.getenv('TIMEOUT_NO_VIEWERS', '120'))
+RESOURCES_CHECK_INTERVAL = int(os.getenv('RESOURCES_CHECK_INTERVAL', '60'))
+CPU_CHECK_INTERVAL = float(os.getenv('CPU_CHECK_INTERVAL', '1'))
+CPU_THRESHOLD = int(os.getenv('CPU_THRESHOLD', '95'))
+
+FFMPEG_LOG_LEVEL = os.getenv('FFMPEG_LOG_LEVEL', 'info')
+FFMPEG_LOGS_DIR = os.getenv('FFMPEG_LOGS_DIR', '/app/logs/ffmpeg')
+
+USE_GPU = os.getenv('USE_GPU', 'false')
+
 def get_log_level(level_str: str) -> str:
-    """Valide et retourne un niveau de log valide"""
     valid_levels = {
         'DEBUG': logging.DEBUG,
         'INFO': logging.INFO,
@@ -25,23 +31,14 @@ def get_log_level(level_str: str) -> str:
         'ERROR': logging.ERROR,
         'CRITICAL': logging.CRITICAL
     }
-    
-    # On nettoie la valeur d'entrée
-    level_str = level_str.strip().upper()
-    
-    # On retourne le niveau valide ou INFO par défaut
-    return valid_levels.get(level_str, logging.INFO)
 
-# On configure le niveau de logs
 logging.basicConfig(
     level=get_log_level(os.getenv("LOG_LEVEL", "INFO")),
     format="%(asctime)s - %(name)s - [%(levelname)s] - %(message)s",
 )
 
-
 logger = logging.getLogger(__name__)
 
-# On configure un logger pour le minuteur de crash
 crash_logger = logging.getLogger("CrashTimer")
 if not crash_logger.handlers:
     crash_handler = logging.FileHandler("/app/logs/crash_timer.log")
