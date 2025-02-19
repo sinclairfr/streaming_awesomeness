@@ -23,7 +23,6 @@ class IPTVChannel:
     """
     # On gère une chaîne IPTV, son streaming et sa surveillance
     """
-
     def __init__(
         self,
         name: str,
@@ -73,11 +72,6 @@ class IPTVChannel:
         self.last_segment_time = 0
         self.start_offset = 0
 
-        # Gestion de la position de lecture
-        self.total_duration = self._calculate_total_duration()
-        self.playback_offset = random.uniform(0, self.total_duration) if self.total_duration > 0 else 0
-        self.last_playback_time = time.time()  # Pour calculer le temps écoulé
-        
         # On scanne les vidéos pour remplir self.processed_videos
         self._scan_videos()
 
@@ -89,16 +83,18 @@ class IPTVChannel:
             logger.info(f"[{self.name}] Offset initial = {self.start_offset:.2f}s")
         else:
             self.start_offset = 0
-    
+
+        # Gestion de la position de lecture
+        self.last_playback_time = time.time()  # Pour calculer le temps écoulé
+
         # offset
         self.watchers_count = 0
         self.channel_offset = 0.0
-        self.channel_paused_at = None  # Pour mémoriser le moment où on coupe FFmpeg
         self.last_watcher_time = time.time()  # On initialise au démarrage
 
         self.current_position = 0  # Pour tracker la position actuelle
         self.last_known_position = 0  # Pour sauvegarder la dernière position connue avant un arrêt
-        
+
     def _get_duration_with_retry(self, video, max_retries=2) -> float:
         """Tente d'obtenir la durée d'une vidéo via ffprobe, avec plusieurs essais."""
         for i in range(max_retries + 1):
@@ -107,9 +103,9 @@ class IPTVChannel:
                 return duration
             logger.warning(f"[{self.name}] ⚠️ Tentative {i+1}/{max_retries+1} échouée pour {video}")
             time.sleep(0.5)  # Petit délai entre chaque essai
-        
+
         return 0.0
-    
+
     def _get_duration_once(self, video) -> float:
         """Effectue un appel unique à ffprobe pour récupérer la durée d'une vidéo."""
         cmd = [
@@ -119,7 +115,7 @@ class IPTVChannel:
             str(video)
         ]
         result = subprocess.run(cmd, capture_output=True, text=True)
-        
+
         try:
             return float(result.stdout.strip())
         except ValueError:
@@ -136,7 +132,7 @@ class IPTVChannel:
             else:
                 total_duration += duration
 
-        # Si la durée n'est pas trouvée après plusieurs essais, on met 3600s par défaut
+        # Si la durée n'est pas trouvée après plusieurs essais, on met 120s par défaut
         if total_duration <= 0:
             logger.warning(f"[{self.name}] ⚠️ Durée inconnue, utilisation du fallback 120sec.")
             return 120.00
@@ -146,48 +142,51 @@ class IPTVChannel:
 
     def _build_input_params(self) -> list:
         """On construit les paramètres d'entrée FFmpeg"""
+        FFMPEG_LOG_LEVEL = os.getenv("FFMPEG_LOG_LEVEL", "info").lower()
+
         params = [
             "ffmpeg",
-            "-hide_banner", 
-            "-loglevel", "warning",
+            "-hide_banner",
+            "-loglevel", FFMPEG_LOG_LEVEL,
             "-y",
             "-re",
             "-progress", str(self.logger.get_progress_file()),
             "-fflags", "+genpts+igndts",
         ]
-        
+
         try:
             # On s'assure que total_duration est valide
             if not hasattr(self, 'total_duration') or self.total_duration <= 0:
                 self.total_duration = self._calculate_total_duration()
-            
+
             # On calcule l'offset actuel en tenant compte du temps écoulé
             current_time = time.time()
             elapsed = current_time - self.last_playback_time
-            
+
             # On s'assure que l'offset est initialisé
             if not hasattr(self, 'playback_offset'):
+                logger.info("Offset non intiliaisé, on le définit au hasard.")
                 self.playback_offset = random.uniform(0, self.total_duration)
-                
+
+            # On calcule l'offset total
             total_offset = self.playback_offset
             if elapsed > 0:
                 total_offset = (self.playback_offset + elapsed) % self.total_duration
-                
+
             logger.info(f"[{self.name}] Reprise lecture à {total_offset:.2f}s (total: {self.total_duration:.2f}s)")
-            
+
             if total_offset > 0:
                 params.extend(["-ss", f"{total_offset}"])
         except Exception as e:
-            logger.error(f"[{self.name}] Erreur calcul offset: {e}")
-            # En cas d'erreur, on continue sans offset
-        
+            logger.error(f"[{self.name}] Erreur calcul offset: {e}, on continue sans.")
+
         params.extend([
             "-f", "concat",
             "-safe", "0",
             "-stream_loop", "-1",
             "-i", str(self._create_concat_file()),
         ])
-        
+
         return params
 
     def _build_encoding_params(self) -> list:
@@ -200,9 +199,9 @@ class IPTVChannel:
                 "-c:a", "aac",
                 "-b:a", "128k"
             ]
-        
+
         return ["-c", "copy"]  # Copy tout simplement
-        
+
     def _build_hls_params(self, hls_dir: str) -> list:
         """On configure les paramètres HLS"""
         return [
@@ -217,15 +216,41 @@ class IPTVChannel:
         ]
 
     def _build_ffmpeg_command(self, hls_dir: str) -> list:
-        """On construit la commande FFmpeg complète"""
+        """
+        Builds the complete FFmpeg command by combining input, encoding and HLS parameters.
+
+        This method concatenates the parameters from:
+        - _build_input_params(): Input related parameters for FFmpeg
+        - _build_encoding_params(): Video/audio encoding parameters
+        - _build_hls_params(): HLS streaming specific parameters
+
+        Args:
+            hls_dir (str): Directory path where HLS segments will be saved
+        Returns:
+            list: Complete FFmpeg command as a list of string arguments
+        """
         return (
             self._build_input_params() +
             self._build_encoding_params() +
             self._build_hls_params(hls_dir)
         )
-    
+
     def _monitor_ffmpeg(self, hls_dir: str):
         """On surveille le process FFmpeg et la génération des segments"""
+        """
+        Surveillance continue du processus FFmpeg et de la génération des segments HLS.
+
+        Cette méthode s'occupe de :
+        - Surveiller la création des segments HLS
+        - Vérifier l'activité des processus FFmpeg
+        - Gérer les timeouts et les erreurs
+        - Sauvegarder la position de lecture
+        - Arrêter le stream en cas d'inactivité
+
+        Args:
+            hls_dir (str): Chemin du dossier contenant les segments HLS
+        """
+        # Initialisation des variables de monitoring
         self.last_segment_time = time.time()
         last_segment_number = -1
         progress_file = self.logger.get_progress_file()
@@ -233,11 +258,16 @@ class IPTVChannel:
         loop_count = 0
         hls_dir = Path(hls_dir)
         crash_threshold = 10
-        TIMEOUT_NO_VIEWERS = int(os.getenv("TIMEOUT_NO_VIEWERS", "60"))  # Par défaut 60s
-    
+        TIMEOUT_NO_VIEWERS = int(os.getenv("TIMEOUT_NO_VIEWERS", "120"))  # Par défaut 60s
+
+        # On boucle tant que le processus FFmpeg est actif
+        # Boucle principale de surveillance
         while (
+            # On vérifie que le thread n'est pas arrêté
             not self.stop_event.is_set()
+            # On vérifie que la chaîne est active
             and self.ffmpeg_process
+            # On vérifie que le processus est actif
             and self.ffmpeg_process.poll() is None
         ):
             try:
@@ -247,16 +277,22 @@ class IPTVChannel:
                 ffmpeg_count = 0
                 for proc in psutil.process_iter(attrs=["name", "cmdline"]):
                     try:
-                        if ("ffmpeg" in proc.info["name"].lower() and 
+                        if ("ffmpeg" in proc.info["name"].lower() and
                             proc.info.get("cmdline") and
                             any(self.name in str(arg) for arg in proc.info["cmdline"])):
                             ffmpeg_count += 1
                     except (psutil.NoSuchProcess, psutil.AccessDenied):
                         continue
-                
+
+                # 1. Surveillance des processus FFmpeg
+                self._monitor_ffmpeg_processes()
+
                 if ffmpeg_count != getattr(self, '_last_ffmpeg_count', -1):
-                    logger.warning(f"📊 {self.name}: {ffmpeg_count} processus FFmpeg actifs")
+                    logger.info(f"📊 {self.name}: {ffmpeg_count} processus FFmpeg actifs")
                     self._last_ffmpeg_count = ffmpeg_count
+
+                # 2. Mise à jour de la position de lecture
+                self._update_playback_position(progress_file)
 
                 # Lecture du fichier de progression et log toutes les 10s
                 if progress_file.exists():
@@ -269,6 +305,9 @@ class IPTVChannel:
                                 if time.time() % 10 < 1:  # Log toutes les ~10s
                                     logger.info(f"⏱️ {self.name} - Position actuelle: {self.current_position}s, Dernière position sauvegardée: {self.last_known_position}s")
 
+                # 3. Vérification des segments HLS
+                self._check_segments(hls_dir)
+
                 # Vérification segments
                 segments = list(Path(hls_dir).glob("*.ts"))
                 if segments:
@@ -277,7 +316,10 @@ class IPTVChannel:
                         self.last_segment_time = newest_segment.stat().st_mtime
                         # On sauvegarde la dernière position connue
                         self.last_known_position = self.current_position
-                        logger.debug(f"[{self.name}] 💾 Position mise à jour: {self.last_known_position}s")
+                        logger.info(f"[{self.name}] 💾 Position mise à jour: {self.last_known_position}s")
+                # 4. Gestion des timeouts et erreurs
+                if self._handle_timeouts(current_time, crash_threshold):
+                    continue
 
                 # Vérifications timeout
                 if current_time - self.last_segment_time > crash_threshold:
@@ -293,12 +335,73 @@ class IPTVChannel:
                     self._clean_processes()
                     return
 
-                time.sleep(1)
+                # 5. Vérification de l'inactivité des viewers
+                if self._check_viewer_inactivity(current_time, timeout_no_viewers):
+                    return
+                    time.sleep(1)
 
             except Exception as e:
                 logger.error(f"Erreur monitoring {self.name}: {e}")
+                logger.error(f"Erreur surveillance {self.name}: {e}")
                 time.sleep(1)
 
+    def _monitor_ffmpeg_processes(self):
+        """Compte et log le nombre de processus FFmpeg actifs pour cette chaîne"""
+        ffmpeg_count = 0
+        for proc in psutil.process_iter(attrs=["name", "cmdline"]):
+            try:
+                if ("ffmpeg" in proc.info["name"].lower() and
+                    proc.info.get("cmdline") and
+                    any(self.name in str(arg) for arg in proc.info["cmdline"])):
+                    ffmpeg_count += 1
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+
+        # Log uniquement si le nombre a changé
+        if ffmpeg_count != getattr(self, '_last_ffmpeg_count', -1):
+            logger.warning(f"📊 {self.name}: {ffmpeg_count} processus FFmpeg actifs")
+            self._last_ffmpeg_count = ffmpeg_count
+
+    def _update_playback_position(self, progress_file):
+        """Met à jour et log la position de lecture actuelle"""
+        if progress_file.exists():
+            with open(progress_file, 'r') as f:
+                content = f.read()
+                if 'out_time_ms=' in content:
+                    position_lines = [l for l in content.split('\n') if 'out_time_ms=' in l]
+                    if position_lines:
+                        self.current_position = int(position_lines[-1].split('=')[1]) // 1000000
+                        if time.time() % 10 < 1:  # Log toutes les ~10s
+                            logger.info(f"⏱️ {self.name} - Position: {self.current_position}s (Sauvegardée: {self.last_known_position}s)")
+
+    def _check_segments(self, hls_dir):
+        """Vérifie la création de nouveaux segments HLS"""
+        segments = list(hls_dir.glob("*.ts"))
+        if segments:
+            newest_segment = max(segments, key=lambda x: x.stat().st_mtime)
+            if newest_segment.stat().st_mtime > self.last_segment_time:
+                self.last_segment_time = newest_segment.stat().st_mtime
+                self.last_known_position = self.current_position
+                logger.info(f"[{self.name}] 💾 Position mise à jour: {self.last_known_position}s")
+
+    def _handle_timeouts(self, current_time, crash_threshold):
+        """Gère les timeouts et redémarre le stream si nécessaire"""
+        if current_time - self.last_segment_time > crash_threshold:
+            logger.error(f"🔥 Pas de nouveau segment pour {self.name} depuis {current_time - self.last_segment_time:.1f}s")
+            if self.error_handler.add_error("segment_timeout"):
+                if self._restart_stream():
+                    self.error_handler.reset()
+                return True
+        return False
+
+    def _check_viewer_inactivity(self, current_time, timeout):
+        """Vérifie l'inactivité des viewers et arrête le stream si nécessaire"""
+        if hasattr(self, 'last_watcher_time') and (current_time - self.last_watcher_time) > timeout:
+            logger.info(f"⏹️ Arrêt FFmpeg pour {self.name} (inactivité) - Position: {self.current_position}s")
+            self.last_known_position = self.current_position
+            self._clean_processes()
+            return True
+        return False
     def _restart_stream(self) -> bool:
         """# On redémarre le stream en forçant le cleanup"""
         try:
@@ -324,23 +427,23 @@ class IPTVChannel:
         except Exception as e:
             logger.error(f"Erreur lors du redémarrage de {self.name}: {e}")
             return False
-    
+
     def log_ffmpeg_processes(self):
         """On vérifie et log le nombre de processus FFmpeg uniquement s'il y a un changement"""
         ffmpeg_count = 0
         for proc in psutil.process_iter(attrs=["name", "cmdline"]):
             try:
-                if ("ffmpeg" in proc.info["name"].lower() and 
+                if ("ffmpeg" in proc.info["name"].lower() and
                     proc.info.get("cmdline") and  # On vérifie que cmdline existe
                     any(self.name in str(arg) for arg in proc.info["cmdline"])):
                     ffmpeg_count += 1
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
-        
+
         # On stocke le dernier count connu
         if not hasattr(self, '_last_ffmpeg_count'):
             self._last_ffmpeg_count = -1
-        
+
         # On log uniquement si le nombre a changé
         if ffmpeg_count != self._last_ffmpeg_count:
             logger.warning(f"📊 {self.name}: {ffmpeg_count} processus FFmpeg actifs")
@@ -352,7 +455,7 @@ class IPTVChannel:
             try:
                 if not self.ffmpeg_process:
                     return
-                    
+
                 pid = self.ffmpeg_process.pid
                 logger.info(f"🧹 Nettoyage du process FFmpeg {pid} pour {self.name}")
 
@@ -407,28 +510,28 @@ class IPTVChannel:
                     pass
 
                 logger.warning(f"⚠️ Impossible de tuer le process {pid} pour {self.name}")
-                
+
             except Exception as e:
                 logger.error(f"Erreur nettoyage pour {self.name}: {e}")
             finally:
-                self.ffmpeg_process = None                
-    
+                self.ffmpeg_process = None
+
     def _create_concat_file(self) -> Optional[Path]:
         """Crée le fichier de concaténation avec les bons chemins"""
         try:
             logger.info(f"[{self.name}] 🛠️ Création de _playlist.txt")
-            
+
             # On utilise des chemins absolus
             processed_dir = Path("/app/content") / self.name / "processed"
             concat_file = Path("/app/content") / self.name / "_playlist.txt"
-            
+
             processed_files = sorted(processed_dir.glob("*.mp4"))
             if not processed_files:
                 logger.error(f"[{self.name}] ❌ Aucune vidéo dans {processed_dir}")
                 return None
 
             logger.info(f"[{self.name}] 📝 Écriture de _playlist.txt")
-            
+
             with open(concat_file, "w", encoding="utf-8") as f:
                 for video in processed_files:
                     # On utilise le chemin absolu complet
@@ -441,7 +544,7 @@ class IPTVChannel:
         except Exception as e:
             logger.error(f"[{self.name}] ❌ Erreur _playlist.txt: {e}")
             return None
-    
+
     def _verify_playlist(self):
         """On vérifie que le fichier playlist est valide"""
         try:
@@ -449,24 +552,24 @@ class IPTVChannel:
             if not playlist_path.exists():
                 logger.error(f"[{self.name}] ❌ _playlist.txt n'existe pas")
                 return False
-                
+
             with open(playlist_path, 'r') as f:
                 lines = f.readlines()
-                
+
             if not lines:
                 logger.error(f"[{self.name}] ❌ _playlist.txt est vide")
                 return False
-                
+
             valid_count = 0
             for i, line in enumerate(lines, 1):
                 line = line.strip()
                 if not line:
                     continue
-                    
+
                 if not line.startswith('file'):
                     logger.error(f"[{self.name}] ❌ Ligne {i} invalide: {line}")
                     return False
-                    
+
                 try:
                     file_path = line.split("'")[1] if "'" in line else line.split()[1]
                     file_path = Path(file_path)
@@ -477,18 +580,18 @@ class IPTVChannel:
                 except Exception as e:
                     logger.error(f"[{self.name}] ❌ Erreur parsing ligne {i}: {e}")
                     return False
-                    
+
             if valid_count == 0:
                 logger.error(f"[{self.name}] ❌ Aucun fichier valide dans la playlist")
                 return False
-                
+
             logger.info(f"[{self.name}] ✅ Playlist valide avec {valid_count} fichiers")
             return True
-            
+
         except Exception as e:
             logger.error(f"[{self.name}] ❌ Erreur vérification playlist: {e}")
             return False
-    
+
     def start_stream(self) -> bool:
         """Démarre le stream avec FFmpeg"""
         with self.lock:
@@ -553,7 +656,8 @@ class IPTVChannel:
 
             except Exception as e:
                 logger.error(f"Erreur démarrage stream {self.name}: {e}")
-                return False  
+                return False
+
     def _scan_videos(self) -> bool:
         """On scanne les fichiers vidéos et met à jour processed_videos en utilisant VideoProcessor"""
         try:
@@ -576,13 +680,13 @@ class IPTVChannel:
             # Pour chaque vidéo source
             for source in source_files:
                 processed_file = processed_dir / f"{source.stem}.mp4"
-                
+
                 # Si déjà dans processed/
                 if processed_file.exists():
                     logger.info(f"🔄 Vidéo déjà présente dans processed/: {source.name}")
                     self.processed_videos.append(processed_file)
                     continue
-                    
+
                 # On utilise uniquement VideoProcessor pour traiter/vérifier
                 if self.processor.is_already_optimized(source):
                     logger.info(f"✅ Vidéo déjà optimisée: {source.name}, copie directe")
@@ -622,10 +726,10 @@ class IPTVChannel:
                 elapsed = current_time - self.last_playback_time
                 self.playback_offset = (self.playback_offset + elapsed) % self.total_duration
                 self.last_playback_time = current_time
-                
+
                 logger.info(f"Arrêt de FFmpeg pour {self.name} (offset mémorisé: {self.playback_offset:.2f}s)")
                 self._clean_processes()
-                
+
     def start_stream_if_needed(self) -> bool:
         with self.lock:
             if self.ffmpeg_process is not None:
@@ -633,8 +737,10 @@ class IPTVChannel:
 
             # On met à jour le moment de reprise
             self.last_playback_time = time.time()
+
             # On réinitialise aussi le temps du dernier watcher
             self.last_watcher_time = time.time()  # Ajout de cette ligne
+
             # 🔹 Vérification automatique du dossier HLS
             hls_path = Path(f"/app/hls/{self.name}")
             if not hls_path.exists():
@@ -644,9 +750,10 @@ class IPTVChannel:
 
             logger.info(f"[{self.name}] 🔄 Création du fichier _playlist.txt AVANT lancement du stream")
             concat_file = self._create_concat_file()
-            
+
             if not concat_file or not concat_file.exists():
                 logger.error(f"[{self.name}] ❌ _playlist.txt est introuvable, le stream NE PEUT PAS démarrer")
                 return False
 
             return self.start_stream()
+

@@ -30,8 +30,8 @@ RUN mkdir -p /app/hls /app/content /app/logs/ffmpeg && \
     chown -R streamer:streamer /app && \
     chmod -R 777 /app
 
-RUN sudo pip3 install --upgrade psutil
-RUN sudo pip3 install --upgrade watchdog
+# Installation des dépendances Python
+RUN pip3 install --no-cache-dir --upgrade psutil watchdog tqdm python-dotenv
 
 # Passer à l'utilisateur non-root
 USER streamer

@@ -29,6 +29,9 @@ import subprocess  # Ajouter en haut du fichier
 import signal
 import os
 from ffmpeg_monitor import FFmpegMonitor 
+from dotenv import load_dotenv
+# On charge les variables d'environnement
+load_dotenv()
 
 class IPTVManager:
     """
@@ -95,7 +98,7 @@ class IPTVManager:
         self.watchers_thread.start()
 
     def _watchers_loop(self):
-        TIMEOUT_NO_VIEWERS = int(os.getenv("TIMEOUT_NO_VIEWERS", "60"))  # Par défaut 60s
+        TIMEOUT_NO_VIEWERS = int(os.getenv("TIMEOUT_NO_VIEWERS", "120"))  # Par défaut 60s
         """Surveille l'activité des watchers et arrête les streams inutilisés"""
         while True:
             try:
@@ -428,7 +431,7 @@ class IPTVManager:
             logger.debug(f"Vérification mises à jour: {channel_dir.name}")
             video_files = list(channel_dir.glob("*.mp4"))
             if not video_files:
-                logger.debug(f"Aucun fichier dans {channel_dir.name}")
+                logger.info(f"Aucun fichier dans {channel_dir.name}")
                 return True
             return True
         except Exception as e:

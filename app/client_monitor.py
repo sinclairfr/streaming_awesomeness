@@ -86,7 +86,7 @@ class ClientMonitor(threading.Thread):
                         continue
                             
                     channel = match.group(1)
-                    logger.debug(f"🔍 Requête détectée: {ip} -> {channel} ({request})")
+                    logger.info(f"🔍 Requête détectée: {ip} -> {channel} ({request})")
 
                     # Update des watchers avec logs explicites
                     with self.lock:
@@ -94,7 +94,7 @@ class ClientMonitor(threading.Thread):
                         self.watchers[(channel, ip)] = time.time()
                         new_count = len([1 for (ch, _), ts in self.watchers.items() if ch == channel])
                         
-                        logger.debug(f"🔄 Update watchers {channel}: {old_count} -> {new_count}")
+                        logger.info(f"🔄 Update watchers {channel}: {old_count} -> {new_count}")
                         self.update_watchers(channel, new_count, request)
 
         except Exception as e:
