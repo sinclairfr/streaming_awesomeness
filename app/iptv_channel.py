@@ -204,7 +204,18 @@ class IPTVChannel:
                 "-b:a", "128k"
             ]
 
-        return ["-c", "copy"]  # Copy tout simplement
+        # Force conversion for MKV files
+        if any(file.suffix.lower() == ".mkv" for file in self.processed_videos):
+            logger.info(f"[{self.name}] 📺 MKV détecté, conversion forcée")
+            return [
+                "-c:v", "h264",
+                "-preset", "fast",
+                "-b:v", self.video_bitrate,
+                "-c:a", "aac",
+                "-b:a", "128k"
+            ]
+
+        return ["-c", "copy"]  # Copy direct pour formats compatibles
 
     def _build_hls_params(self, hls_dir: str) -> list:
         """On configure les paramètres HLS"""
@@ -529,11 +540,10 @@ class IPTVChannel:
         try:
             logger.info(f"[{self.name}] 🛠️ Création de _playlist.txt")
 
-            # On utilise des chemins absolus
             processed_dir = Path(CONTENT_DIR) / self.name / "processed"
             concat_file = Path(CONTENT_DIR) / self.name / "_playlist.txt"
 
-            processed_files = sorted(processed_dir.glob("*.mp4"))
+            processed_files = sorted(processed_dir.glob("*.mp4")) + sorted(processed_dir.glob("*.mkv"))
             if not processed_files:
                 logger.error(f"[{self.name}] ❌ Aucune vidéo dans {processed_dir}")
                 return None
@@ -542,7 +552,6 @@ class IPTVChannel:
 
             with open(concat_file, "w", encoding="utf-8") as f:
                 for video in processed_files:
-                    # On utilise le chemin absolu complet
                     f.write(f"file '{str(video.absolute())}'\n")
                     logger.info(f"[{self.name}] ✅ Ajout de {video.name}")
 
@@ -552,7 +561,7 @@ class IPTVChannel:
         except Exception as e:
             logger.error(f"[{self.name}] ❌ Erreur _playlist.txt: {e}")
             return None
-
+        
     def _verify_playlist(self):
         """On vérifie que le fichier playlist est valide"""
         try:
