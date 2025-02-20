@@ -30,6 +30,8 @@ RUN apt-get update && apt-get install -y \
     
 # Permettre à l'utilisateur streamer d'utiliser sudo pour kill
 RUN echo "streamer ALL=(ALL) NOPASSWD: /usr/bin/kill" >> /etc/sudoers
+# Après la création de l'utilisateur streamer
+RUN echo "streamer ALL=(ALL) NOPASSWD: /bin/kill, /usr/bin/kill, /bin/pkill" >> /etc/sudoers.d/streamer
 
 # Création d'un utilisateur non-root pour éviter les problèmes de permissions
 RUN useradd -m -s /bin/bash streamer

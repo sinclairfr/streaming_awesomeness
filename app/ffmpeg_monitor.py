@@ -34,8 +34,6 @@ class FFmpegMonitor(threading.Thread):
                 time.sleep(10)
 
     def _check_all_ffmpeg_processes(self):
-        
-
         """
         Parcourt tous les processus pour voir lesquels sont liés à FFmpeg,
         groupés par nom de chaîne. Puis gère le nettoyage des processus
@@ -51,10 +49,8 @@ class FFmpegMonitor(threading.Thread):
                     cmd_args = proc.info["cmdline"] or []
                     cmd_str = " ".join(cmd_args)
                     
-                    # TODO : utiliser iptvchannel active_ffmpeg_pids ?
                     # Détecte le nom de la chaîne si "/hls/<channel_name>/" est présent
                     for channel_name in self.channels:
-                        # Si la chaîne apparaît dans la ligne de commande
                         if f"/hls/{channel_name}/" in cmd_str:
                             ffmpeg_processes.setdefault(channel_name, []).append(proc.info["pid"])
                             break  # On s'arrête après la première correspondance
@@ -75,20 +71,25 @@ class FFmpegMonitor(threading.Thread):
             logger.debug(f"[{channel_name}] PIDs après dedup : {pids}")
             
             # On récupère la chaîne et calcule le temps depuis le dernier watcher
-            if channel_name not in self.channels:
+            channel = self.channels.get(channel_name)
+            if not channel:
                 continue
-            
-            channel = self.channels[channel_name]
+                
             time_since_last_watcher = current_time - channel.last_watcher_time
             
-            # S'il y a plus d'un PID et qu'on n'a pas de watchers depuis 20s (par ex.)
-            logger.info(f"On inspect la chaîne [{channel_name}], nombre de process : {len(pids)} et temps depuis dernier watcher : {time_since_last_watcher:.1f}s")
+            # S'il y a plus d'un PID et qu'on n'a pas de watchers depuis TIMEOUT_NO_VIEWERS
+            logger.info(
+                f"On inspect la chaîne [{channel_name}], nombre de process : {len(pids)} "
+                f"et temps depuis dernier watcher : {time_since_last_watcher:.1f}s"
+            )
 
-            if time_since_last_watcher > TIMEOUT_NO_VIEWERS and len(pids) > 1:
-                logger.warning(f"⚠️ {channel_name}: {len(pids)} processus FFmpeg actifs "
-                            f"mais certains inactifs depuis {time_since_last_watcher:.1f}s")
+            if time_since_last_watcher > TIMEOUT_NO_VIEWERS or len(pids) > 1:
+                logger.warning(
+                    f"⚠️ {channel_name}: {len(pids)} processus FFmpeg actifs "
+                    f"mais inactifs depuis {time_since_last_watcher:.1f}s"
+                )
                 self._cleanup_zombie_processes(channel_name, pids)
-
+    
     def _cleanup_zombie_processes(self, channel_name: str, pids: list):
         """
         Nettoie les processus FFmpeg zombies pour une chaîne donnée,
@@ -153,15 +154,40 @@ class FFmpegMonitor(threading.Thread):
                 except psutil.NoSuchProcess:
                     continue
 
-    def _is_process_active(self, channel_name: str, pid: int) -> bool:
+    def _is_process_active(self, channel_name: str, pid: int) -> bool   :
         """
-        Vérifie si un processus est actif en fonction des watchers.
+        Vérifie si un processus est actif en fonction des watchers et du temps d'inactivité
         """
-
         channel = self.channels.get(channel_name)
-        if channel:
-            current_time = time.time()
-            time_since_last_watcher = current_time - channel.last_watcher_time
-            if time_since_last_watcher <= TIMEOUT_NO_VIEWERS:
-                return True
-        return False
+        if not channel:
+            return False
+
+        # On récupère le statut des watchers
+        watchers_active = channel.watchers_count > 0
+        
+        # On vérifie le temps d'inactivité
+        current_time = time.time()
+        time_since_last_watcher = current_time - channel.last_watcher_time
+        
+        # Si pas de watchers depuis plus de TIMEOUT_NO_VIEWERS ou watchers_count = 0
+        if not watchers_active or time_since_last_watcher > TIMEOUT_NO_VIEWERS:
+            try:
+                # On tente de tuer le processus proprement
+                process = psutil.Process(pid)
+                process.terminate()
+                time.sleep(1)  # On laisse une seconde pour la terminaison propre
+                
+                # Si toujours en vie, on force
+                if process.is_running():
+                    process.kill()
+                    
+                logger.info(f"[{channel_name}] Process {pid} nettoyé (inactif depuis {time_since_last_watcher:.1f}s)")
+                    
+            except psutil.NoSuchProcess:
+                pass
+            except Exception as e:
+                logger.error(f"[{channel_name}] Erreur nettoyage process {pid}: {e}")
+                
+            return False
+            
+        return True

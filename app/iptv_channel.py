@@ -160,8 +160,13 @@ class IPTVChannel:
 
         try:
             # On s'assure que total_duration est valide
-            if not hasattr(self, 'total_duration') or self.total_duration <= 0:
+            if not self.total_duration:
                 self.total_duration = self._calculate_total_duration()
+                
+            # On vérifie qu'on a bien une durée valide avant de continuer
+            if not self.total_duration or self.total_duration <= 0:
+                logger.warning(f"[{self.name}] Impossible de calculer la durée totale, on skip l'offset")
+                return params
 
             # On calcule l'offset actuel en tenant compte du temps écoulé
             current_time = time.time()
@@ -181,6 +186,7 @@ class IPTVChannel:
 
             if total_offset > 0:
                 params.extend(["-ss", f"{total_offset}"])
+
         except Exception as e:
             logger.error(f"[{self.name}] Erreur calcul offset: {e}, on continue sans.")
 
@@ -192,7 +198,7 @@ class IPTVChannel:
         ])
 
         return params
-
+    
     def _build_encoding_params(self) -> list:
             """Paramètres d'encodage simplifiés"""
             if self.fallback_mode:
@@ -511,58 +517,45 @@ class IPTVChannel:
                     self.last_known_position = self.current_position
                     logger.info(f"💾 Sauvegarde position {self.name}: {self.last_known_position}s")
 
-                # D'abord on essaie gentiment avec SIGTERM
+                # On essaie d'abord avec sudo kill -15 (SIGTERM)
                 try:
-                    self.ffmpeg_process.terminate()
-                    try:
-                        self.ffmpeg_process.wait(timeout=5)
-                        logger.info(f"✅ Process {pid} terminé proprement")
-                        self.ffmpeg_process = None
-                        return
-                    except subprocess.TimeoutExpired:
-                        pass
-                except:
-                    pass
-
-                # Si ça marche pas, SIGKILL
-                try:
-                    os.kill(pid, signal.SIGKILL)
+                    subprocess.run(['sudo', 'kill', '-15', str(pid)], check=True)
                     time.sleep(2)
                     if not psutil.pid_exists(pid):
-                        logger.info(f"✅ Process {pid} tué avec SIGKILL")
+                        logger.info(f"✅ Process {pid} terminé proprement avec sudo kill -15")
                         self.ffmpeg_process = None
                         return
-                except:
+                except subprocess.CalledProcessError:
                     pass
 
-                # En dernier recours, on utilise pkill
+                # Si ça ne marche pas, on force avec sudo kill -9 (SIGKILL)
                 try:
-                    subprocess.run(f"pkill -9 -f 'ffmpeg.*{self.name}'", shell=True)
-                    time.sleep(2)
+                    subprocess.run(['sudo', 'kill', '-9', str(pid)], check=True)
+                    time.sleep(1)
                     if not psutil.pid_exists(pid):
-                        logger.info(f"✅ Process {pid} tué avec pkill")
+                        logger.info(f"✅ Process {pid} tué avec sudo kill -9")
                         self.ffmpeg_process = None
                         return
-                except:
+                except subprocess.CalledProcessError:
                     pass
 
-                # Si on arrive ici et que c'est un zombie, on l'ignore
+                # En dernier recours, sudo pkill -9 -f
                 try:
-                    process = psutil.Process(pid)
-                    if process.status() == "zombie":
-                        logger.info(f"💀 Process {pid} est un zombie, on l'ignore")
-                        self.ffmpeg_process = None
-                        return
-                except:
-                    pass
+                    cmd = f"sudo pkill -9 -f 'ffmpeg.*{self.name}'"
+                    subprocess.run(cmd, shell=True, check=True)
+                    time.sleep(1)
+                    logger.info(f"✅ Processus FFmpeg tués avec sudo pkill")
+                except subprocess.CalledProcessError as e:
+                    logger.error(f"❌ Échec nettoyage final: {e}")
 
-                logger.warning(f"⚠️ Impossible de tuer le process {pid} pour {self.name}")
+                self.ffmpeg_process = None
+                self.active_ffmpeg_pids.clear()
 
             except Exception as e:
                 logger.error(f"Erreur nettoyage pour {self.name}: {e}")
             finally:
                 self.ffmpeg_process = None
-
+                
     def _create_concat_file(self) -> Optional[Path]:
         """Crée le fichier de concaténation avec les bons chemins"""
         try:
@@ -763,7 +756,7 @@ class IPTVChannel:
         Arrête proprement le stream en sauvegardant la position de lecture
         """
         with self.lock:
-            if not self.ffmpeg_process:
+            if not self.ffmpeg_process and not self.active_ffmpeg_pids:
                 return
                 
             logger.info(f"[{self.name}] 🛑 Arrêt du stream (dernier watcher: {time.time() - self.last_watcher_time:.1f}s)")
@@ -775,10 +768,30 @@ class IPTVChannel:
                 self.playback_offset = (self.playback_offset + elapsed) % self.total_duration
                 self.last_playback_time = current_time
                 logger.info(f"[{self.name}] 💾 Position sauvegardée: {self.playback_offset:.1f}s")
-                
-            # On nettoie les processus
+            
+            # On nettoie d'abord avec _clean_processes
             self._clean_processes()
             
+            # On fait un double check des processus par nom
+            for proc in psutil.process_iter(attrs=["pid", "name", "cmdline"]):
+                try:
+                    if "ffmpeg" in proc.info["name"].lower():
+                        cmd_str = " ".join(str(arg) for arg in proc.info.get("cmdline", []))
+                        if f"/hls/{self.name}/" in cmd_str:
+                            logger.warning(f"[{self.name}] 🔥 Process FFmpeg persistant détecté (PID: {proc.pid}), on force l'arrêt")
+                            try:
+                                os.kill(proc.pid, signal.SIGKILL)
+                            except:
+                                pass
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+                    
+            # On vide le set des PIDs actifs
+            self.active_ffmpeg_pids.clear()
+            
+            # On réinitialise l'attribut ffmpeg_process
+            self.ffmpeg_process = None
+                    
             # On nettoie les segments HLS si nécessaire
             hls_dir = Path(f"/app/hls/{self.name}")
             if hls_dir.exists():
