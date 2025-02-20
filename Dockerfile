@@ -12,9 +12,22 @@ RUN apt-get update && apt-get install -y \
     && apt-get update \
     && apt-get install -y ffmpeg strace \
     && rm -rf /var/lib/apt/lists/*
+    
+# Installation des pilotes VA-API pour l'accélération matérielle
+RUN apt-get update && apt-get install -y \
+    i965-va-driver \
+    vainfo \
+    libva-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN apt-get install -y procps
 
+RUN apt-get update && apt-get install -y \
+    intel-gpu-tools \
+    vainfo \
+    i965-va-driver \
+    && rm -rf /var/lib/apt/lists/*
+    
 # Permettre à l'utilisateur streamer d'utiliser sudo pour kill
 RUN echo "streamer ALL=(ALL) NOPASSWD: /usr/bin/kill" >> /etc/sudoers
 

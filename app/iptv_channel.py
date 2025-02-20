@@ -1,5 +1,4 @@
 # iptv_channel.py
-
 import os
 import time
 import random
@@ -80,7 +79,8 @@ class IPTVChannel:
 
         # On scanne les vidéos pour remplir self.processed_videos
         self._scan_videos()
-
+        self.total_duration = None
+        
         # On calcule une fois la durée totale
         total_duration = self._calculate_total_duration()
         if total_duration > 0:
@@ -194,41 +194,53 @@ class IPTVChannel:
         return params
 
     def _build_encoding_params(self) -> list:
-        """Paramètres d'encodage simplifiés"""
-        if self.fallback_mode:
-            return [
-                "-c:v", "h264_nvenc" if self.use_gpu else "libx264",
-                "-preset", "medium",
-                "-b:v", self.video_bitrate,
-                "-c:a", "aac",
-                "-b:a", "128k"
-            ]
+            """Paramètres d'encodage simplifiés"""
+            if self.fallback_mode:
+                return [
+                    "-c:v", "h264_vaapi" if self.use_gpu else "libx264",
+                    "-profile:v", "main",
+                    "-level", "4.1",
+                    "-bf", "0",
+                    "-bufsize", "5M",
+                    "-maxrate", "5M",
+                    "-low_power", "1" if self.use_gpu else None,
+                    "-c:a", "aac",
+                    "-b:a", "192k",
+                    "-ar", "48000"
+                ]
 
-        # Force conversion for MKV files
-        if any(file.suffix.lower() == ".mkv" for file in self.processed_videos):
-            logger.info(f"[{self.name}] 📺 MKV détecté, conversion forcée")
-            return [
-                "-c:v", "h264",
-                "-preset", "fast",
-                "-b:v", self.video_bitrate,
-                "-c:a", "aac",
-                "-b:a", "128k"
-            ]
+            # Force conversion for MKV files
+            if any(file.suffix.lower() == ".mkv" for file in self.processed_videos):
+                logger.info(f"[{self.name}] 📺 MKV détecté, conversion forcée")
+                return [
+                    "-c:v", "h264_vaapi" if self.use_gpu else "h264",
+                    "-profile:v", "main",
+                    "-level", "4.1",
+                    "-bf", "0",
+                    "-bufsize", "5M",
+                    "-maxrate", "5M",
+                    "-low_power", "1" if self.use_gpu else None,
+                    "-c:a", "aac",
+                    "-b:a", "192k",
+                    "-ar", "48000"
+                ]
 
-        return ["-c", "copy"]  # Copy direct pour formats compatibles
+            return ["-c", "copy"]  # Copy direct pour formats compatibles
 
     def _build_hls_params(self, hls_dir: str) -> list:
         """On configure les paramètres HLS"""
-        return [
+        params = [
             "-f", "hls",
             "-hls_time", str(self.hls_time),
-            "-hls_list_size", str(self.hls_list_size),
-            "-hls_delete_threshold", str(self.hls_delete_threshold),
-            "-hls_flags", "delete_segments+append_list",
-            "-hls_start_number_source", "datetime",
+            "-hls_list_size", "5",  # Réduit la taille de la liste pour éviter l’accumulation de segments
+            "-hls_delete_threshold", "1",  # Supprime rapidement les anciens segments
+            "-hls_flags", "delete_segments+append_list+program_date_time",
             "-hls_segment_filename", f"{hls_dir}/segment_%d.ts",
             f"{hls_dir}/playlist.m3u8",
         ]
+
+        logger.info(f"[{self.name}] 📜 HLS Params: {' '.join(params)}")
+        return params
 
     def _build_ffmpeg_command(self, hls_dir: str) -> list:
         """
@@ -336,17 +348,33 @@ class IPTVChannel:
             self._clean_processes()
 
     def _update_playback_position(self, progress_file):
-        """Met à jour et log la position de lecture actuelle"""
-        if progress_file.exists():
-            with open(progress_file, 'r') as f:
-                content = f.read()
-                if 'out_time_ms=' in content:
-                    position_lines = [l for l in content.split('\n') if 'out_time_ms=' in l]
-                    if position_lines:
-                        self.current_position = int(position_lines[-1].split('=')[1]) // 1000000
-                        if time.time() % 10 < 1:  # Log toutes les ~10s
-                            logger.info(f"⏱️ {self.name} - Position: {self.current_position}s (Sauvegardée: {self.last_known_position}s)")
-
+            """Met à jour et log la position de lecture actuelle"""
+            if progress_file.exists():
+                try:
+                    with open(progress_file, 'r') as f:
+                        content = f.read()
+                        if 'out_time_ms=' in content:
+                            position_lines = [l for l in content.split('\n') if 'out_time_ms=' in l]
+                            if position_lines:
+                                # Extract the millisecond value
+                                ms_value = int(position_lines[-1].split('=')[1])
+                                
+                                # Convert negative time to positive for looping content
+                                if ms_value < 0:
+                                    # Get total duration if available
+                                    total_duration = self._calculate_total_duration() * 1000000  # Convert to microseconds
+                                    # Adjust negative position to positive within the total duration
+                                    ms_value = total_duration + ms_value
+                                
+                                # Convert to seconds
+                                self.current_position = abs(ms_value) // 1000000
+                                
+                                if time.time() % 10 < 1:  # Log toutes les ~10s
+                                    logger.info(f"⏱️ {self.name} - Position: {self.current_position}s "
+                                            f"(Sauvegardée: {self.last_known_position}s)")
+                except Exception as e:
+                    logger.error(f"Error updating playback position: {e}")
+    
     def _check_segments(self, hls_dir: str) -> bool:
         """Vérifie la génération des segments HLS"""
         try:
@@ -552,7 +580,9 @@ class IPTVChannel:
 
             with open(concat_file, "w", encoding="utf-8") as f:
                 for video in processed_files:
-                    f.write(f"file '{str(video.absolute())}'\n")
+                    # Escape single quotes in the path
+                    escaped_path = str(video.absolute()).replace("'", "'\\''")
+                    f.write(f"file '{escaped_path}'\n")
                     logger.info(f"[{self.name}] ✅ Ajout de {video.name}")
 
             logger.info(f"[{self.name}] 🎥 Playlist créée")

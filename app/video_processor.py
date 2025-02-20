@@ -5,16 +5,193 @@ from pathlib import Path
 from config import logger
 from queue import Queue
 import threading
+import os
+import logging
+import re
 
 class VideoProcessor:
     def __init__(self, channel_dir: str):
         self.channel_dir = Path(channel_dir)
         self.processed_dir = self.channel_dir / "processed"
         self.processed_dir.mkdir(exist_ok=True)
+        
+        # Queue et threading
         self.processing_queue = Queue()
         self.processed_files = []
         self.processing_thread = None
         self.processing_lock = threading.Lock()
+        
+        # Configuration GPU
+        self.USE_GPU = os.getenv('FFMPEG_HARDWARE_ACCELERATION', '').lower() == 'vaapi'
+        self.logger = logging.getLogger('config')
+        
+        # Vérification du support GPU au démarrage
+        if self.USE_GPU:
+            self.check_gpu_support()
+
+    def check_gpu_support(self):
+        """Vérifie si le support GPU est disponible"""
+        try:
+            result = subprocess.run(['vainfo'], capture_output=True, text=True)
+            if result.returncode == 0 and 'VAEntrypointVLD' in result.stdout:
+                self.logger.info("✅ Support VAAPI détecté et activé")
+                return True
+            else:
+                self.logger.warning("⚠️ VAAPI configuré mais non fonctionnel, retour au mode CPU")
+                self.USE_GPU = False
+                return False
+        except Exception as e:
+            self.logger.error(f"❌ Erreur vérification VAAPI: {str(e)}")
+            self.USE_GPU = False
+            return False
+        
+    def get_gpu_filters(self, video_path: Path = None, is_streaming: bool = False) -> list:
+        """Génère les filtres vidéo pour le GPU"""
+        filters = []
+        
+        if not is_streaming:
+            if video_path and self.is_large_resolution(video_path):
+                filters.append("scale_vaapi=w=1920:h=1080")
+        
+        filters.extend(["format=nv12|vaapi", "hwupload"])
+        return filters
+
+    def get_gpu_args(self, is_streaming: bool = False) -> list:
+        """Génère les arguments de base pour le GPU"""
+        args = [
+            "-vaapi_device", "/dev/dri/renderD128",
+            "-hwaccel", "vaapi",
+            "-hwaccel_output_format", "vaapi"
+        ]
+        
+        if is_streaming:
+            args.extend(["-init_hw_device", "vaapi=va:/dev/dri/renderD128"])
+            
+        return args
+
+    def get_encoding_args(self, is_streaming: bool = False) -> list:
+            """Génère les arguments d'encodage selon le mode GPU/CPU"""
+            if self.USE_GPU:
+                args = [
+                    "-c:v", "h264_vaapi",
+                    "-profile:v", "main",
+                    "-level", "4.1",
+                    "-bf", "0",
+                    "-bufsize", "5M",
+                    "-maxrate", "5M",
+                    "-low_power", "1",
+                    "-c:a", "aac",
+                    "-b:a", "192k",
+                    "-ar", "48000"
+                ]
+                
+                if is_streaming:
+                    args.extend([
+                        "-g", "60",  # GOP size for streaming
+                        "-maxrate", "5M",
+                        "-bufsize", "10M",
+                        "-flags", "+cgop",  # Closed GOP for streaming
+                        "-sc_threshold", "0"  # Disable scene change detection for smoother streaming
+                    ])
+            else:
+                args = [
+                    "-c:v", "libx264",
+                    "-profile:v", "main",
+                    "-preset", "fast" if not is_streaming else "ultrafast",
+                    "-crf", "23"
+                ]
+                
+                if is_streaming:
+                    args.extend([
+                        "-tune", "zerolatency",
+                        "-maxrate", "5M",
+                        "-bufsize", "10M",
+                        "-g", "60"
+                    ])
+                    
+            return args
+    
+    def sanitize_filename(self, filename: str) -> str:
+        """Sanitize filename to remove problematic characters"""
+        # Remove or replace problematic characters
+        sanitized = filename.replace("'", "").replace('"', "")
+        # Replace spaces with underscores
+        sanitized = sanitized.replace(" ", "_")
+        # Remove any other special characters except letters, numbers, dots, and underscores
+        sanitized = re.sub(r'[^a-zA-Z0-9._-]', '', sanitized)
+        return sanitized
+    
+    def process_video(self, video_path: Path) -> Path:
+            """Process a video file with sanitized filename"""
+            try:
+                # Sanitize the source filename
+                sanitized_name = self.sanitize_filename(video_path.name)
+                sanitized_path = video_path.parent / sanitized_name
+                
+                # Rename the source file if needed
+                if video_path.name != sanitized_name:
+                    logger.info(f"Renaming source file: {video_path.name} -> {sanitized_name}")
+                    video_path.rename(sanitized_path)
+                    video_path = sanitized_path
+                
+                # Create sanitized output path
+                output_path = self.processed_dir / sanitized_name
+                
+                # Skip if already processed and optimized
+                if output_path.exists() and self.is_already_optimized(output_path):
+                    logger.info(f"✅ {video_path.name} déjà optimisé")
+                    return output_path
+
+                # Prepare FFmpeg command
+                command = ["ffmpeg", "-y"]  # Force overwrite if exists
+                
+                # Add GPU-specific arguments if enabled
+                if self.USE_GPU:
+                    command.extend(self.get_gpu_args())
+                
+                # Input file
+                command.extend(["-i", str(video_path)])
+                
+                # Add video filters if using GPU
+                if self.USE_GPU:
+                    filters = self.get_gpu_filters(video_path)
+                    if filters:
+                        command.extend(["-vf", ",".join(filters)])
+                
+                # Add encoding parameters
+                command.extend(self.get_encoding_args())
+                
+                # Audio encoding (same for GPU and CPU)
+                command.extend([
+                    "-c:a", "aac",
+                    "-b:a", "192k",
+                    "-ar", "48000"
+                ])
+                
+                # Output file
+                command.append(str(output_path))
+
+                # Execute FFmpeg
+                logger.info(f"🎬 Traitement de {video_path.name}")
+                logger.debug(f"Commande: {' '.join(command)}")
+                
+                result = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True
+                )
+
+                if result.returncode != 0:
+                    logger.error(f"❌ Erreur FFmpeg: {result.stderr}")
+                    return None
+
+                logger.info(f"✅ {video_path.name} traité avec succès")
+                return output_path
+
+            except Exception as e:
+                logger.error(f"Error processing video {video_path}: {e}")
+                logger.error(traceback.format_exc())
+                return None
 
     def process_videos_async(self, videos: list = None):
         """
@@ -157,47 +334,6 @@ class VideoProcessor:
             logger.error(f"❌ Erreur JSON avec ffprobe: {e}")
             return False
 
-    def process_video(self, video_path: Path) -> Path:
-        """
-        Normalise une vidéo si nécessaire. Sinon, la copie directement.
-        """
-        output_path = self.processed_dir / f"{video_path.stem}.mp4"
-
-        # Vérifier si la vidéo est déjà optimisée
-        if self.is_already_optimized(video_path):
-            logger.info(f"✅ Vidéo déjà optimisée : {video_path.name}, copie directe.")
-            shutil.copy2(video_path, output_path)
-            return output_path
-
-        # Sinon, normalisation
-        logger.info(f"⚙️ Normalisation en cours pour {video_path.name}")
-
-        temp_output = self.processed_dir / f"temp_{video_path.stem}.mp4"
-        cmd = ["ffmpeg", "-y", "-i", str(video_path)]
-
-        # Encodage vidéo
-        cmd.extend(["-c:v", "libx264", "-preset", "fast", "-crf", "23"])
-        
-        # Resize si nécessaire
-        if self.is_large_resolution(video_path):
-            cmd.extend(["-vf", "scale=1920:1080"])
-
-        # Encodage audio
-        cmd.extend(["-c:a", "aac", "-b:a", "192k", "-ar", "48000"])
-
-        cmd.append(str(temp_output))
-
-        logger.info(f"📜 Commande FFmpeg: {' '.join(cmd)}")
-
-        process = subprocess.run(cmd, capture_output=True, text=True)
-        if process.returncode == 0 and temp_output.exists():
-            temp_output.rename(output_path)
-            logger.info(f"✅ Normalisation réussie: {video_path.name} -> {output_path.name}")
-            return output_path
-        else:
-            logger.error(f"❌ Erreur FFmpeg: {process.stderr}")
-            return None
-    
     def is_large_resolution(self, video_path: Path) -> bool:
         """
         Vérifie si une vidéo a une résolution significativement supérieure à 1080p.

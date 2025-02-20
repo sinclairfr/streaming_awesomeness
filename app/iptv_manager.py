@@ -18,18 +18,15 @@ from hls_cleaner import HLSCleaner
 from client_monitor import ClientMonitor
 from resource_monitor import ResourceMonitor
 from iptv_channel import IPTVChannel
-import os
-from pathlib import Path
 import subprocess  # Ajouter en haut du fichier
 import signal
-import os
 from ffmpeg_monitor import FFmpegMonitor
 from config import (
     CONTENT_DIR,
     NGINX_ACCESS_LOG,
     SERVER_URL,
     TIMEOUT_NO_VIEWERS,
-    logger
+    logger  
 )
 
 class IPTVManager:
