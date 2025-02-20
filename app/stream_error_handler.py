@@ -72,3 +72,13 @@ class StreamErrorHandler:
         self.error_types.clear()
         return True
 
+    def _log_crash(self, error_type: str):
+        """Log des erreurs dans un fichier de crash dédié."""
+        crash_log_path = Path(f"/app/logs/crashes_{self.channel_name}.log")
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            with open(crash_log_path, "a") as f:
+                f.write(f"{timestamp} - Erreur détectée: {error_type}\n")
+                f.write("-" * 80 + "\n")
+        except Exception as e:
+            logger.error(f"Erreur écriture log crash pour {self.channel_name}: {e}")

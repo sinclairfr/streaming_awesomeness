@@ -270,9 +270,10 @@ class IPTVChannel:
 
     def _monitor_ffmpeg(self, hls_dir: str):
         """Surveille le processus FFmpeg et gère les erreurs"""
-        if not self.ffmpeg_process:
+        if not self.ffmpeg_process or not self.ffmpeg_process.stderr:
+            logger.error(f"[{self.name}] ❌ ffmpeg_process n'est pas initialisé correctement")
             return
-        
+    
         last_segment_log = 0
         SEGMENT_LOG_INTERVAL = 30  # Log des segments toutes les 30 secondes
         
@@ -280,7 +281,12 @@ class IPTVChannel:
             while self.ffmpeg_process:
                 
                 current_time = time.time()
-
+                # On met à jour la position de lecture
+                if self.logger and self.logger.get_progress_file():
+                    self._update_playback_position(self.logger.get_progress_file())
+                else:
+                    logging.warning("{self.name} - No progress file found for monitoring.")
+                      
                 # Log périodique des segments
                 if current_time - last_segment_log > SEGMENT_LOG_INTERVAL:
                     self._check_segments(hls_dir)
@@ -354,32 +360,32 @@ class IPTVChannel:
             self._clean_processes()
 
     def _update_playback_position(self, progress_file):
-            """Met à jour et log la position de lecture actuelle"""
-            if progress_file.exists():
-                try:
-                    with open(progress_file, 'r') as f:
-                        content = f.read()
-                        if 'out_time_ms=' in content:
-                            position_lines = [l for l in content.split('\n') if 'out_time_ms=' in l]
-                            if position_lines:
-                                # Extract the millisecond value
-                                ms_value = int(position_lines[-1].split('=')[1])
-                                
-                                # Convert negative time to positive for looping content
-                                if ms_value < 0:
-                                    # Get total duration if available
-                                    total_duration = self._calculate_total_duration() * 1000000  # Convert to microseconds
-                                    # Adjust negative position to positive within the total duration
-                                    ms_value = total_duration + ms_value
-                                
-                                # Convert to seconds
-                                self.current_position = abs(ms_value) // 1000000
-                                
-                                if time.time() % 10 < 1:  # Log toutes les ~10s
-                                    logger.info(f"⏱️ {self.name} - Position: {self.current_position}s "
-                                            f"(Sauvegardée: {self.last_known_position}s)")
-                except Exception as e:
-                    logger.error(f"Error updating playback position: {e}")
+        """Met à jour et log la position de lecture actuelle"""
+        if progress_file.exists():
+            try:
+                with open(progress_file, 'r') as f:
+                    content = f.read()
+                    if 'out_time_ms=' in content:
+                        position_lines = [l for l in content.split('\n') if 'out_time_ms=' in l]
+                        if position_lines:
+                            ms_value = int(position_lines[-1].split('=')[1])
+                            
+                            # Correction pour valeurs négatives
+                            if ms_value < 0:
+                                # Utilise la durée totale calculée (en microsecondes)
+                                total_duration_us = self._calculate_total_duration() * 1_000_000
+                                # Convertit la position négative en une position valide positive
+                                ms_value = total_duration_us + ms_value
+                            
+                            # Convertit en secondes
+                            self.current_position = ms_value / 1_000_000
+                            
+                            # Log chaque 10 secondes
+                            if time.time() % 10 < 1:
+                                logger.info(f"⏱️ {self.name} - Position: {self.current_position:.2f}s")
+            except Exception as e:
+                logger.error(f"Erreur mise à jour position lecture: {e}")
+
     
     def _check_segments(self, hls_dir: str) -> bool:
         """Vérifie la génération des segments HLS"""
@@ -508,15 +514,41 @@ class IPTVChannel:
             try:
                 if not self.ffmpeg_process:
                     return
+                # Stop FFmpeg process if running
+                if self.ffmpeg_process:
+                    try:
+                        self.ffmpeg_process.terminate()
+                        self.ffmpeg_process.wait(timeout=5)
+                    except (ProcessLookupError, TimeoutError):
+                        if self.ffmpeg_process:
+                            self.ffmpeg_process.kill()
+                    finally:
+                        self.ffmpeg_process = None
 
-                pid = self.ffmpeg_process.pid
-                logger.info(f"🧹 Nettoyage du process FFmpeg {pid} pour {self.name}")
+                # Wait for monitoring thread to finish if it exists
+                if hasattr(self, 'monitor_thread') and self.monitor_thread:
+                    try:
+                        # Only attempt to join if the thread is not the current thread
+                        if self.monitor_thread != threading.current_thread():
+                            self.monitor_thread.join(timeout=5)
+                    except (RuntimeError, TimeoutError) as e:
+                        logger.warning(f"[{self.name}] Could not join monitor thread: {e}")
+                    finally:
+                        self.monitor_thread = None
+                        
+                    pid = self.ffmpeg_process.pid
+                    logger.info(f"🧹 Nettoyage du process FFmpeg {pid} pour {self.name}")
 
                 # On sauvegarde d'abord la position actuelle
                 if hasattr(self, 'current_position') and self.current_position > 0:
                     self.last_known_position = self.current_position
                     logger.info(f"💾 Sauvegarde position {self.name}: {self.last_known_position}s")
 
+                # Dans _clean_processes, avant de kill le process:
+                if hasattr(self, 'monitoring_thread') and self.monitoring_thread:
+                    self.monitoring_thread.join(timeout=5)
+                    self.monitoring_thread = None
+                    
                 # On essaie d'abord avec sudo kill -15 (SIGTERM)
                 try:
                     subprocess.run(['sudo', 'kill', '-15', str(pid)], check=True)
@@ -688,6 +720,14 @@ class IPTVChannel:
                         self.stream_start_time = time.time()
                         self.ffmpeg_process = process
                         logger.info(f"✅ FFmpeg démarré pour {self.name} (PID: {self.ffmpeg_pid})")
+                        # On démarre le monitoring dans un thread dédié
+                        self.monitoring_thread = threading.Thread(
+                            target=self._monitor_ffmpeg,
+                            args=(hls_dir,),
+                            daemon=True
+                        )
+                        self.monitoring_thread.start()
+                        logger.info(f"🔍 Monitoring FFmpeg démarré pour {self.name}")
                         return True
                     time.sleep(0.5)
 

@@ -93,18 +93,15 @@ class FFmpegMonitor(threading.Thread):
     def _cleanup_zombie_processes(self, channel_name: str, pids: list):
         """
         Nettoie les processus FFmpeg zombies pour une chaîne donnée,
-        en conservant uniquement le plus récent.
+        en conservant uniquement le plus récent et sauvegarde l'offset avant tout kill.
         """
         if not pids:
             return
 
-        # Log la liste brute avant toute opération
         logger.info(f"[{channel_name}] 🔍 Processus FFmpeg détectés avant nettoyage: {pids}")
 
-        # Déduplication pour éviter les doublons
         pids = list(set(pids))
 
-        # Identifie le PID le plus récent
         latest_pid = None
         latest_start_time = 0
 
@@ -120,17 +117,20 @@ class FFmpegMonitor(threading.Thread):
                 continue
 
         if latest_pid is None:
-            logger.warning(f"[{channel_name}] Aucun processus valide trouvé, rien à conserver.")
+            logger.warning(f"[{channel_name}] Aucun processus valide trouvé.")
             return
 
         logger.info(f"[{channel_name}] ✅ Conservation du processus le plus récent: {latest_pid}")
 
-        # Vérifie si le processus le plus récent est actif
-        if self._is_process_active(channel_name, latest_pid):
-            logger.info(f"[{channel_name}] 🔄 Processus {latest_pid} est actif, conservation.")
-            return
+        # Sauvegarde de l'offset avant kill forcé
+        channel = self.channels.get(channel_name)
+        if channel:
+            current_time = time.time()
+            elapsed = current_time - channel.last_playback_time
+            channel.playback_offset = (channel.playback_offset + elapsed) % channel.total_duration
+            channel.last_playback_time = current_time
+            logger.info(f"[{channel_name}] 💾 Position sauvegardée avant kill forcé: {channel.playback_offset:.1f}s")
 
-        # Tuer les autres
         for pid in pids:
             if pid != latest_pid:
                 try:
@@ -141,10 +141,8 @@ class FFmpegMonitor(threading.Thread):
                 except psutil.NoSuchProcess:
                     continue
 
-        # Attend un peu pour laisser le temps à SIGTERM
         time.sleep(2)
 
-        # Kill forcé (SIGKILL) pour les survivants
         for pid in pids:
             if pid != latest_pid:
                 try:
@@ -153,6 +151,7 @@ class FFmpegMonitor(threading.Thread):
                         psutil.Process(pid).kill()
                 except psutil.NoSuchProcess:
                     continue
+
 
     def _is_process_active(self, channel_name: str, pid: int) -> bool   :
         """
