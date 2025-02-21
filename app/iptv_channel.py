@@ -386,7 +386,6 @@ class IPTVChannel:
             except Exception as e:
                 logger.error(f"Erreur mise à jour position lecture: {e}")
 
-    
     def _check_segments(self, hls_dir: str) -> bool:
         """Vérifie la génération des segments HLS"""
         try:
@@ -511,6 +510,15 @@ class IPTVChannel:
     def _clean_processes(self):
         """On nettoie les process avec sauvegarde de l'offset"""
         with self.lock:
+            current_pid = self.ffmpeg_process.pid if self.ffmpeg_process else None
+            for pid in self.active_ffmpeg_pids.copy():
+                if pid != current_pid:  # ⬅️ Ajoute cette vérification
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                        logger.info(f"🔥 Ancien processus {pid} tué")
+                        self.active_ffmpeg_pids.remove(pid)
+                    except ProcessLookupError:
+                        self.active_ffmpeg_pids.remove(pid)
             try:
                 if not self.ffmpeg_process:
                     return
@@ -680,14 +688,18 @@ class IPTVChannel:
                     logger.error(f"[{self.name}] ❌ _playlist.txt introuvable")
                     return False
 
-                # On nettoie d'abord les anciens processus
+                # Nettoyage anciens processus avec vérification
+                current_pid = self.ffmpeg_process.pid if self.ffmpeg_process else None
                 for pid in self.active_ffmpeg_pids.copy():
-                    try:
-                        os.kill(pid, signal.SIGKILL)
-                        logger.info(f"🔥 Ancien processus {pid} tué au démarrage")
-                        self.active_ffmpeg_pids.remove(pid)
-                    except ProcessLookupError:
-                        self.active_ffmpeg_pids.remove(pid)
+                    if pid != current_pid:
+                        try:
+                            os.kill(pid, signal.SIGKILL)
+                            logger.info(f"🔥 Ancien processus {pid} tué")
+                            self.active_ffmpeg_pids.remove(pid)
+                        except ProcessLookupError:
+                            self.active_ffmpeg_pids.remove(pid)
+
+                time.sleep(3)  # Délai augmenté pour s'assurer du nettoyage
 
                 # Construction et lancement de la commande
                 cmd = self._build_ffmpeg_command(hls_dir)
@@ -703,39 +715,36 @@ class IPTVChannel:
                         universal_newlines=True
                     )
 
+                self.ffmpeg_process = process  
                 self.ffmpeg_pid = process.pid
                 self.active_ffmpeg_pids.add(process.pid)
                 logger.info(f"[{self.name}] FFmpeg lancé avec PID: {self.ffmpeg_pid}")
 
                 # Vérification rapide du démarrage
                 time.sleep(2)
-                if process.poll() is not None:
+                if self.ffmpeg_process.poll() is not None:
                     logger.error(f"[{self.name}] FFmpeg s'est arrêté immédiatement")
+                    self.ffmpeg_process = None
                     return False
 
-                # Attente des premiers segments
+                # Attente des premiers segments avec timeout étendu
                 start_time = time.time()
-                while time.time() - start_time < 20:
+                while time.time() - start_time < 60:  # Timeout augmenté à 60s
                     if list(hls_dir.glob("segment_*.ts")):
                         self.stream_start_time = time.time()
-                        self.ffmpeg_process = process
                         logger.info(f"✅ FFmpeg démarré pour {self.name} (PID: {self.ffmpeg_pid})")
-                        # On démarre le monitoring dans un thread dédié
-                        self.monitoring_thread = threading.Thread(
-                            target=self._monitor_ffmpeg,
-                            args=(hls_dir,),
-                            daemon=True
-                        )
-                        self.monitoring_thread.start()
-                        logger.info(f"🔍 Monitoring FFmpeg démarré pour {self.name}")
                         return True
+                    else:
+                        logger.debug(f"[{self.name}] En attente des segments...")
                     time.sleep(0.5)
 
                 logger.error(f"❌ Timeout en attendant les segments pour {self.name}")
+                self.ffmpeg_process = None
                 return False
 
             except Exception as e:
                 logger.error(f"Erreur démarrage stream {self.name}: {e}")
+                self.ffmpeg_process = None
                 return False
 
     def _scan_videos(self) -> bool:

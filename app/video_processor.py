@@ -278,9 +278,8 @@ class VideoProcessor:
 
         cmd = [
             "ffprobe", "-v", "error",
-            "-select_streams", "v:0",
-            "-show_entries", "stream=codec_name,width,height,r_frame_rate",
-            "-show_entries", "stream=codec_name:stream=sample_rate",
+            "-select_streams", "v:0,a:0",
+            "-show_entries", "stream=codec_name,width,height,r_frame_rate,codec_type",
             "-of", "json",
             str(video_path)
         ]
@@ -290,25 +289,23 @@ class VideoProcessor:
             video_info = json.loads(result.stdout)
             streams = video_info.get("streams", [])
 
-            if not streams:
-                logger.warning(f"⚠️ Impossible de lire {video_path}, normalisation forcée.")
+            video_stream = next((s for s in streams if s['codec_type'] == 'video'), None)
+            audio_stream = next((s for s in streams if s['codec_type'] == 'audio'), None)
+
+            if not video_stream:
+                logger.warning(f"⚠️ Aucun flux vidéo détecté dans {video_path.name}, normalisation forcée.")
                 return False
 
-            video_stream = streams[0]
             codec = video_stream.get("codec_name", "").lower()
             width = int(video_stream.get("width", 0))
             height = int(video_stream.get("height", 0))
             framerate = video_stream.get("r_frame_rate", "0/1").split("/")
             fps = round(int(framerate[0]) / int(framerate[1])) if len(framerate) == 2 else 0
 
-            audio_codec = None
-            for stream in streams:
-                if stream.get("codec_name") and stream.get("codec_name") != codec:
-                    audio_codec = stream.get("codec_name").lower()
+            audio_codec = audio_stream.get("codec_name").lower() if audio_stream else "none"
 
             logger.info(f"🎥 Codec: {codec}, Résolution: {width}x{height}, FPS: {fps}, Audio: {audio_codec}")
 
-            # Vérification des critères
             needs_transcoding = False
             if codec != "h264":
                 logger.info(f"🚨 Codec vidéo non H.264 ({codec}), conversion nécessaire")
@@ -319,7 +316,10 @@ class VideoProcessor:
             if fps > 30:
                 logger.info(f"🚨 FPS supérieur à 30 ({fps}), réduction nécessaire")
                 needs_transcoding = True
-            if audio_codec and audio_codec != "aac":
+            if audio_codec == "none":
+                logger.info(f"🚨 Pas de piste audio détectée, normalisation nécessaire pour garantir la présence d'audio")
+                needs_transcoding = True
+            elif audio_codec != "aac":
                 logger.info(f"🚨 Codec audio non AAC ({audio_codec}), conversion nécessaire")
                 needs_transcoding = True
 
@@ -333,6 +333,7 @@ class VideoProcessor:
         except json.JSONDecodeError as e:
             logger.error(f"❌ Erreur JSON avec ffprobe: {e}")
             return False
+
 
     def is_large_resolution(self, video_path: Path) -> bool:
         """
