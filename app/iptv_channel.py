@@ -990,40 +990,72 @@ class IPTVChannel:
             "-sn",
             "-dn"
         ]
+    
+    def _build_encoding_params(self) -> list:
+        """Paramètres d'encodage optimisés avec échappement correct des caractères spéciaux"""
+        if not self._contains_mkv():
+            return ["-c:v", "copy", "-c:a", "copy", "-sn", "-dn"]
+                
+        logger.info(f"[{self.name}] 🎬 Application des paramètres optimisés pour fluidité")
+        
+        # On définit le filtre d'échelle avec un échappement correct
+        scale_filter = "scale=854:480:force_original_aspect_ratio=decrease,pad=854:480:(ow-iw)/2:(oh-ih)/2"
+        
+        # Paramètres vidéo pour meilleure fluidité
+        params = [
+            "-c:v", "libx264",
+            "-profile:v", "main",
+            "-preset", "veryfast",
+            "-level", "4.1",
+            "-b:v", "3M",
+            "-maxrate", "3M",
+            "-bufsize", "6M",
+            "-g", "30",
+            "-keyint_min", "30",
+            "-sc_threshold", "40",
+            "-pix_fmt", "yuv420p",
+            "-vf", scale_filter,  # Plus besoin d'échapper les caractères ici
+            "-r", "30",
+        ]
+
+        # Paramètres audio optimisés
+        params.extend([
+            "-c:a", "aac",
+            "-b:a", "128k",
+            "-ar", "44100",
+            "-ac", "2",
+            "-sn",
+            "-dn"
+        ])
+
+        return params
 
     def _build_ffmpeg_command(self, hls_dir: str) -> list:
-        """Construction de la commande avec protection des caractères spéciaux"""
+        """Construction de la commande FFmpeg avec protection correcte des caractères spéciaux"""
         try:
             # Construction des parties de la commande
             command = []
             
-            # Paramètres d'entrée
+            # Paramètres d'entrée de base
             command.extend(self._build_input_params())
             
-            # Paramètres d'encodage avec protection spéciale pour le filtre -vf
+            # Paramètres d'encodage
             encoding_params = self._build_encoding_params()
-            for i, param in enumerate(encoding_params):
-                if isinstance(param, str) and "-vf" in param:
-                    # On protège le prochain paramètre (la chaîne de filtrage)
-                    command.append(param)  # -vf
-                    filter_string = encoding_params[i+1].replace('(', '\\(').replace(')', '\\)')
-                    command.append(filter_string)
-                    continue
-                elif i > 0 and encoding_params[i-1] == "-vf":
-                    continue  # On saute car déjà traité
-                else:
-                    command.append(param)
+            command.extend(encoding_params)
             
             # Paramètres HLS
             command.extend(self._build_hls_params(hls_dir))
             
-            logger.info(f"[{self.name}] 📝 Commande FFmpeg finale: {' '.join(str(p) for p in command)}")
-            return command
+            # Log de la commande finale pour debug
+            cmd_str = ' '.join(str(p) for p in command)
+            logger.info(f"[{self.name}] 📝 Commande FFmpeg finale: {cmd_str}")
             
+            return command
+                
         except Exception as e:
             logger.error(f"[{self.name}] ❌ Erreur construction commande FFmpeg: {e}")
             return self._build_fallback_command(hls_dir)
-
+    
     def _build_fallback_command(self, hls_dir: str) -> list:
         """Commande de fallback en cas d'erreur"""
         return [
@@ -1038,42 +1070,6 @@ class IPTVChannel:
             f"{hls_dir}/playlist.m3u8"
         ]
         
-    def _build_encoding_params(self) -> list:
-        """Paramètres d'encodage optimisés pour une lecture fluide"""
-        if not self._contains_mkv():
-            return ["-c:v", "copy", "-c:a", "copy", "-sn", "-dn"]
-            
-        logger.info(f"[{self.name}] 🎬 Application des paramètres optimisés pour fluidité")
-        
-        # Paramètres vidéo pour meilleure fluidité
-        params = [
-            "-c:v", "libx264",
-            "-profile:v", "main",
-            "-preset", "veryfast",  # On accélère l'encodage
-            "-level", "4.1",
-            "-b:v", "3M",  # On réduit légèrement le bitrate
-            "-maxrate", "3M",
-            "-bufsize", "6M",
-            "-g", "30",  # GOP size plus petit pour meilleure réactivité
-            "-keyint_min", "30",
-            "-sc_threshold", "40",  # Plus permissif sur les changements de scène
-            "-pix_fmt", "yuv420p",
-            "-vf", 'scale=854:480:force_original_aspect_ratio\\=decrease,pad=854:480:\\(ow-iw\\)/2:\\(oh-ih\\)/2',  # Résolution 480p
-            "-r", "30",  # On force 30fps
-        ]
-
-        # Paramètres audio optimisés
-        params.extend([
-            "-c:a", "aac",
-            "-b:a", "128k",  # Bitrate audio réduit
-            "-ar", "44100",  # Fréquence standard
-            "-ac", "2",
-            "-sn",
-            "-dn"
-        ])
-
-        return params
-
     def _build_hls_params(self, hls_dir: str) -> list:
         """Paramètres HLS optimisés pour la fluidité"""
         return [
