@@ -16,6 +16,8 @@ from ffmpeg_logger import FFmpegLogger
 from stream_error_handler import StreamErrorHandler
 import signal  # On ajoute l'import signal
 import time  # Ajout si nécessaire
+from mkv_handler import MKVHandler
+
 from config import (
     TIMEOUT_NO_VIEWERS,
     FFMPEG_LOG_LEVEL,
@@ -28,6 +30,9 @@ class IPTVChannel:
     """
     # On gère une chaîne IPTV, son streaming et sa surveillance
     """
+# Dans IPTVChannel
+
+ 
     def __init__(
         self,
         name: str,
@@ -52,7 +57,10 @@ class IPTVChannel:
         self.hls_list_size = 20
         self.hls_delete_threshold = 6
         self.target_duration = 8
-
+        
+        # mkv
+        self.mkv_handler = MKVHandler(self.name, logger)
+        
         # Paramètres d'encodage
         self.video_bitrate = "2800k"
         self.max_bitrate = "2996k"
@@ -146,128 +154,45 @@ class IPTVChannel:
         logger.info(f"[{self.name}] 📊 Durée totale calculée: {total_duration:.2f}s")
         return total_duration
 
-    def _build_input_params(self) -> list:
-        """On construit les paramètres d'entrée FFmpeg"""
-        params = [
-            "ffmpeg",
-            "-hide_banner",
-            "-loglevel", FFMPEG_LOG_LEVEL,
-            "-y",
-            "-re",
-            "-progress", str(self.logger.get_progress_file()),
-            "-fflags", "+genpts+igndts",
-        ]
-
-        try:
-            # On s'assure que total_duration est valide
-            if not self.total_duration:
-                self.total_duration = self._calculate_total_duration()
-                
-            # On vérifie qu'on a bien une durée valide avant de continuer
-            if not self.total_duration or self.total_duration <= 0:
-                logger.warning(f"[{self.name}] Impossible de calculer la durée totale, on skip l'offset")
-                return params
-
-            # On calcule l'offset actuel en tenant compte du temps écoulé
-            current_time = time.time()
-            elapsed = current_time - self.last_playback_time
-
-            # On s'assure que l'offset est initialisé
-            if not hasattr(self, 'playback_offset'):
-                logger.info("Offset non intiliaisé, on le définit au hasard.")
-                self.playback_offset = random.uniform(0, self.total_duration)
-
-            # On calcule l'offset total
-            total_offset = self.playback_offset
-            if elapsed > 0:
-                total_offset = (self.playback_offset + elapsed) % self.total_duration
-
-            logger.info(f"[{self.name}] Reprise lecture à {total_offset:.2f}s (total: {self.total_duration:.2f}s)")
-
-            if total_offset > 0:
-                params.extend(["-ss", f"{total_offset}"])
-
-        except Exception as e:
-            logger.error(f"[{self.name}] Erreur calcul offset: {e}, on continue sans.")
-
-        params.extend([
-            "-f", "concat",
-            "-safe", "0",
-            "-stream_loop", "-1",
-            "-i", str(self._create_concat_file()),
-        ])
-
-        return params
-    
-    def _build_encoding_params(self) -> list:
-            """Paramètres d'encodage simplifiés"""
-            if self.fallback_mode:
-                return [
-                    "-c:v", "h264_vaapi" if self.use_gpu else "libx264",
-                    "-profile:v", "main",
-                    "-level", "4.1",
-                    "-bf", "0",
-                    "-bufsize", "5M",
-                    "-maxrate", "5M",
-                    "-low_power", "1" if self.use_gpu else None,
-                    "-c:a", "aac",
-                    "-b:a", "192k",
-                    "-ar", "48000"
-                ]
-
-            # Force conversion for MKV files
-            if any(file.suffix.lower() == ".mkv" for file in self.processed_videos):
-                logger.info(f"[{self.name}] 📺 MKV détecté, conversion forcée")
-                return [
-                    "-c:v", "h264_vaapi" if self.use_gpu else "h264",
-                    "-profile:v", "main",
-                    "-level", "4.1",
-                    "-bf", "0",
-                    "-bufsize", "5M",
-                    "-maxrate", "5M",
-                    "-low_power", "1" if self.use_gpu else None,
-                    "-c:a", "aac",
-                    "-b:a", "192k",
-                    "-ar", "48000"
-                ]
-
-            return ["-c", "copy"]  # Copy direct pour formats compatibles
-
-    def _build_hls_params(self, hls_dir: str) -> list:
-        """On configure les paramètres HLS"""
-        params = [
-            "-f", "hls",
-            "-hls_time", str(self.hls_time),
-            "-hls_list_size", "5",  # Réduit la taille de la liste pour éviter l’accumulation de segments
-            "-hls_delete_threshold", "1",  # Supprime rapidement les anciens segments
-            "-hls_flags", "delete_segments+append_list+program_date_time",
-            "-hls_segment_filename", f"{hls_dir}/segment_%d.ts",
-            f"{hls_dir}/playlist.m3u8",
-        ]
-
-        logger.info(f"[{self.name}] 📜 HLS Params: {' '.join(params)}")
-        return params
-
     def _build_ffmpeg_command(self, hls_dir: str) -> list:
-        """
-        Builds the complete FFmpeg command by combining input, encoding and HLS parameters.
-
-        This method concatenates the parameters from:
-        - _build_input_params(): Input related parameters for FFmpeg
-        - _build_encoding_params(): Video/audio encoding parameters
-        - _build_hls_params(): HLS streaming specific parameters
-
-        Args:
-            hls_dir (str): Directory path where HLS segments will be saved
-        Returns:
-            list: Complete FFmpeg command as a list of string arguments
-        """
-        return (
-            self._build_input_params() +
-            self._build_encoding_params() +
-            self._build_hls_params(hls_dir)
-        )
-
+        """Construction de la commande FFmpeg avec optimisations MKV"""
+        try:
+            logger.info(f"[{self.name}] 🚀 Construction de la commande FFmpeg...")
+            
+            # On vérifie si on a des MKV
+            has_mkv = any(str(file).lower().endswith('.mkv') for file in self.processed_videos)
+            if has_mkv:
+                logger.info(f"[{self.name}] 📼 Fichier MKV détecté, activation des optimisations")
+            
+            # Construction des parties de la commande
+            input_params = self._build_input_params()
+            encoding_params = self._build_encoding_params()
+            hls_params = self._build_hls_params(hls_dir)
+            
+            # Assemblage de la commande finale
+            command = input_params + encoding_params + hls_params
+            
+            # Log pour debug
+            logger.info(f"[{self.name}] 📝 Commande FFmpeg finale: {' '.join(command)}")
+            
+            return command
+            
+        except Exception as e:
+            logger.error(f"[{self.name}] ❌ Erreur construction commande FFmpeg: {e}")
+            # En cas d'erreur, on retourne une commande basique
+            return [
+                "ffmpeg", "-hide_banner", "-loglevel", FFMPEG_LOG_LEVEL,
+                "-y", "-re",
+                "-i", str(self._create_concat_file()),
+                "-c", "copy",
+                "-f", "hls",
+                "-hls_time", "6",
+                "-hls_list_size", "5",
+                "-hls_flags", "delete_segments+append_list",
+                "-hls_segment_filename", f"{hls_dir}/segment_%d.ts",
+                f"{hls_dir}/playlist.m3u8"
+            ]
+    
     def _monitor_ffmpeg(self, hls_dir: str):
         """Surveille le processus FFmpeg et gère les erreurs"""
         if not self.ffmpeg_process or not self.ffmpeg_process.stderr:
@@ -938,3 +863,268 @@ class IPTVChannel:
                 self.start_stream_if_needed()
             # On ne stoppe plus automatiquement quand count = 0
             # Le cleanup sera géré par _check_viewer_inactivity
+
+    def _verify_file_streams(self, file_path: str) -> dict:
+        """Analyse les streams présents dans le fichier"""
+        try:
+            cmd = [
+                "ffprobe", "-v", "quiet",
+                "-print_format", "json",
+                "-show_streams",
+                str(file_path)
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            data = json.loads(result.stdout)
+            
+            streams = {
+                'video': 0,
+                'audio': 0,
+                'subtitle': 0,
+                'data': 0
+            }
+            
+            for stream in data.get('streams', []):
+                stream_type = stream.get('codec_type')
+                if stream_type in streams:
+                    streams[stream_type] += 1
+                    
+            logger.info(f"[{self.name}] 📊 Streams détectés dans {file_path}:")
+            for type_, count in streams.items():
+                logger.info(f"  - {type_}: {count}")
+                
+            return streams
+            
+        except Exception as e:
+            logger.error(f"[{self.name}] ❌ Erreur analyse streams: {e}")
+            return {}
+        
+    def _contains_mkv(self) -> bool:
+        """Détecte la présence de fichiers MKV dans la playlist"""
+        try:
+            # On vérifie d'abord dans processed_videos
+            logger.info(f"[{self.name}] 🔍 Vérification des processed_videos...")
+            for video in self.processed_videos:
+                path = str(video)
+                logger.info(f"[{self.name}] 🔬 Fichier trouvé: {path}")
+                if path.lower().endswith('.mkv'):
+                    logger.info(f"[{self.name}] ✅ MKV détecté dans processed_videos: {path}")
+                    return True
+                    
+            # On vérifie aussi dans le dossier source
+            source_dir = Path(self.video_dir)
+            logger.info(f"[{self.name}] 🔍 Vérification du dossier source: {source_dir}")
+            mkv_files = list(source_dir.glob("*.mkv"))
+            if mkv_files:
+                logger.info(f"[{self.name}] ✅ MKV détectés dans source: {[f.name for f in mkv_files]}")
+                return True
+
+            # On vérifie le fichier playlist
+            playlist_path = Path(CONTENT_DIR) / self.name / "_playlist.txt"
+            if playlist_path.exists():
+                logger.info(f"[{self.name}] 🔍 Vérification de la playlist: {playlist_path}")
+                with open(playlist_path, 'r') as f:
+                    content = f.read()
+                    if '.mkv' in content.lower():
+                        logger.info(f"[{self.name}] ✅ MKV détecté dans la playlist")
+                        return True
+                    
+            logger.info(f"[{self.name}] ℹ️ Aucun MKV détecté")
+            return False
+
+        except Exception as e:
+            logger.error(f"[{self.name}] ❌ Erreur détection MKV: {e}")
+            return False
+
+
+        """Paramètres d'encodage optimisés pour MKV"""
+        # On vérifie la présence de MKV
+        has_mkv = self._contains_mkv()
+        logger.info(f"[{self.name}] 🎥 Statut MKV: {has_mkv}")
+        
+        if has_mkv:
+            logger.info(f"[{self.name}] 🎬 Application des paramètres MKV optimisés")
+            
+            # Paramètres de base pour MKV
+            base_params = [
+                "-c:v", "h264_vaapi" if self.use_gpu else "libx264",
+                "-profile:v", "main",
+                "-preset", "fast",
+                "-level", "4.1",
+                "-b:v", "5M",
+                "-maxrate", "5M",
+                "-bufsize", "10M",
+                "-g", "48",
+                "-keyint_min", "48",
+                "-sc_threshold", "0",
+            ]
+
+            # Ajout des paramètres GPU si activé
+            if self.use_gpu:
+                base_params.extend([
+                    "-vf", "format=nv12|vaapi,hwupload",
+                    "-low_power", "1"
+                ])
+
+            # Paramètres audio
+            base_params.extend([
+                "-c:a", "aac",
+                "-b:a", "192k",
+                "-ar", "48000",
+                "-ac", "2"
+            ])
+
+            # Désactivation des sous-titres et pistes de données
+            base_params.extend([
+                "-sn",
+                "-dn"
+            ])
+
+            return [p for p in base_params if p is not None]
+            
+        # Mode copie pour formats compatibles
+        logger.info(f"[{self.name}] ℹ️ Mode copie simple activé")
+        return [
+            "-c:v", "copy",
+            "-c:a", "copy",
+            "-sn",
+            "-dn"
+        ]
+
+    def _build_ffmpeg_command(self, hls_dir: str) -> list:
+        """Construction de la commande avec protection des caractères spéciaux"""
+        try:
+            # Construction des parties de la commande
+            command = []
+            
+            # Paramètres d'entrée
+            command.extend(self._build_input_params())
+            
+            # Paramètres d'encodage avec protection spéciale pour le filtre -vf
+            encoding_params = self._build_encoding_params()
+            for i, param in enumerate(encoding_params):
+                if isinstance(param, str) and "-vf" in param:
+                    # On protège le prochain paramètre (la chaîne de filtrage)
+                    command.append(param)  # -vf
+                    filter_string = encoding_params[i+1].replace('(', '\\(').replace(')', '\\)')
+                    command.append(filter_string)
+                    continue
+                elif i > 0 and encoding_params[i-1] == "-vf":
+                    continue  # On saute car déjà traité
+                else:
+                    command.append(param)
+            
+            # Paramètres HLS
+            command.extend(self._build_hls_params(hls_dir))
+            
+            logger.info(f"[{self.name}] 📝 Commande FFmpeg finale: {' '.join(str(p) for p in command)}")
+            return command
+            
+        except Exception as e:
+            logger.error(f"[{self.name}] ❌ Erreur construction commande FFmpeg: {e}")
+            return self._build_fallback_command(hls_dir)
+
+    def _build_fallback_command(self, hls_dir: str) -> list:
+        """Commande de fallback en cas d'erreur"""
+        return [
+            "ffmpeg", "-hide_banner", "-loglevel", FFMPEG_LOG_LEVEL,
+            "-y", "-i", str(self._create_concat_file()),
+            "-c", "copy",
+            "-f", "hls",
+            "-hls_time", "6",
+            "-hls_list_size", "5",
+            "-hls_flags", "delete_segments+append_list",
+            "-hls_segment_filename", f"{hls_dir}/segment_%d.ts",
+            f"{hls_dir}/playlist.m3u8"
+        ]
+        
+    def _build_encoding_params(self) -> list:
+        """Paramètres d'encodage optimisés pour une lecture fluide"""
+        if not self._contains_mkv():
+            return ["-c:v", "copy", "-c:a", "copy", "-sn", "-dn"]
+            
+        logger.info(f"[{self.name}] 🎬 Application des paramètres optimisés pour fluidité")
+        
+        # Paramètres vidéo pour meilleure fluidité
+        params = [
+            "-c:v", "libx264",
+            "-profile:v", "main",
+            "-preset", "veryfast",  # On accélère l'encodage
+            "-level", "4.1",
+            "-b:v", "3M",  # On réduit légèrement le bitrate
+            "-maxrate", "3M",
+            "-bufsize", "6M",
+            "-g", "30",  # GOP size plus petit pour meilleure réactivité
+            "-keyint_min", "30",
+            "-sc_threshold", "40",  # Plus permissif sur les changements de scène
+            "-pix_fmt", "yuv420p",
+            "-vf", 'scale=854:480:force_original_aspect_ratio\\=decrease,pad=854:480:\\(ow-iw\\)/2:\\(oh-ih\\)/2',  # Résolution 480p
+            "-r", "30",  # On force 30fps
+        ]
+
+        # Paramètres audio optimisés
+        params.extend([
+            "-c:a", "aac",
+            "-b:a", "128k",  # Bitrate audio réduit
+            "-ar", "44100",  # Fréquence standard
+            "-ac", "2",
+            "-sn",
+            "-dn"
+        ])
+
+        return params
+
+    def _build_hls_params(self, hls_dir: str) -> list:
+        """Paramètres HLS optimisés pour la fluidité"""
+        return [
+            "-f", "hls",
+            "-hls_time", "2",  # Segments plus courts
+            "-hls_list_size", "10",  # Plus de segments dans la playlist
+            "-hls_delete_threshold", "1",
+            "-hls_flags", "delete_segments+append_list+program_date_time+independent_segments+round_durations",
+            "-start_number", "0",
+            "-hls_segment_type", "mpegts",
+            "-max_delay", "2000000",  # Délai max réduit à 2 secondes
+            "-avoid_negative_ts", "make_zero",
+            "-hls_init_time", "2",  # Durée initiale plus courte
+            "-hls_segment_filename", f"{hls_dir}/segment_%d.ts",
+            f"{hls_dir}/playlist.m3u8"
+        ]
+
+    def _build_input_params(self) -> list:
+        """Paramètres d'entrée optimisés"""
+        base_params = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel", FFMPEG_LOG_LEVEL,
+            "-y",
+            "-thread_queue_size", "8192",  # Buffer plus grand
+            "-analyzeduration", "20M",  # Analyse plus courte
+            "-probesize", "20M",
+            "-re",  # Lecture en temps réel
+            "-progress", str(self.logger.get_progress_file()),
+            "-fflags", "+genpts+igndts+discardcorrupt+fastseek",  # Ajout de fastseek
+            "-threads", "4"  # On force 4 threads pour l'encodage
+        ]
+
+        # Gestion de l'offset comme avant
+        try:
+            if not self.total_duration:
+                self.total_duration = self._calculate_total_duration()
+                
+            if not hasattr(self, 'playback_offset'):
+                self.playback_offset = random.uniform(0, self.total_duration or 120)
+                
+            if hasattr(self, 'playback_offset') and self.playback_offset > 0:
+                base_params.extend(["-ss", f"{self.playback_offset}"])
+        except Exception as e:
+            logger.error(f"[{self.name}] Erreur gestion offset: {e}")
+
+        # Input file
+        base_params.extend([
+            "-f", "concat",
+            "-safe", "0",
+            "-i", str(self._create_concat_file())
+        ])
+
+        return base_params

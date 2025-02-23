@@ -292,9 +292,9 @@ class VideoProcessor:
             video_stream = next((s for s in streams if s['codec_type'] == 'video'), None)
             audio_stream = next((s for s in streams if s['codec_type'] == 'audio'), None)
 
-            if not video_stream:
-                logger.warning(f"⚠️ Aucun flux vidéo détecté dans {video_path.name}, normalisation forcée.")
-                return False
+            #if not video_stream:
+            #    logger.warning(f"⚠️ Aucun flux vidéo détecté dans {video_path.name}, normalisation forcée.")
+            #    return False
 
             codec = video_stream.get("codec_name", "").lower()
             width = int(video_stream.get("width", 0))
