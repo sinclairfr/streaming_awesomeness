@@ -244,7 +244,7 @@ class VideoProcessor:
             finally:
                 self.processing_queue.task_done()
 
-    def wait_for_completion(self, timeout: int = 300) -> list:
+    def wait_for_completion(self, timeout: int = 600) -> list:
         """
         Attend la fin du traitement des vidéos.
         Retourne la liste des fichiers traités.
@@ -333,7 +333,6 @@ class VideoProcessor:
         except json.JSONDecodeError as e:
             logger.error(f"❌ Erreur JSON avec ffprobe: {e}")
             return False
-
 
     def is_large_resolution(self, video_path: Path) -> bool:
         """

@@ -12,7 +12,6 @@ from config import (
     logger
 )
 
-
 class FFmpegMonitor(threading.Thread):
     """
     # On centralise toute la surveillance des processus FFmpeg ici
@@ -24,15 +23,6 @@ class FFmpegMonitor(threading.Thread):
         self.ffmpeg_log_dir = Path("/app/logs/ffmpeg")
         self.ffmpeg_log_dir.mkdir(parents=True, exist_ok=True)
         
-    def run(self):
-        while not self.stop_event.is_set():
-            try:
-                self._check_all_ffmpeg_processes()
-                time.sleep(10)  # On vérifie toutes les 10s
-            except Exception as e:
-                logger.error(f"❌ Erreur monitoring FFmpeg: {e}")
-                time.sleep(10)
-
     def _check_all_ffmpeg_processes(self):
         """
         Parcourt tous les processus pour voir lesquels sont liés à FFmpeg,
@@ -152,7 +142,6 @@ class FFmpegMonitor(threading.Thread):
                 except psutil.NoSuchProcess:
                     continue
 
-
     def _is_process_active(self, channel_name: str, pid: int) -> bool   :
         """
         Vérifie si un processus est actif en fonction des watchers et du temps d'inactivité
@@ -190,3 +179,12 @@ class FFmpegMonitor(threading.Thread):
             return False
             
         return True
+    
+    def run(self):
+        while not self.stop_event.is_set():
+            try:
+                self._check_all_ffmpeg_processes()
+                time.sleep(10)  # On vérifie toutes les 10s
+            except Exception as e:
+                logger.error(f"❌ Erreur monitoring FFmpeg: {e}")
+                time.sleep(10)
