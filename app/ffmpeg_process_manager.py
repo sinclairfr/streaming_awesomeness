@@ -30,69 +30,51 @@ class FFmpegProcessManager:
         self.on_process_died = None        # Callback quand le processus meurt
         self.on_position_update = None     # Callback quand la position est mise à jour
         self.on_segment_created = None     # Callback quand un segment est créé
-        
-    def start_process(self, command, hls_dir):
-        """
-        # Démarre un processus FFmpeg avec la commande fournie
-        # Renvoie True si démarré avec succès, False sinon
-        """
-        with self.lock:
-            # On nettoie d'abord les processus existants
-            self._clean_existing_processes()
-            
-            try:
-                # On s'assure que le dossier HLS existe
-                Path(hls_dir).mkdir(parents=True, exist_ok=True)
-                
-                # Préparation du log si disponible
-                log_file = None
-                if self.logger_instance:
-                    log_file = open(self.logger_instance.get_main_log_file(), "a", buffering=1)
-                    logger.info(f"[{self.channel_name}] 📝 Logs FFmpeg -> {self.logger_instance.get_main_log_file()}")
-                
-                # Lancement du processus
-                logger.info(f"[{self.channel_name}] 🚀 Lancement FFmpeg: {' '.join(command)}")
-                
-                if log_file:
-                    # Avec redirection des logs
-                    process = subprocess.Popen(
-                        command,
-                        stdout=log_file,
-                        stderr=subprocess.STDOUT,
-                        bufsize=1,
-                        universal_newlines=True
-                    )
-                else:
-                    # Sans redirection (stdout/stderr ignorés)
-                    process = subprocess.Popen(
-                        command,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL
-                    )
-                
-                self.process = process
-                self.active_pids.add(process.pid)
-                
-                # Vérification rapide du démarrage
-                time.sleep(1)
-                if self.process.poll() is not None:
-                    logger.error(f"[{self.channel_name}] ❌ FFmpeg s'est arrêté immédiatement")
-                    if log_file:
-                        log_file.close()
-                    return False
-                
-                # Démarrage du thread de surveillance
-                self._start_monitoring(hls_dir)
-                
-                logger.info(f"[{self.channel_name}] ✅ FFmpeg démarré avec PID: {self.process.pid}")
-                return True
-                
-            except Exception as e:
-                logger.error(f"[{self.channel_name}] ❌ Erreur démarrage FFmpeg: {e}")
-                if 'log_file' in locals() and log_file:
-                    log_file.close()
-                return False
+
+    def start_stream(self) -> bool:
+        """Démarre le stream avec FFmpeg en utilisant les nouvelles classes"""
+        try:
+            logger.info(f"[{self.name}] 🚀 Démarrage du stream...")
+
+            hls_dir = Path(f"/app/hls/{self.name}")
+            hls_dir.mkdir(parents=True, exist_ok=True)
     
+            concat_file = self._create_concat_file()
+            if not concat_file or not concat_file.exists():
+                logger.error(f"[{self.name}] ❌ _playlist.txt introuvable")
+                return False
+
+            start_offset = self.position_manager.get_start_offset()
+            logger.info(f"[{self.name}] Décalage de démarrage: {start_offset}")
+            
+            logger.info(f"[{self.name}] Optimisation pour le matériel...")
+            self.command_builder.optimize_for_hardware()
+            logger.info(f"[{self.name}] Vérification mkv...")
+            has_mkv = self.command_builder.detect_mkv_in_playlist(concat_file)
+
+            logger.info(f"[{self.name}] Construction de la commande FFmpeg...")
+            command = self.command_builder.build_command(
+                input_file=concat_file,
+                output_dir=hls_dir,
+                playback_offset=start_offset,
+                progress_file=self.logger.get_progress_file(),
+                has_mkv=has_mkv
+            )
+            logger.info(f"[{self.name}] Commande FFmpeg: {command}")
+            
+            if not self.process_manager.start_process(command, hls_dir):
+                logger.error(f"[{self.name}] ❌ Échec démarrage FFmpeg")
+                return False
+                
+            self.position_manager.set_playing(True)
+            
+            logger.info(f"[{self.name}] ✅ Stream démarré avec succès")
+            return True
+
+        except Exception as e:
+            logger.error(f"Erreur démarrage stream {self.name}: {e}")
+            return False    
+      
     def stop_process(self, save_position=True):
         """
         # Arrête proprement le processus FFmpeg en cours

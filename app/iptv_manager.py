@@ -109,7 +109,7 @@ class IPTVManager:
 
                     # Si inactif depuis plus de TIMEOUT_NO_VIEWERS (120s par défaut)
                     if inactivity_duration > TIMEOUT_NO_VIEWERS:
-                        if channel.ffmpeg_process is not None:
+                        if channel.process_manager.is_running():
                             logger.warning(
                                 f"[{channel_name}] ⚠️ Stream inactif depuis {inactivity_duration:.1f}s, on arrête FFmpeg"
                             )
