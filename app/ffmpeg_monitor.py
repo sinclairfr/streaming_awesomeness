@@ -83,7 +83,7 @@ class FFmpegMonitor(threading.Thread):
     def _cleanup_zombie_processes(self, channel_name: str, pids: list):
         """
         Nettoie les processus FFmpeg zombies pour une chaîne donnée,
-        en conservant uniquement le plus récent et sauvegarde l'offset avant tout kill.
+        en conservant uniquement le plus récent.
         """
         if not pids:
             return
@@ -114,12 +114,13 @@ class FFmpegMonitor(threading.Thread):
 
         # Sauvegarde de l'offset avant kill forcé
         channel = self.channels.get(channel_name)
-        if channel:
-            current_time = time.time()
-            elapsed = current_time - channel.last_playback_time
-            channel.playback_offset = (channel.playback_offset + elapsed) % channel.total_duration
-            channel.last_playback_time = current_time
-            logger.info(f"[{channel_name}] 💾 Position sauvegardée avant kill forcé: {channel.playback_offset:.1f}s")
+        if channel and hasattr(channel, 'process_manager') and hasattr(channel.process_manager, 'get_playback_offset'):
+            try:
+                # Utilise le process_manager pour sauvegarder la position
+                channel.process_manager.save_position()
+                logger.info(f"[{channel_name}] 💾 Position sauvegardée avant kill forcé")
+            except Exception as e:
+                logger.error(f"[{channel_name}] Erreur sauvegarde position: {e}")
 
         for pid in pids:
             if pid != latest_pid:
@@ -141,7 +142,7 @@ class FFmpegMonitor(threading.Thread):
                         psutil.Process(pid).kill()
                 except psutil.NoSuchProcess:
                     continue
-
+                
     def _is_process_active(self, channel_name: str, pid: int) -> bool   :
         """
         Vérifie si un processus est actif en fonction des watchers et du temps d'inactivité

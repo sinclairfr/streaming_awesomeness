@@ -359,3 +359,24 @@ class FFmpegProcessManager:
         # Vérifie si le processus FFmpeg est en cours d'exécution
         """
         return self.process is not None and self.process.poll() is None
+
+    def save_position(self):
+        """
+        # Sauvegarde la position de lecture actuelle
+        """
+        try:
+            # Calcul de l'offset actuel
+            current_time = time.time()
+            if hasattr(self, 'last_playback_time') and hasattr(self, 'playback_offset') and hasattr(self, 'total_duration'):
+                elapsed = current_time - self.last_playback_time
+                self.playback_offset = (self.playback_offset + elapsed) % self.total_duration
+                self.last_playback_time = current_time
+                
+                logger.info(f"[{self.channel_name}] 💾 Position sauvegardée: {self.playback_offset:.1f}s")
+                return True
+            else:
+                logger.warning(f"[{self.channel_name}] ⚠️ Impossible de sauvegarder la position (attributs manquants)")
+                return False
+        except Exception as e:
+            logger.error(f"[{self.channel_name}] ❌ Erreur sauvegarde position: {e}")
+            return False
