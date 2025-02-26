@@ -865,7 +865,7 @@ class IPTVChannel:
         except Exception as e:
             logger.error(f"[{self.name}] ❌ Erreur vérification VideoProcessor: {e}")
             return False
-            
+    
     def _build_ffmpeg_command(self, hls_dir: str) -> list:
         """Construction de la commande FFmpeg avec protection correcte des caractères spéciaux"""
         try:
@@ -890,14 +890,14 @@ class IPTVChannel:
                 
         except Exception as e:
             logger.error(f"[{self.name}] ❌ Erreur construction commande FFmpeg: {e}")
-            return self._build_fallback_command(hls_dir)
+            return self._build_fallback_command(hls_dir)           
     
     def _build_fallback_command(self, hls_dir: str) -> list:
-        """Commande de fallback en cas d'erreur"""
+        """Commande de fallback en cas d'erreur - version simplifiée mais fonctionnelle"""
         return [
             "ffmpeg", "-hide_banner", "-loglevel", FFMPEG_LOG_LEVEL,
             "-y", "-i", str(self._create_concat_file()),
-            "-c", "copy",
+            "-c", "copy",  # On utilise copy pour être sûr que ça passe
             "-f", "hls",
             "-hls_time", "6",
             "-hls_list_size", "5",
@@ -905,25 +905,81 @@ class IPTVChannel:
             "-hls_segment_filename", f"{hls_dir}/segment_%d.ts",
             f"{hls_dir}/playlist.m3u8"
         ]
-        
+            
     def _build_hls_params(self, hls_dir: str) -> list:
         """Paramètres HLS optimisés pour la fluidité"""
         return [
             "-f", "hls",
-            "-hls_time", "2",  # Segments plus courts
-            "-hls_list_size", "10",  # Plus de segments dans la playlist
+            "-hls_time", "2",  # Segments plus courts pour meilleure réactivité
+            "-hls_list_size", "10",  # Nombre de segments dans la playlist
             "-hls_delete_threshold", "1",
-            "-hls_flags", "delete_segments+append_list+program_date_time+independent_segments+round_durations",
+            "-hls_flags", "delete_segments+append_list+program_date_time+independent_segments",
             "-start_number", "0",
             "-hls_segment_type", "mpegts",
-            "-max_delay", "2000000",  # Délai max réduit à 2 secondes
+            "-max_delay", "2000000",  # Délai max 2 secondes
             "-avoid_negative_ts", "make_zero",
-            "-hls_init_time", "2",  # Durée initiale plus courte
             "-hls_segment_filename", f"{hls_dir}/segment_%d.ts",
             f"{hls_dir}/playlist.m3u8"
         ]
     
-        """Paramètres d'entrée optimisés avec meilleure gestion des boucles"""
+    def _build_encoding_params(self) -> list:
+        """Paramètres d'encodage optimisés avec gestion GPU/CPU"""
+        # On vérifie la présence de MKV
+        has_mkv = self._contains_mkv()
+        logger.info(f"[{self.name}] 🎥 Statut MKV: {has_mkv}")
+        
+        if has_mkv:
+            logger.info(f"[{self.name}] 🎬 Application des paramètres MKV optimisés")
+            
+            # Paramètres de base pour MKV
+            base_params = [
+                "-c:v", "h264_vaapi" if self.use_gpu else "libx264",
+                "-profile:v", "main",
+                "-preset", "fast",
+                "-level", "4.1",
+                "-b:v", "5M",
+                "-maxrate", "5M",
+                "-bufsize", "10M",
+                "-g", "48",
+                "-keyint_min", "48",
+                "-sc_threshold", "0",
+            ]
+
+            # Ajout des paramètres GPU si activé
+            if self.use_gpu:
+                base_params.extend([
+                    "-vf", "format=nv12|vaapi,hwupload",
+                    "-low_power", "1"
+                ])
+
+            # Paramètres audio
+            base_params.extend([
+                "-c:a", "aac",
+                "-b:a", "192k",
+                "-ar", "48000",
+                "-ac", "2"
+            ])
+
+            # Désactivation des sous-titres et pistes de données
+            base_params.extend([
+                "-sn",
+                "-dn"
+            ])
+
+            return [p for p in base_params if p is not None]
+            
+        # Mode copie pour formats compatibles
+        logger.info(f"[{self.name}] ℹ️ Mode copie simple activé")
+        return [
+            "-c:v", "copy",
+            "-c:a", "copy",
+            "-sn",
+            "-dn",
+            "-max_muxing_queue_size", "1024"  # Pour éviter les problèmes de muxing
+        ]
+    
+    def _build_input_params(self) -> list:
+        """Paramètres d'entrée avec gestion correcte du bouclage et offset"""
         base_params = [
             "ffmpeg",
             "-hide_banner",
@@ -932,7 +988,7 @@ class IPTVChannel:
             "-thread_queue_size", "8192",  
             "-analyzeduration", "20M",
             "-probesize", "20M",
-            "-re",
+            "-re",  # Lecture à vitesse réelle
             "-stream_loop", "-1",  # Boucle infinie sur la playlist
             "-progress", str(self.logger.get_progress_file()),
             "-fflags", "+genpts+igndts+discardcorrupt+fastseek",
@@ -960,51 +1016,6 @@ class IPTVChannel:
             "-f", "concat",
             "-safe", "0",
             "-segment_time_metadata", "1",  # Meilleure gestion des segments
-            "-i", str(self._create_concat_file())
-        ])
-
-        return base_params
-    
-    def _build_encoding_params(self) -> list:
-        """Paramètres d'encodage simples : on copie les streams car déjà normalisés"""
-        params = [
-            "-c:v", "copy",  # Copie directe du flux vidéo
-            "-c:a", "copy",  # Copie directe du flux audio
-            "-sn",          # Pas de sous-titres
-            "-dn",          # Pas de flux de données
-            "-max_muxing_queue_size", "1024"  # Pour éviter les problèmes de muxing
-        ]
-        
-        return params
-    
-    def _build_input_params(self) -> list:
-        """Paramètres d'entrée avec gestion correcte du bouclage"""
-        base_params = [
-            "ffmpeg",
-            "-hide_banner",
-            "-loglevel", FFMPEG_LOG_LEVEL,
-            "-y",
-            "-re",  # Lecture en temps réel
-            "-fflags", "+genpts+igndts",  # Génération des timestamps
-            "-progress", str(self.logger.get_progress_file())
-        ]
-
-        try:
-            if not self.total_duration:
-                self.total_duration = self._calculate_total_duration()
-                
-            if not hasattr(self, 'playback_offset'):
-                self.playback_offset = random.uniform(0, self.total_duration or 120)
-                
-            if hasattr(self, 'playback_offset') and self.playback_offset > 0:
-                base_params.extend(["-ss", f"{self.playback_offset}"])
-        except Exception as e:
-            logger.error(f"[{self.name}] Erreur gestion offset: {e}")
-
-        # Input file
-        base_params.extend([
-            "-f", "concat",
-            "-safe", "0",
             "-i", str(self._create_concat_file())
         ])
 

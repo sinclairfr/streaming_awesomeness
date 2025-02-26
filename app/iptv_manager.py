@@ -26,19 +26,17 @@ from config import (
     NGINX_ACCESS_LOG,
     SERVER_URL,
     TIMEOUT_NO_VIEWERS,
-    logger  
+    logger,
+    VIDEO_EXTENSIONS,
+    CPU_THRESHOLD,
+    SEGMENT_AGE_THRESHOLD
 )
 
 class IPTVManager:
     """
     # On gère toutes les chaînes, le nettoyage HLS, la playlist principale, etc.
     """
-
-    # Constantes
-    VIDEO_EXTENSIONS = (".mp4", ".avi", ".mkv", ".mov")
-    CPU_THRESHOLD = 85
-    SEGMENT_AGE_THRESHOLD = 30  # En secondes
-
+    
     def __init__(self, content_dir: str, use_gpu: bool = False):
         self.ensure_hls_directory()  # Sans argument pour le dossier principal
 
