@@ -14,6 +14,7 @@ from mkv_handler import MKVHandler
 from ffmpeg_command_builder import FFmpegCommandBuilder
 from ffmpeg_process_manager import FFmpegProcessManager
 from playback_position_manager import PlaybackPositionManager
+import subprocess
 
 from config import (
     TIMEOUT_NO_VIEWERS,
@@ -155,6 +156,55 @@ class IPTVChannel:
         except Exception as e:
             logger.error(f"[{self.name}] ❌ Erreur nettoyage processus: {e}")              
     
+    def _get_accurate_duration(self, video_path: Path) -> float:
+        """
+        Obtient la durée précise d'un fichier vidéo avec plusieurs tentatives
+        et cache des résultats pour performance
+        """
+        # Utilisation d'un cache interne
+        if not hasattr(self, '_duration_cache'):
+            self._duration_cache = {}
+            
+        video_str = str(video_path)
+        if video_str in self._duration_cache:
+            return self._duration_cache[video_str]
+            
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                cmd = [
+                    "ffprobe",
+                    "-v", "error",
+                    "-show_entries", "format=duration",
+                    "-of", "default=noprint_wrappers=1:nokey=1",
+                    str(video_path)
+                ]
+                
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                
+                if result.returncode == 0 and result.stdout.strip():
+                    try:
+                        duration = float(result.stdout.strip())
+                        if duration > 0:
+                            # Arrondir à 3 décimales pour éviter erreurs d'imprécision
+                            duration = round(duration, 3)
+                            self._duration_cache[video_str] = duration
+                            return duration
+                    except ValueError:
+                        pass
+                
+                # Pause entre les tentatives
+                time.sleep(0.5)
+                
+            except Exception as e:
+                logger.error(f"[{self.name}] ❌ Erreur ffprobe durée {video_path.name}: {e}")
+        
+        # Valeur par défaut si impossible de déterminer la durée
+        logger.warning(f"[{self.name}] ⚠️ Impossible d'obtenir la durée pour {video_path.name}, utilisation valeur par défaut")
+        default_duration = 3600.0  # 1 heure par défaut
+        self._duration_cache[video_str] = default_duration
+        return default_duration
+    
     def _create_concat_file(self) -> Optional[Path]:
         """Crée le fichier de concaténation avec les bons chemins"""
         try:
@@ -182,7 +232,66 @@ class IPTVChannel:
         except Exception as e:
             logger.error(f"[{self.name}] ❌ Erreur _playlist.txt: {e}")
             return None
-        
+
+    def _rename_all_videos_simple(self):
+        """Renomme tous les fichiers problématiques avec des noms ultra simples"""
+        try:
+            processed_dir = Path(CONTENT_DIR) / self.name / "processed"
+            if not processed_dir.exists():
+                processed_dir.mkdir(parents=True, exist_ok=True)
+                
+            source_dir = Path(CONTENT_DIR) / self.name
+            
+            # D'abord, on traite les fichiers sources
+            for i, video in enumerate(source_dir.glob("*.mp4")):
+                if any(c in video.name for c in " ,;'\"()[]{}=+^%$#@!&~`|<>?"):
+                    simple_name = f"video_{i+1}.mp4"
+                    new_path = video.parent / simple_name
+                    try:
+                        video.rename(new_path)
+                        logger.info(f"[{self.name}] Source renommé: {video.name} -> {simple_name}")
+                    except Exception as e:
+                        logger.error(f"[{self.name}] Erreur renommage source {video.name}: {e}")
+                        
+            # Ensuite, on traite les fichiers du dossier processed
+            for i, video in enumerate(processed_dir.glob("*.mp4")):
+                if any(c in video.name for c in " ,;'\"()[]{}=+^%$#@!&~`|<>?"):
+                    simple_name = f"processed_{i+1}.mp4"
+                    new_path = video.parent / simple_name
+                    try:
+                        video.rename(new_path)
+                        logger.info(f"[{self.name}] Processed renommé: {video.name} -> {simple_name}")
+                    except Exception as e:
+                        logger.error(f"[{self.name}] Erreur renommage processed {video.name}: {e}")
+                        
+        except Exception as e:
+            logger.error(f"[{self.name}] Erreur renommage global: {e}")
+
+    def _rename_problematic_files(self) -> None:
+        """Renomme les fichiers avec des caractères problématiques"""
+        try:
+            processed_dir = Path(CONTENT_DIR) / self.name / "processed"
+            if not processed_dir.exists():
+                return
+                
+            for video in processed_dir.glob("*.*"):
+                # On vérifie si le nom contient des caractères problématiques
+                if any(c in str(video.name) for c in "(),\\[]'\""):
+                    # Génère un nom propre basé sur le nom original
+                    safe_name = self.processor.sanitize_filename(video.name)
+                    
+                    # Si le nom a changé, on renomme
+                    if safe_name != video.name:
+                        new_path = video.parent / safe_name
+                        try:
+                            video.rename(new_path)
+                            logger.info(f"[{self.name}] 🔄 Fichier renommé: {video.name} -> {safe_name}")
+                        except Exception as e:
+                            logger.error(f"[{self.name}] ❌ Erreur renommage {video.name}: {e}")
+            
+        except Exception as e:
+            logger.error(f"[{self.name}] ❌ Erreur renommage fichiers: {e}")    
+            
     def _verify_playlist(self):
         """Vérifie que le fichier playlist est valide"""
         try:
@@ -358,6 +467,9 @@ class IPTVChannel:
             
             self._verify_processor()
             
+            # On renomme d'abord les fichiers problématiques
+            self._rename_problematic_files()
+            
             if not source_dir.exists():
                 logger.error(f"[{self.name}] ❌ Dossier source introuvable: {source_dir}")
                 return False
@@ -371,8 +483,10 @@ class IPTVChannel:
                 logger.warning(f"[{self.name}] ⚠️ Aucun fichier vidéo dans {self.video_dir}")
                 return False
 
+            # On réinitialise la liste des vidéos traitées
             self.processed_videos = []
 
+            # IMPORTANT: On traite TOUTES les vidéos sources, même si aucune n'est déjà traitée
             for source in source_files:
                 try:
                     processed_file = processed_dir / f"{source.stem}.mp4"
@@ -416,9 +530,14 @@ class IPTVChannel:
                     logger.error(f"[{self.name}] ❌ Erreur traitement fichier {source.name}: {e}")
                     continue
 
-            if not self.processed_videos:
-                logger.error(f"[{self.name}] ❌ Aucune vidéo traitée disponible")
-                return False
+            # Ajout d'un scan récursif pour ramasser les vidéos qui pourraient être dans processed
+            # mais pas encore dans notre liste
+            for ext in video_extensions:
+                processed_files = processed_dir.glob(f"*{ext}")
+                for pf in processed_files:
+                    if pf not in self.processed_videos:
+                        self.processed_videos.append(pf)
+                        logger.info(f"[{self.name}] ✅ Ajout de la vidéo déjà traitée: {pf.name}")
 
             self.processed_videos.sort()
             logger.info(f"[{self.name}] ✅ Scan terminé: {len(self.processed_videos)} vidéos traitées")
@@ -512,8 +631,50 @@ class IPTVChannel:
         """Reçoit les mises à jour de position du ProcessManager"""
         self.position_manager.update_from_progress(self.logger.get_progress_file())
         
-    def _handle_segment_created(self, segment_path, size):
+    def _handle_segment_created(self, segment_path, size):  
         """Notifié quand un nouveau segment est créé"""
         self.last_segment_time = time.time()
         if self.logger:
             self.logger.log_segment(segment_path, size)
+            
+    def report_segment_jump(self, prev_segment: int, curr_segment: int):
+        """
+        Gère les sauts détectés dans les segments HLS
+        
+        Args:
+            prev_segment: Le segment précédent
+            curr_segment: Le segment actuel (avec un saut)
+        """
+        try:
+            jump_size = curr_segment - prev_segment
+            
+            # On ne s'inquiète que des sauts importants
+            if jump_size <= 5:
+                return
+                
+            logger.warning(f"[{self.name}] 🚨 Saut de segment détecté: {prev_segment} → {curr_segment} (delta: {jump_size})")
+            
+            # Si les sauts sont vraiment grands (>= 20), on peut envisager un redémarrage
+            if jump_size >= 20:
+                if self.error_handler and self.error_handler.add_error("segment_jump"):
+                    logger.warning(f"[{self.name}] 🔄 Tentative de redémarrage suite à un saut important")
+                    
+                    # On sauvegarde la position actuelle
+                    if hasattr(self, 'position_manager'):
+                        self.position_manager.save_position()
+                    
+                    # Vérification des stats de visionnage
+                    watchers = getattr(self, 'watchers_count', 0)
+                    if watchers > 0:
+                        return self._restart_stream()
+                    else:
+                        logger.info(f"[{self.name}] ℹ️ Pas de redémarrage: aucun watcher actif")
+                        
+            # Sinon, on log juste le problème
+            else:
+                # On pourrait aussi analyser la fréquence des sauts
+                logger.info(f"[{self.name}] ℹ️ Saut mineur détecté, surveillance continue")
+                
+        except Exception as e:
+            logger.error(f"[{self.name}] ❌ Erreur gestion saut de segment: {e}")
+            return False

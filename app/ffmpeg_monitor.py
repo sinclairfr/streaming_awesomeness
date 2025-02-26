@@ -122,7 +122,7 @@ class FFmpegMonitor(threading.Thread):
             except Exception as e:
                 logger.error(f"❌ Erreur watchers_loop: {e}")
                 time.sleep(10)
-        
+    #TODO déplacer ver ffmpeg_process_manager.py
     def _cleanup_zombie_processes(self, channel_name: str, pids: list):
         """
         Version améliorée et plus agressive pour nettoyer les processus FFmpeg zombies

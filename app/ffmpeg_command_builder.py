@@ -7,6 +7,7 @@ from config import (
     FFMPEG_LOG_LEVEL,
     logger
 )
+from typing import Optional
 
 class FFmpegCommandBuilder:
     """
@@ -61,6 +62,67 @@ class FFmpegCommandBuilder:
             logger.error(f"[{self.channel_name}] ❌ Erreur construction commande: {e}")
             # Fallback à une commande minimale en cas d'erreur
             return self.build_fallback_command(input_file, output_dir)
+
+    def _create_concat_file(self) -> Optional[Path]:
+        """Version ultra simplifiée pour débloquer la situation"""
+        try:
+            # Renomme tous les fichiers problématiques avec des noms basiques
+            self._rename_all_videos_simple()
+            
+            # Crée une playlist simplifiée
+            processed_dir = Path(CONTENT_DIR) / self.name / "processed"
+            concat_file = Path(CONTENT_DIR) / self.name / "_playlist.txt"
+            
+            # Cherche tous les fichiers MP4
+            processed_files = list(processed_dir.glob("*.mp4"))
+            if not processed_files:
+                logger.error(f"[{self.name}] Aucune vidéo dans {processed_dir}")
+                return None
+                
+            # Écrit une playlist ultra basique
+            with open(concat_file, "w") as f:
+                for i, video in enumerate(sorted(processed_files)):
+                    f.write(f"file '{video}'\n")
+                    logger.info(f"[{self.name}] Ajout de {video.name}")
+                    
+            return concat_file
+        except Exception as e:
+            logger.error(f"[{self.name}] Erreur playlist: {e}")
+            return None
+
+    def _rename_all_videos_simple(self):
+        """Renomme tous les fichiers problématiques avec des noms ultra simples"""
+        try:
+            processed_dir = Path(CONTENT_DIR) / self.name / "processed"
+            if not processed_dir.exists():
+                processed_dir.mkdir(parents=True, exist_ok=True)
+                
+            source_dir = Path(CONTENT_DIR) / self.name
+            
+            # D'abord, on traite les fichiers sources
+            for i, video in enumerate(source_dir.glob("*.mp4")):
+                if any(c in video.name for c in " ,;'\"()[]{}=+^%$#@!&~`|<>?"):
+                    simple_name = f"video_{i+1}.mp4"
+                    new_path = video.parent / simple_name
+                    try:
+                        video.rename(new_path)
+                        logger.info(f"[{self.name}] Source renommé: {video.name} -> {simple_name}")
+                    except Exception as e:
+                        logger.error(f"[{self.name}] Erreur renommage source {video.name}: {e}")
+                        
+            # Ensuite, on traite les fichiers du dossier processed
+            for i, video in enumerate(processed_dir.glob("*.mp4")):
+                if any(c in video.name for c in " ,;'\"()[]{}=+^%$#@!&~`|<>?"):
+                    simple_name = f"processed_{i+1}.mp4"
+                    new_path = video.parent / simple_name
+                    try:
+                        video.rename(new_path)
+                        logger.info(f"[{self.name}] Processed renommé: {video.name} -> {simple_name}")
+                    except Exception as e:
+                        logger.error(f"[{self.name}] Erreur renommage processed {video.name}: {e}")
+                        
+        except Exception as e:
+            logger.error(f"[{self.name}] Erreur renommage global: {e}")    
     
     def build_input_params(self, input_file, playback_offset=0, progress_file=None):
         """
@@ -161,14 +223,14 @@ class FFmpegCommandBuilder:
     
     def build_hls_params(self, output_dir):
         """
-        # Construit les paramètres HLS optimisés
+        # Construit les paramètres HLS optimisés avec des ajustements pour éviter les sauts
         """
         return [
             "-f", "hls",
             "-hls_time", str(self.hls_time),  # Durée des segments
-            "-hls_list_size", str(self.hls_list_size),  # Nombre de segments dans la playlist
-            "-hls_delete_threshold", str(self.hls_delete_threshold),
-            "-hls_flags", "delete_segments+append_list+program_date_time+independent_segments+round_durations",
+            "-hls_list_size", str(max(15, self.hls_list_size)),  # Au moins 15 segments dans la playlist
+            "-hls_delete_threshold", str(min(3, self.hls_delete_threshold)),  # Attendre au moins 3 segments avant suppression
+            "-hls_flags", "delete_segments+append_list+program_date_time+independent_segments+discont_start+split_by_time+round_durations",
             "-start_number", "0",
             "-hls_segment_type", "mpegts",
             "-max_delay", "2000000",  # Délai max réduit
@@ -176,8 +238,8 @@ class FFmpegCommandBuilder:
             "-hls_init_time", "2",  # Durée initiale
             "-hls_segment_filename", f"{output_dir}/segment_%d.ts",
             f"{output_dir}/playlist.m3u8"
-        ]
-    
+        ]   
+        
     def build_fallback_command(self, input_file, output_dir):
         """
         # Construit une commande minimale en cas d'erreur

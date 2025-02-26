@@ -112,13 +112,16 @@ class VideoProcessor:
             return args
     
     def sanitize_filename(self, filename: str) -> str:
-        """Sanitize filename to remove problematic characters"""
-        # Remove or replace problematic characters
-        sanitized = filename.replace("'", "").replace('"', "")
-        # Replace spaces with underscores
-        sanitized = sanitized.replace(" ", "_")
-        # Remove any other special characters except letters, numbers, dots, and underscores
-        sanitized = re.sub(r'[^a-zA-Z0-9._-]', '', sanitized)
+        """Sanitize le nom de fichier en retirant TOUS les caractères problématiques"""
+        # On nettoie plus agressivement les caractères problématiques pour FFmpeg
+        sanitized = filename.replace("'", "").replace('"', "").replace(",", "_")
+        sanitized = sanitized.replace("-", "_").replace(" ", "_")
+        # On supprime les caractères spéciaux et on garde uniquement lettres, chiffres, points et underscore
+        sanitized = re.sub(r'[^a-zA-Z0-9._]', '', sanitized)
+        # Limitation longueur max à 100 caractères pour éviter problèmes de buffer
+        if len(sanitized) > 100:
+            base, ext = os.path.splitext(sanitized)
+            sanitized = base[:96] + ext  # On garde l'extension
         return sanitized
     
     def process_video(self, video_path: Path) -> Path:
