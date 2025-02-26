@@ -1,16 +1,27 @@
-app/cache
-app/content
-app/hls
+# Ignore cache directories
+app/cache/
+app/content/
+app/hls/
+app/logs/
+
+# Ignore environment files
 .env
 env
-rebus
-app/logs
-app/__pycache__/
-__pycache__
+
+# Ignore Python bytecode directories
 __pycache__/
+app/__pycache__/
+
+# Ignore specific files
 archive.zip
-archive.zip
-nginx_logs/error.log
-nginx_logs/access.log
-nginx_logs/*
+rebus
+
+# Ignore Dockerfile
 Dockerfile
+
+# Ignore Nginx logs
+nginx_logs/
+
+# Ignore FFmpeg logs
+logs/ffmpeg/
+
