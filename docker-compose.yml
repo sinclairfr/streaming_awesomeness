@@ -1,30 +1,53 @@
+version: '3.8'
+
 services:
   iptv-manager:
-    container_name: iptv-manager  # Nom fixe du container
-    build: 
+    container_name: iptv-manager
+    env_file:
+      - .env
+    build:
       context: .
       dockerfile: Dockerfile
+    #user: "1000:1000"  # Exécuter en tant qu'utilisateur non-root (streamer)
+    user: root
+    #entrypoint: ["/bin/bash", "-c", "chown -R streamer:streamer /app /var/log/nginx && chmod -R 777 /app /var/log/nginx && exec python3 main.py"]
+    entrypoint: ["/bin/bash", "-c", "chmod 777 /dev/dri/renderD128 && chmod 777 /dev/dri/card1 && chown -R streamer:streamer /app /var/log/nginx && chmod -R 777 /app /var/log/nginx && exec python3 main.py"]
     volumes:
-      - ${PWD}/content:/app/content
-      - ${PWD}/hls:/app/hls
-      - ${PWD}/iptv_manager.py:/app/iptv_manager.py
-      - ${PWD}/crash_timer.log:/crash_timer.log:rw
-      - ${PWD}/logs/ffmpeg:/app/logs/ffmpeg:rw  
-    runtime: nvidia
+      - ./app/content:/app/content:rw
+      - ./app/hls:/app/hls:rw
+      - ./app/logs:/app/logs:rw
+      - ./nginx_logs:/var/log/nginx:rw
+      - ./app:/app:rw  # Regroupe tous les fichiers de l'application
+      - ./requirements.txt:/app/requirements.txt:rw
+      - /mnt/videos/streaming_awesomeness:/mnt/videos/streaming_awesomeness
+       # For memory management    
+    devices:
+      - /dev/dri/card1:/dev/dri/card1
+      - /dev/dri/renderD128:/dev/dri/renderD128
+    security_opt:
+      - apparmor:unconfined  # May be needed for full GPU access
     environment:
-      - NVIDIA_VISIBLE_DEVICES=all
-      - USE_GPU=auto
-      - SERVER_URL=192.168.10.183
+      - NVIDIA_VISIBLE_DEVICES=
+      - FFMPEG_HARDWARE_ACCELERATION=vaapi
+      - PUID=1000
+      - PGID=1000
     restart: unless-stopped
 
   nginx:
-    container_name: iptv-nginx  # Nom fixe pour nginx aussi
+    user: root
+    container_name: iptv-nginx
     image: nginx:alpine
+    env_file:
+      - .env
     ports:
       - "80:80"
     volumes:
-      - ${PWD}/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ${PWD}/hls:/hls:ro
+      - ./nginx.conf:/etc/nginx/nginx.conf:rw
+      - ./app/hls:/hls:rw
+      - ./nginx_logs:/var/log/nginx:rw
+    tmpfs:
+      - /var/run/nginx
+      - /var/cache/nginx
     depends_on:
       - iptv-manager
     restart: unless-stopped

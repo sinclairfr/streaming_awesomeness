@@ -24,4 +24,3 @@ nginx_logs/
 
 # Ignore FFmpeg logs
 logs/ffmpeg/
-

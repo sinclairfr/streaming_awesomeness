@@ -1,7 +1,6 @@
-# .dockerignore
-content/
-hls/
-cache/
+app/content/
+app/hls/
+app/cache/
 *.mp4
 *.avi
 *.mkv
@@ -11,3 +10,4 @@ cache/
 *.ts
 rebus/
 env/
+*.log  # Ignore log files

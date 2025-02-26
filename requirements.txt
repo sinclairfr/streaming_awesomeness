@@ -3,3 +3,4 @@ watchdog
 psutil
 ffmpeg
 tqdm
+tree #for debugging purposes
