@@ -3,6 +3,7 @@
 import time
 from config import logger
 import datetime
+from pathlib import Path
 
 class StreamErrorHandler:
     def __init__(self, channel_name: str):
@@ -13,6 +14,12 @@ class StreamErrorHandler:
         self.restart_cooldown = 60
         self.last_restart_time = 0
         self.error_types = set()  # Pour tracker les types d'erreurs
+        
+        # Chemin du fichier de log unique pour ce canal
+        self.crash_log_path = Path(f"/app/logs/crashes_{self.channel_name}.log")
+        
+        # S'assure que le répertoire existe
+        self.crash_log_path.parent.mkdir(exist_ok=True)
 
     def add_error(self, error_type: str) -> bool:
         """
@@ -45,7 +52,7 @@ class StreamErrorHandler:
         self.last_restart_time = current_time
         
         # Log le redémarrage
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         try:
             with open(self.crash_log_path, "a") as f:
                 f.write(f"{timestamp} - [{self.channel_name}] Redémarrage #{self.restart_count}\n")
@@ -60,7 +67,7 @@ class StreamErrorHandler:
     def reset(self):
         """Reset après un stream stable"""
         if self.error_count > 0 or self.restart_count > 0:
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             try:
                 with open(self.crash_log_path, "a") as f:
                     f.write(f"{timestamp} - [{self.channel_name}] Reset des erreurs\n")
@@ -74,12 +81,12 @@ class StreamErrorHandler:
         return True
 
     def _log_crash(self, error_type: str):
-        """Log des erreurs dans un fichier de crash dédié."""
-        crash_log_path = Path(f"/app/logs/crashes_{self.channel_name}.log")
-        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        """Log des erreurs dans un fichier de crash dédié"""
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         try:
-            with open(crash_log_path, "a") as f:
+            with open(self.crash_log_path, "a") as f:
                 f.write(f"{timestamp} - Erreur détectée: {error_type}\n")
+                f.write(f"Compteur d'erreurs: {self.error_count}, Types d'erreurs: {', '.join(self.error_types)}\n")
                 f.write("-" * 80 + "\n")
         except Exception as e:
             logger.error(f"Erreur écriture log crash pour {self.channel_name}: {e}")

@@ -51,11 +51,59 @@ logging.getLogger().setLevel(get_log_level(os.getenv("LOG_LEVEL", "INFO")))
 # On configure le logger pour les crashs
 logger = logging.getLogger(__name__)
 
-crash_logger = logging.getLogger("CrashTimer")
-if not crash_logger.handlers:
-    crash_handler = logging.FileHandler("/app/logs/crash_timer.log")
-    crash_handler.setFormatter(
-        logging.Formatter("%(asctime)s - %(message)s")
-    )
-    crash_logger.addHandler(crash_handler)
-    crash_logger.setLevel(logging.INFO)
+
+def setup_log_rotation(log_dir="/app/logs", max_size_mb=5, max_backups=5):
+    """Configure une rotation basique des logs"""
+    try:
+        log_dir_path = Path(log_dir)
+        log_dir_path.mkdir(parents=True, exist_ok=True)
+        
+        # Vérifie et nettoie les logs existants
+        for log_file in log_dir_path.glob("*.log"):
+            try:
+                if log_file.stat().st_size > max_size_mb * 1024 * 1024:
+                    # Format du timestamp
+                    timestamp = time.strftime("%Y%m%d_%H%M%S")
+                    
+                    # Nouveau nom avec timestamp
+                    backup_name = f"{log_file.stem}_{timestamp}{log_file.suffix}"
+                    backup_path = log_file.parent / backup_name
+                    
+                    # Rotation
+                    log_file.rename(backup_path)
+                    log_file.touch()
+                    
+                    logger.info(f"🔄 Rotation du log {log_file.name} -> {backup_name}")
+                    
+                    # Nettoie les anciennes archives
+                    _cleanup_old_logs(log_file.parent, log_file.stem, log_file.suffix, max_backups)
+            except Exception as e:
+                # Continue même si erreur sur un fichier
+                print(f"Erreur rotation log {log_file}: {e}")
+                continue
+        
+        logger.info(f"✅ Configuration de rotation des logs terminée")
+        return True
+    except Exception as e:
+        print(f"Erreur setup_log_rotation: {e}")
+        return False
+
+def _cleanup_old_logs(dir_path, base_name, suffix, max_backups=5):
+    """Nettoie les anciens fichiers de logs"""
+    try:
+        pattern = f"{base_name}_*{suffix}"
+        archived_logs = list(dir_path.glob(pattern))
+        
+        # Trie par date de modification (du plus récent au plus ancien)
+        archived_logs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        
+        # Supprime les logs les plus anciens (au-delà de max_backups)
+        if len(archived_logs) > max_backups:
+            for old_log in archived_logs[max_backups:]:
+                try:
+                    old_log.unlink()
+                    logger.info(f"🗑️ Suppression de l'ancien log: {old_log.name}")
+                except Exception as e:
+                    logger.error(f"Erreur suppression {old_log.name}: {e}")
+    except Exception as e:
+        logger.error(f"Erreur nettoyage des anciens logs: {e}")

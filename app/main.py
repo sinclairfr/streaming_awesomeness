@@ -45,6 +45,11 @@ class Application:
                 if not os.access(str(path), os.W_OK):
                     logger.error(f"❌ Pas de droits d'écriture sur {d}")
                     return False
+            
+            # Initialiser la rotation des logs
+            from config import setup_log_rotation
+            setup_log_rotation("/app/logs")
+            setup_log_rotation("/app/logs/ffmpeg")
                     
             return True
             
