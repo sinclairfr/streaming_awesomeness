@@ -87,7 +87,7 @@ class ClientMonitor(threading.Thread):
                         continue
 
                     channel = match.group(1)
-                    logger.info(f"🔍 Requête détectée: {ip} -> {channel} ({request})")
+                    logger.debug(f"🔍 Requête détectée: {ip} -> {channel} ({request})")
 
                     with self.lock:
                         old_count = len([1 for (ch, _), ts in self.watchers.items() if ch == channel])

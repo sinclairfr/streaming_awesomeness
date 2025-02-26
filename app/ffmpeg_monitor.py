@@ -122,7 +122,116 @@ class FFmpegMonitor(threading.Thread):
             except Exception as e:
                 logger.error(f"❌ Erreur watchers_loop: {e}")
                 time.sleep(10)
-                            
+    
+    def _cleanup_zombie_processes(self, channel_name: str, pids: list):
+        """
+        Nettoie les processus FFmpeg zombies pour une chaîne donnée.
+        Si un seul processus est détecté mais qu'il est inactif depuis longtemps,
+        on le tue proprement.
+        """
+        if not pids:
+            return
+
+        logger.info(f"[{channel_name}] 🔍 Processus FFmpeg détectés avant nettoyage: {pids}")
+
+        # On déduplique les PIDs
+        pids = list(set(pids))
+        
+        # On récupère la chaîne pour vérifier l'inactivité
+        channel = self.channels.get(channel_name)
+        if not channel:
+            logger.error(f"[{channel_name}] ❌ Chaîne introuvable dans le dictionnaire")
+            return
+        
+        # Si on a un seul PID mais qu'il est inactif depuis longtemps, on le tue
+        if len(pids) == 1 and hasattr(channel, 'last_watcher_time'):
+            inactivity_time = time.time() - channel.last_watcher_time
+            
+            if inactivity_time > TIMEOUT_NO_VIEWERS:
+                # On sauvegarde la position avant de tuer le process
+                if hasattr(channel, 'process_manager') and hasattr(channel.process_manager, 'get_playback_offset'):
+                    try:
+                        # Utilise le process_manager pour sauvegarder la position
+                        channel.process_manager.save_position()
+                        logger.info(f"[{channel_name}] 💾 Position sauvegardée avant arrêt")
+                    except Exception as e:
+                        logger.error(f"[{channel_name}] Erreur sauvegarde position: {e}")
+                
+                # On arrête le stream proprement via le channel
+                if hasattr(channel, 'stop_stream_if_needed'):
+                    logger.info(f"[{channel_name}] 🛑 Arrêt du stream inactif depuis {inactivity_time:.1f}s")
+                    channel.stop_stream_if_needed()
+                    return
+                
+                # Fallback: on tue directement le process si stop_stream_if_needed n'est pas disponible
+                try:
+                    pid = pids[0]
+                    if psutil.pid_exists(pid):
+                        logger.info(f"[{channel_name}] 🔪 Arrêt forcé du processus inactif: {pid}")
+                        process = psutil.Process(pid)
+                        process.terminate()
+                        time.sleep(2)
+                        if process.is_running():
+                            process.kill()
+                except psutil.NoSuchProcess:
+                    pass
+                except Exception as e:
+                    logger.error(f"[{channel_name}] Erreur arrêt forcé: {e}")
+                
+                return
+        
+        # Si on a plusieurs processus, on garde le plus récent
+        latest_pid = None
+        latest_start_time = 0
+
+        for pid in pids:
+            try:
+                if psutil.pid_exists(pid):
+                    process = psutil.Process(pid)
+                    ctime = process.create_time()
+                    if ctime > latest_start_time:
+                        latest_start_time = ctime
+                        latest_pid = pid
+            except psutil.NoSuchProcess:
+                continue
+
+        if latest_pid is None:
+            logger.warning(f"[{channel_name}] Aucun processus valide trouvé.")
+            return
+
+        logger.info(f"[{channel_name}] ✅ Conservation du processus le plus récent: {latest_pid}")
+
+        # Sauvegarde de l'offset avant kill forcé
+        channel = self.channels.get(channel_name)
+        if channel and hasattr(channel, 'process_manager') and hasattr(channel.process_manager, 'get_playback_offset'):
+            try:
+                # Utilise le process_manager pour sauvegarder la position
+                channel.process_manager.save_position()
+                logger.info(f"[{channel_name}] 💾 Position sauvegardée avant kill forcé")
+            except Exception as e:
+                logger.error(f"[{channel_name}] Erreur sauvegarde position: {e}")
+
+        # Suppression des processus autres que le plus récent
+        for pid in pids:
+            if pid != latest_pid:
+                try:
+                    if psutil.pid_exists(pid):
+                        logger.info(f"[{channel_name}] 🔪 Suppression du processus zombie: {pid}")
+                        process = psutil.Process(pid)
+                        process.terminate()  # SIGTERM
+                except psutil.NoSuchProcess:
+                    continue
+
+        time.sleep(2)
+
+        for pid in pids:
+            if pid != latest_pid:
+                try:
+                    if psutil.pid_exists(pid):
+                        logger.warning(f"[{channel_name}] 💀 Suppression forcée du processus: {pid}")
+                        psutil.Process(pid).kill()
+                except psutil.NoSuchProcess:
+                    continue                          
     def _is_process_active(self, channel_name: str, pid: int) -> bool   :
         """
         Vérifie si un processus est actif en fonction des watchers et du temps d'inactivité
