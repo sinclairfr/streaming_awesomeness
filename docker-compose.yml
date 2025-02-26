@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   iptv-manager:
     container_name: iptv-manager
@@ -13,7 +11,7 @@ services:
     #entrypoint: ["/bin/bash", "-c", "chown -R streamer:streamer /app /var/log/nginx && chmod -R 777 /app /var/log/nginx && exec python3 main.py"]
     entrypoint: ["/bin/bash", "-c", "chmod 777 /dev/dri/renderD128 && chmod 777 /dev/dri/card1 && chown -R streamer:streamer /app /var/log/nginx && chmod -R 777 /app /var/log/nginx && exec python3 main.py"]
     volumes:
-      - ./app/content:/app/content:rw
+      #- ./app/content:/app/content:rw
       - ./app/hls:/app/hls:rw
       - ./app/logs:/app/logs:rw
       - ./nginx_logs:/var/log/nginx:rw

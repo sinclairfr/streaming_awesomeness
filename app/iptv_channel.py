@@ -236,12 +236,16 @@ class IPTVChannel:
             logger.info(f"[{self.name}] 🚀 Démarrage du stream...")
 
             hls_dir = Path(f"/app/hls/{self.name}")
+            logger.info(f"[{self.name}] Création du répertoire HLS: {hls_dir}")
             hls_dir.mkdir(parents=True, exist_ok=True)
-            
+        
             concat_file = self._create_concat_file()
             if not concat_file or not concat_file.exists():
                 logger.error(f"[{self.name}] ❌ _playlist.txt introuvable")
                 return False
+            else:
+                logger.info(f"[{self.name}] ✅ _playlist.txt trouvé")
+            
 
             start_offset = self.position_manager.get_start_offset()
             logger.info(f"[{self.name}] Décalage de démarrage: {start_offset}")
@@ -259,7 +263,6 @@ class IPTVChannel:
                 progress_file=self.logger.get_progress_file(),
                 has_mkv=has_mkv
             )
-            logger.info(f"[{self.name}] Commande FFmpeg: {command}")
             
             if not self.process_manager.start_process(command, hls_dir):
                 logger.error(f"[{self.name}] ❌ Échec démarrage FFmpeg")
@@ -272,7 +275,7 @@ class IPTVChannel:
 
         except Exception as e:
             logger.error(f"Erreur démarrage stream {self.name}: {e}")
-            return False    
+            return False
     
     def _restart_stream(self) -> bool:
         """Redémarre le stream en cas de problème"""

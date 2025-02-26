@@ -174,21 +174,29 @@ class PlaybackPositionManager:
     
     def get_start_offset(self):
         """
-        # Renvoie l'offset de démarrage (dernière position connue ou offset aléatoire)
+        # Renvoie l'offset de démarrage sécurisé
         """
-        with self.lock:
-            # Si on a une dernière position connue et qu'elle est raisonnable, on l'utilise
-            if self.last_known_position > 0:
+        try:
+            # Vérifier si on a une position connue valide
+            if hasattr(self, 'last_known_position') and self.last_known_position > 0:
                 logger.info(f"[{self.channel_name}] ⏱️ Reprise à la dernière position: {self.last_known_position:.2f}s")
                 return self.last_known_position
+                
+            # Sinon on génère un offset aléatoire si possible
+            if hasattr(self, 'total_duration') and self.total_duration > 0:
+                max_offset = self.total_duration * 0.8
+                random_offset = random.uniform(0, max_offset)
+                logger.info(f"[{self.channel_name}] 🎲 Offset aléatoire généré: {random_offset:.2f}s")
+                return random_offset
+                
+            # Fallback sécurisé
+            logger.warning(f"[{self.channel_name}] ⚠️ Utilisation d'un offset de démarrage de secours (0)")
+            return 0.0
             
-            # Sinon, si on a un offset de démarrage, on l'utilise
-            if self.start_offset > 0:
-                return self.start_offset
-            
-            # Sinon, on génère un nouvel offset aléatoire
-            return self.get_random_offset()
-    
+        except Exception as e:
+            logger.error(f"[{self.channel_name}] ❌ Erreur calcul offset: {e}")
+            return 0.0
+        
     def calculate_durations(self, video_files):
         """
         # Calcule la durée totale à partir d'une liste de fichiers vidéo
