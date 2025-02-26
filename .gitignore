@@ -1,0 +1,16 @@
+app/cache
+app/content
+app/hls
+.env
+env
+rebus
+app/logs
+app/__pycache__/
+__pycache__
+__pycache__/
+archive.zip
+archive.zip
+nginx_logs/error.log
+nginx_logs/access.log
+nginx_logs/*
+Dockerfile
