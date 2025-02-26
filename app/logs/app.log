@@ -1,0 +1,56 @@
+2025-02-26 11:39:28,032 - config - [INFO] - 🧹 Log nettoyé: app.log
+2025-02-26 11:39:28,042 - config - [INFO] - 🧹 Log nettoyé: crash_timer.log
+2025-02-26 11:39:28,057 - config - [INFO] - 🧹 Log ffmpeg nettoyé: Le Gendarme_segments.log
+2025-02-26 11:39:28,067 - config - [INFO] - 🧹 Log ffmpeg nettoyé: defunes_segments.log
+2025-02-26 11:39:28,080 - config - [INFO] - 🧹 Log ffmpeg nettoyé: cameron_segments.log
+2025-02-26 11:39:28,089 - config - [INFO] - 🧹 Log ffmpeg nettoyé: corniaud_ffmpeg.log
+2025-02-26 11:39:28,101 - config - [INFO] - 🧹 Log ffmpeg nettoyé: LeGendarme_segments.log
+2025-02-26 11:39:28,109 - config - [INFO] - 🧹 Log ffmpeg nettoyé: zoo_progress.log
+2025-02-26 11:39:28,119 - config - [INFO] - 🧹 Log ffmpeg nettoyé: corniaud_progress.log
+2025-02-26 11:39:28,130 - config - [INFO] - 🧹 Log ffmpeg nettoyé: defunes_ffmpeg.log
+2025-02-26 11:39:28,138 - config - [INFO] - 🧹 Log ffmpeg nettoyé: Le Gendarme_ffmpeg.log
+2025-02-26 11:39:28,150 - config - [INFO] - 🧹 Log ffmpeg nettoyé: loop_ffmpeg.log
+2025-02-26 11:39:28,159 - config - [INFO] - 🧹 Log ffmpeg nettoyé: loop_segments.log
+2025-02-26 11:39:28,169 - config - [INFO] - 🧹 Log ffmpeg nettoyé: nouvelle_chaine_segments.log
+2025-02-26 11:39:28,177 - config - [INFO] - 🧹 Log ffmpeg nettoyé: rambo_ffmpeg.log
+2025-02-26 11:39:28,186 - config - [INFO] - 🧹 Log ffmpeg nettoyé: LeGendarme_progress.log
+2025-02-26 11:39:28,196 - config - [INFO] - 🧹 Log ffmpeg nettoyé: nouvelle_chaine_progress.log
+2025-02-26 11:39:28,211 - config - [INFO] - 🧹 Log ffmpeg nettoyé: rebus_segments.log
+2025-02-26 11:39:28,220 - config - [INFO] - 🧹 Log ffmpeg nettoyé: rambo_progress.log
+2025-02-26 11:39:28,229 - config - [INFO] - 🧹 Log ffmpeg nettoyé: zoo_segments.log
+2025-02-26 11:39:28,239 - config - [INFO] - 🧹 Log ffmpeg nettoyé: nouvelle_chaine_ffmpeg.log
+2025-02-26 11:39:28,249 - config - [INFO] - 🧹 Log ffmpeg nettoyé: LeGendarme_ffmpeg.log
+2025-02-26 11:39:28,259 - config - [INFO] - 🧹 Log ffmpeg nettoyé: cameron_ffmpeg.log
+2025-02-26 11:39:28,270 - config - [INFO] - 🧹 Log ffmpeg nettoyé: test_progress.log
+2025-02-26 11:39:28,280 - config - [INFO] - 🧹 Log ffmpeg nettoyé: loop_progress.log
+2025-02-26 11:39:28,296 - config - [INFO] - 🧹 Log ffmpeg nettoyé: youtube_segments.log
+2025-02-26 11:39:28,306 - config - [INFO] - 🧹 Log ffmpeg nettoyé: test_ffmpeg.log
+2025-02-26 11:39:28,320 - config - [INFO] - 🧹 Log ffmpeg nettoyé: rambo_segments.log
+2025-02-26 11:39:28,335 - config - [INFO] - 🧹 Log ffmpeg nettoyé: test_segments.log
+2025-02-26 11:39:28,345 - config - [INFO] - 🧹 Log ffmpeg nettoyé: inspecteur_progress.log
+2025-02-26 11:39:28,356 - config - [INFO] - 🧹 Log ffmpeg nettoyé: inspecteur_ffmpeg.log
+2025-02-26 11:39:28,369 - config - [INFO] - 🧹 Log ffmpeg nettoyé: cameron_progress.log
+2025-02-26 11:39:28,378 - config - [INFO] - 🧹 Log ffmpeg nettoyé: rebus_ffmpeg.log
+2025-02-26 11:39:28,388 - config - [INFO] - 🧹 Log ffmpeg nettoyé: youtube_ffmpeg.log
+2025-02-26 11:39:28,397 - config - [INFO] - 🧹 Log ffmpeg nettoyé: rebus_progress.log
+2025-02-26 11:39:28,408 - config - [INFO] - 🧹 Log ffmpeg nettoyé: youtube_progress.log
+2025-02-26 11:39:28,422 - config - [INFO] - 🧹 Log ffmpeg nettoyé: inspecteur_segments.log
+2025-02-26 11:39:28,430 - config - [INFO] - 🧹 Log ffmpeg nettoyé: defunes_progress.log
+2025-02-26 11:39:28,440 - config - [INFO] - 🧹 Log ffmpeg nettoyé: zoo_ffmpeg.log
+2025-02-26 11:39:28,456 - config - [INFO] - 🧹 Log ffmpeg nettoyé: Le Gendarme_progress.log
+2025-02-26 11:39:28,466 - config - [INFO] - 🧹 Log ffmpeg nettoyé: corniaud_segments.log
+2025-02-26 11:39:28,466 - config - [INFO] - ✨ Nettoyage des logs terminé
+2025-02-26 11:39:28,469 - config - [INFO] - On génère la master playlist: /app/hls/playlist.m3u
+2025-02-26 11:39:28,471 - config - [INFO] - 🔄 Boucle de surveillance des watchers démarrée
+2025-02-26 11:39:28,473 - config - [INFO] - Playlist mise à jour (6 chaînes)
+2025-02-26 11:39:28,476 - config - [INFO] - 📡 Scan des chaînes disponibles...
+2025-02-26 11:39:28,476 - config - [INFO] - 🔄 Chaîne existante : inspecteur
+2025-02-26 11:39:28,477 - config - [INFO] - 🔄 Chaîne existante : LeGendarme
+2025-02-26 11:39:28,477 - config - [INFO] - 🔄 Chaîne existante : rebus
+2025-02-26 11:39:28,477 - config - [INFO] - 🔄 Chaîne existante : test
+2025-02-26 11:39:28,477 - config - [INFO] - 🔄 Chaîne existante : defunes
+2025-02-26 11:39:28,477 - config - [INFO] - 🔄 Chaîne existante : youtube
+2025-02-26 11:39:28,478 - config - [INFO] - 📡 Scan terminé, 6 chaînes enregistrées.
+2025-02-26 11:39:29,471 - config - [INFO] - 💻 Ressources - CPU: 51.3%, RAM: 3.5/7.6GB (50.8%)
+2025-02-26 11:39:29,504 - config - [INFO] - Signal 15 reçu, nettoyage et arrêt...
+2025-02-26 11:39:29,504 - config - [INFO] - Début du nettoyage...

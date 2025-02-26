@@ -4,3 +4,4 @@ hls/
 .env
 env
 rebus/
+.vscode
