@@ -172,13 +172,18 @@ class IPTVChannel:
         max_retries = 3
         for attempt in range(max_retries):
             try:
+                # Paramètres plus robustes pour ffprobe
                 cmd = [
                     "ffprobe",
                     "-v", "error",
+                    "-analyzeduration", "100M",  # Augmente le temps d'analyse
+                    "-probesize", "100M",        # Et la taille analysée
+                    "-i", str(video_path),       # Explicite le fichier d'entrée
                     "-show_entries", "format=duration",
-                    "-of", "default=noprint_wrappers=1:nokey=1",
-                    str(video_path)
+                    "-of", "default=noprint_wrappers=1:nokey=1"
                 ]
+                
+                logger.warning(f"[{self.name}] ⚠️ Tentative {attempt+1}/{max_retries} pour {video_path}")
                 
                 result = subprocess.run(cmd, capture_output=True, text=True)
                 
@@ -191,20 +196,52 @@ class IPTVChannel:
                             self._duration_cache[video_str] = duration
                             return duration
                     except ValueError:
-                        pass
+                        logger.error(f"[{self.name}] ❌ Valeur non numérique: {result.stdout}")
+                else:
+                    # Log plus verbeux de l'erreur
+                    if result.stderr:
+                        logger.error(f"[{self.name}] ❌ Erreur ffprobe: {result.stderr}")
+                    else:
+                        logger.error(f"[{self.name}] ❌ Échec sans message d'erreur, code: {result.returncode}")
+                
+                # Alternative avec approche différente si échoue
+                if attempt == max_retries - 2:  # Avant-dernière tentative
+                    try:
+                        alternate_cmd = [
+                            "ffmpeg", "-i", str(video_path), 
+                            "-f", "null", "-"
+                        ]
+                        
+                        # Exécute ffmpeg pour lire le fichier entier
+                        alt_result = subprocess.run(
+                            alternate_cmd,
+                            capture_output=True,
+                            text=True
+                        )
+                        
+                        # Cherche la durée dans la sortie d'erreur
+                        if alt_result.stderr:
+                            duration_match = re.search(r'Duration: (\d{2}):(\d{2}):(\d{2})\.(\d{2})', alt_result.stderr)
+                            if duration_match:
+                                h, m, s, ms = map(int, duration_match.groups())
+                                duration = h * 3600 + m * 60 + s + ms / 100
+                                self._duration_cache[video_str] = duration
+                                return duration
+                    except Exception as e:
+                        logger.error(f"[{self.name}] ❌ Erreur méthode alternative: {e}")
                 
                 # Pause entre les tentatives
+                import time
                 time.sleep(0.5)
                 
             except Exception as e:
                 logger.error(f"[{self.name}] ❌ Erreur ffprobe durée {video_path.name}: {e}")
         
         # Valeur par défaut si impossible de déterminer la durée
-        logger.warning(f"[{self.name}] ⚠️ Impossible d'obtenir la durée pour {video_path.name}, utilisation valeur par défaut")
+        logger.error(f"[{self.name}] ❌ Impossible d'obtenir la durée pour {video_path.name}, utilisation valeur par défaut")
         default_duration = 3600.0  # 1 heure par défaut
         self._duration_cache[video_str] = default_duration
-        return default_duration
-    
+        return default_duration  
     def _create_concat_file(self) -> Optional[Path]:
         """Crée le fichier de concaténation avec les bons chemins"""
         try:
@@ -637,7 +674,54 @@ class IPTVChannel:
         if self.logger:
             self.logger.log_segment(segment_path, size)
             
+# Modification à apporter à la méthode report_segment_jump dans iptv_channel.py
+
     def report_segment_jump(self, prev_segment: int, curr_segment: int):
+        """
+        Gère les sauts détectés dans les segments HLS
+        
+        Args:
+            prev_segment: Le segment précédent
+            curr_segment: Le segment actuel (avec un saut)
+        """
+        try:
+            jump_size = curr_segment - prev_segment
+            
+            # On ne s'inquiète que des sauts importants
+            if jump_size <= 5:
+                return
+                
+            logger.warning(f"[{self.name}] 🚨 Saut de segment détecté: {prev_segment} → {curr_segment} (delta: {jump_size})")
+            
+            # Si les sauts sont vraiment grands (>= 20), on envisage un redémarrage
+            if jump_size >= 20:
+                # On ajoute toujours l'erreur
+                self.error_handler.add_error("segment_jump")
+                
+                # On vérifie si on a assez d'erreurs pour redémarrer
+                if self.error_handler.error_count >= 3:
+                    logger.warning(f"[{self.name}] 🔄 Tentative de redémarrage suite à des sauts importants répétés")
+                    
+                    # On sauvegarde la position actuelle
+                    if hasattr(self, 'position_manager'):
+                        self.position_manager.save_position()
+                    
+                    # Vérification des stats de visionnage
+                    watchers = getattr(self, 'watchers_count', 0)
+                    if watchers > 0:
+                        return self._restart_stream()
+                    else:
+                        logger.info(f"[{self.name}] ℹ️ Pas de redémarrage: aucun watcher actif")
+                else:
+                    logger.info(f"[{self.name}] ⚠️ Saut important détecté ({self.error_handler.error_count}/3)")
+                    
+            # Sinon, on log juste le problème
+            else:
+                logger.info(f"[{self.name}] ℹ️ Saut mineur détecté, surveillance continue")
+                
+        except Exception as e:
+            logger.error(f"[{self.name}] ❌ Erreur gestion saut de segment: {e}")
+            return False
         """
         Gère les sauts détectés dans les segments HLS
         

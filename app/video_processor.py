@@ -124,115 +124,210 @@ class VideoProcessor:
             sanitized = base[:96] + ext  # On garde l'extension
         return sanitized
     
-    def process_video(self, video_path: Path) -> Path:
-            """Process a video file with sanitized filename"""
-            try:
-                # Sanitize the source filename
-                sanitized_name = self.sanitize_filename(video_path.name)
-                sanitized_path = video_path.parent / sanitized_name
-                
-                # Rename the source file if needed
-                if video_path.name != sanitized_name:
-                    logger.info(f"Renaming source file: {video_path.name} -> {sanitized_name}")
-                    video_path.rename(sanitized_path)
-                    video_path = sanitized_path
-                
-                # Create sanitized output path
-                output_path = self.processed_dir / sanitized_name
-                
-                # Skip if already processed and optimized
-                if output_path.exists() and self.is_already_optimized(output_path):
-                    logger.info(f"✅ {video_path.name} déjà optimisé")
-                    return output_path
 
-                # Prepare FFmpeg command
-                command = ["ffmpeg", "-y"]  # Force overwrite if exists
-                
-                # Add GPU-specific arguments if enabled
+    def process_video(self, video_path: Path) -> Path:
+        """Traite un fichier vidéo avec gestion spéciale pour HEVC 10-bit"""
+        try:
+            # Sanitize the source filename
+            sanitized_name = self.sanitize_filename(video_path.name)
+            sanitized_path = video_path.parent / sanitized_name
+            
+            # Rename the source file if needed
+            if video_path.name != sanitized_name:
+                logger.info(f"Renaming source file: {video_path.name} -> {sanitized_name}")
+                video_path.rename(sanitized_path)
+                video_path = sanitized_path
+            
+            # Create sanitized output path
+            output_path = self.processed_dir / sanitized_name.replace(".mkv", ".mp4")
+            
+            # Skip if already processed and optimized
+            if output_path.exists() and self.is_already_optimized(output_path):
+                logger.info(f"✅ {video_path.name} déjà optimisé")
+                return output_path
+
+            # Vérifier si le fichier est HEVC 10-bit pour adapter l'approche
+            is_hevc_10bit = self._check_hevc_10bit(video_path)
+            
+            # Prepare FFmpeg command
+            command = ["ffmpeg", "-y"]  # Force overwrite if exists
+            
+            # Paramètres d'entrée améliorés pour fichiers problématiques
+            command.extend([
+                "-analyzeduration", "100M",
+                "-probesize", "100M",
+                "-fflags", "+igndts+discardcorrupt"
+            ])
+            
+            # Input file
+            command.extend(["-i", str(video_path)])
+            
+            # Désactive explicitement les sous-titres et les données métadonnées
+            command.extend(["-sn", "-dn", "-map_chapters", "-1"])
+            
+            # Conserve uniquement la première piste audio et vidéo
+            command.extend(["-map", "0:v:0", "-map", "0:a:0"])
+            
+            # Pour HEVC 10-bit, on utilise une approche différente sans GPU
+            if is_hevc_10bit:
+                logger.info(f"🔄 Détection HEVC 10-bit, utilisation d'un encodage CPU optimisé")
+                command.extend([
+                    "-c:v", "libx264", 
+                    "-crf", "22",
+                    "-preset", "fast",
+                    "-pix_fmt", "yuv420p",  # Assure la compatibilité maximale
+                    "-profile:v", "high",
+                    "-level", "4.1",
+                    "-maxrate", "5M",
+                    "-bufsize", "10M",
+                    "-g", "48",
+                    "-keyint_min", "48",
+                    "-sc_threshold", "0",  # Désactive la détection de scène
+                    "-c:a", "aac",
+                    "-b:a", "192k",
+                    "-ar", "48000",
+                    "-ac", "2"  # Force stereo
+                ])
+            else:
+                # Si on peut utiliser le GPU
                 if self.USE_GPU:
                     command.extend(self.get_gpu_args())
-                
-                # Input file
-                command.extend(["-i", str(video_path)])
-                
-                # Add video filters if using GPU
-                if self.USE_GPU:
                     filters = self.get_gpu_filters(video_path)
                     if filters:
                         command.extend(["-vf", ",".join(filters)])
                 
-                # Add encoding parameters
+                # Paramètres d'encodage standard
                 command.extend(self.get_encoding_args())
                 
-                # Audio encoding (same for GPU and CPU)
+                # Audio encoding
                 command.extend([
                     "-c:a", "aac",
                     "-b:a", "192k",
-                    "-ar", "48000"
+                    "-ar", "48000",
+                    "-ac", "2"  # Force stereo
                 ])
-                
-                # Output file
-                command.append(str(output_path))
+            
+            # Output file
+            command.append(str(output_path))
 
-                # Execute FFmpeg
-                logger.info(f"🎬 Traitement de {video_path.name}")
-                logger.debug(f"Commande: {' '.join(command)}")
-                
-                result = subprocess.run(
-                    command,
-                    capture_output=True,
-                    text=True
-                )
+            # Execute FFmpeg
+            logger.info(f"🎬 Traitement de {video_path.name}")
+            logger.debug(f"Commande: {' '.join(command)}")
+            
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True
+            )
 
-                if result.returncode != 0:
-                    logger.error(f"❌ Erreur FFmpeg: {result.stderr}")
-                    return None
+            # Si ça échoue encore avec le mode HEVC, on essaie une approche en deux étapes
+            if result.returncode != 0 and is_hevc_10bit:
+                logger.warning(f"⚠️ Première approche échouée, tentative avec méthode en deux étapes")
+                return self._two_pass_hevc_conversion(video_path, output_path)
 
-                logger.info(f"✅ {video_path.name} traité avec succès")
-                return output_path
-
-            except Exception as e:
-                logger.error(f"Error processing video {video_path}: {e}")
-                logger.error(traceback.format_exc())
+            if result.returncode != 0:
+                logger.error(f"❌ Erreur FFmpeg: {result.stderr}")
                 return None
 
-    def process_videos_async(self, videos: list = None):
-        """
-        Lance le traitement asynchrone des vidéos.
-        Si videos est None, scanne le dossier pour trouver les vidéos à traiter.
-        """
-        if self.processing_thread and self.processing_thread.is_alive():
-            logger.warning("🏃 Traitement déjà en cours")
-            return False
+            logger.info(f"✅ {video_path.name} traité avec succès")
+            return output_path
 
-        if videos is None:
-            videos = [
-                f for f in self.channel_dir.glob("*.mp4")
-                if not f.name.startswith("temp_")
-                and f.parent == self.channel_dir
+        except Exception as e:
+            logger.error(f"Error processing video {video_path}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return None
+
+    def _check_hevc_10bit(self, video_path: Path) -> bool:
+        """Vérifie si un fichier est encodé en HEVC 10-bit"""
+        try:
+            cmd = [
+                "ffprobe", "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=codec_name,pix_fmt",
+                "-of", "json",
+                str(video_path)
             ]
-
-        if not videos:
-            logger.warning("⚠️ Aucune vidéo à traiter")
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                return False
+                
+            video_info = json.loads(result.stdout)
+            if 'streams' not in video_info or not video_info['streams']:
+                return False
+                
+            stream = video_info['streams'][0]
+            codec = stream.get('codec_name', '').lower()
+            pix_fmt = stream.get('pix_fmt', '').lower()
+            
+            # Détecte HEVC/H.265 avec format de pixel 10-bit
+            return (codec in ['hevc', 'h265'] and ('10' in pix_fmt or 'p10' in pix_fmt))
+        except Exception as e:
+            logger.error(f"❌ Erreur détection HEVC 10-bit: {e}")
             return False
 
-        # On vide la queue et la liste des fichiers traités
-        while not self.processing_queue.empty():
-            self.processing_queue.get()
-        self.processed_files.clear()
-
-        # On remplit la queue
-        for video in videos:
-            self.processing_queue.put(video)
-
-        # On lance le thread de traitement
-        self.processing_thread = threading.Thread(
-            target=self._process_queue,
-            daemon=True
-        )
-        self.processing_thread.start()
-        return True
-
+    def _two_pass_hevc_conversion(self, input_path: Path, output_path: Path) -> Path:
+        """Conversion HEVC en deux étapes avec fichier intermédiaire"""
+        try:
+            # Créer un fichier temporaire
+            temp_file = input_path.parent / f"temp_{input_path.stem}.mp4"
+            
+            # Première étape: Extraction simple sans réencodage vidéo
+            extract_cmd = [
+                "ffmpeg", "-y",
+                "-i", str(input_path),
+                "-map", "0:v:0",            # Premier flux vidéo
+                "-map", "0:a:0",            # Premier flux audio
+                "-c:v", "copy",             # Copie sans réencodage
+                "-c:a", "aac",              # Conversion audio en AAC
+                "-b:a", "192k",
+                "-ac", "2",                 # Stéréo
+                "-sn", "-dn",               # Pas de sous-titres ni données
+                "-map_chapters", "-1",      # Pas de chapitres
+                str(temp_file)
+            ]
+            
+            logger.info(f"🔄 Étape 1/2: Extraction en {temp_file}")
+            extract_result = subprocess.run(extract_cmd, capture_output=True, text=True)
+            
+            if extract_result.returncode != 0:
+                logger.error(f"❌ Échec extraction: {extract_result.stderr}")
+                return None
+                
+            # Deuxième étape: Réencodage en H.264
+            encode_cmd = [
+                "ffmpeg", "-y",
+                "-i", str(temp_file),
+                "-c:v", "libx264",
+                "-preset", "fast",
+                "-crf", "23",
+                "-pix_fmt", "yuv420p",
+                "-profile:v", "high",
+                "-level", "4.1",
+                "-c:a", "copy",
+                str(output_path)
+            ]
+            
+            logger.info(f"🔄 Étape 2/2: Réencodage en {output_path}")
+            encode_result = subprocess.run(encode_cmd, capture_output=True, text=True)
+            
+            # Nettoyage du fichier temporaire
+            if temp_file.exists():
+                try:
+                    temp_file.unlink()
+                except:
+                    pass
+                    
+            if encode_result.returncode != 0:
+                logger.error(f"❌ Échec réencodage: {encode_result.stderr}")
+                return None
+                
+            logger.info(f"✅ Conversion en deux étapes réussie pour {input_path.name}")
+            return output_path
+        
+        except Exception as e:
+            logger.error(f"❌ Erreur conversion deux étapes: {e}")
+            return None
     def _process_queue(self):
         """Traite les vidéos dans la queue"""
         while not self.processing_queue.empty():
@@ -271,17 +366,16 @@ class VideoProcessor:
         with self.processing_lock:
             processed = self.processed_files.copy()
         return processed
-
+    
     def is_already_optimized(self, video_path: Path) -> bool:
         """
-        Vérifie si une vidéo est déjà en H.264, ≤ 1080p, ≤ 30 FPS, et en AAC.
-        Ajoute un log détaillé expliquant la raison si la normalisation est nécessaire.
+        Vérifie si une vidéo est déjà optimisée pour le streaming.
+        Détecte également les sous-titres et chapitres qui pourraient causer des problèmes.
         """
         logger.info(f"🔍 Vérification du format de {video_path.name}")
 
         cmd = [
             "ffprobe", "-v", "error",
-            "-select_streams", "v:0,a:0",
             "-show_entries", "stream=codec_name,width,height,r_frame_rate,codec_type",
             "-of", "json",
             str(video_path)
@@ -292,12 +386,24 @@ class VideoProcessor:
             video_info = json.loads(result.stdout)
             streams = video_info.get("streams", [])
 
-            video_stream = next((s for s in streams if s['codec_type'] == 'video'), None)
-            audio_stream = next((s for s in streams if s['codec_type'] == 'audio'), None)
+            # On compte les types de flux
+            video_streams = [s for s in streams if s['codec_type'] == 'video']
+            audio_streams = [s for s in streams if s['codec_type'] == 'audio']
+            subtitle_streams = [s for s in streams if s['codec_type'] == 'subtitle']
+            
+            # Si on a plus d'un flux vidéo ou plus de sous-titres, normalisation requise
+            if len(video_streams) > 1 or subtitle_streams:
+                logger.warning(f"⚠️ {video_path.name} contient {len(video_streams)} flux vidéo et {len(subtitle_streams)} sous-titres")
+                logger.info(f"🚨 Multiples flux détectés, normalisation nécessaire pour garantir la compatibilité HLS")
+                return False
 
-            #if not video_stream:
-            #    logger.warning(f"⚠️ Aucun flux vidéo détecté dans {video_path.name}, normalisation forcée.")
-            #    return False
+            # On vérifie maintenant les caractéristiques vidéo/audio standard
+            video_stream = video_streams[0] if video_streams else None
+            audio_stream = audio_streams[0] if audio_streams else None
+
+            if not video_stream:
+                logger.warning(f"⚠️ Aucun flux vidéo détecté dans {video_path.name}, normalisation forcée.")
+                return False
 
             codec = video_stream.get("codec_name", "").lower()
             width = int(video_stream.get("width", 0))
@@ -308,6 +414,22 @@ class VideoProcessor:
             audio_codec = audio_stream.get("codec_name").lower() if audio_stream else "none"
 
             logger.info(f"🎥 Codec: {codec}, Résolution: {width}x{height}, FPS: {fps}, Audio: {audio_codec}")
+
+            # Vérifions aussi les chapitres qui peuvent causer des problèmes
+            chapters_cmd = [
+                "ffprobe", "-v", "error",
+                "-show_chapters",
+                "-of", "json",
+                str(video_path)
+            ]
+            chapters_result = subprocess.run(chapters_cmd, capture_output=True, text=True)
+            chapters_info = json.loads(chapters_result.stdout)
+            has_chapters = 'chapters' in chapters_info and len(chapters_info['chapters']) > 0
+            
+            if has_chapters:
+                logger.warning(f"⚠️ {video_path.name} contient {len(chapters_info['chapters'])} chapitres")
+                logger.info(f"🚨 Chapitres détectés, normalisation nécessaire pour garantir la compatibilité HLS")
+                return False
 
             needs_transcoding = False
             if codec != "h264":
@@ -336,7 +458,9 @@ class VideoProcessor:
         except json.JSONDecodeError as e:
             logger.error(f"❌ Erreur JSON avec ffprobe: {e}")
             return False
-
+        except Exception as e:
+            logger.error(f"❌ Erreur générale vérification optimisation: {str(e)}")
+            return False
     def is_large_resolution(self, video_path: Path) -> bool:
         """
         Vérifie si une vidéo a une résolution significativement supérieure à 1080p.

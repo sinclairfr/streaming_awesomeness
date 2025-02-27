@@ -221,24 +221,90 @@ class FFmpegCommandBuilder:
         
         return params
     
-    def build_hls_params(self, output_dir):
+# Mise à jour de la méthode build_hls_params dans ffmpeg_command_builder.py
+
+def build_hls_params(self, output_dir):
+    """
+    # Construit les paramètres HLS optimisés pour éviter les sauts de segments
+    """
+    return [
+        "-f", "hls",
+        "-hls_time", str(self.hls_time),  # Durée des segments
+        "-hls_list_size", str(max(15, self.hls_list_size)),  # Plus de segments dans la playlist
+        "-hls_delete_threshold", str(max(5, self.hls_delete_threshold)),  # Attendre plus longtemps avant suppression
+        "-hls_flags", "delete_segments+append_list+program_date_time+independent_segments+split_by_time+round_durations",
+        "-hls_allow_cache", "1",  # Autorise mise en cache des segments
+        "-start_number", "0",
+        "-hls_segment_type", "mpegts",
+        "-max_delay", "2000000",  # Délai max réduit
+        "-avoid_negative_ts", "make_zero",
+        "-hls_init_time", "2",  # Durée initiale
+        "-hls_segment_filename", f"{output_dir}/segment_%d.ts",
+        f"{output_dir}/playlist.m3u8"
+    ]
+
+    def build_encoding_params(self, has_mkv=False):
         """
-        # Construit les paramètres HLS optimisés avec des ajustements pour éviter les sauts
+        # Construit les paramètres d'encodage adaptés
         """
-        return [
-            "-f", "hls",
-            "-hls_time", str(self.hls_time),  # Durée des segments
-            "-hls_list_size", str(max(15, self.hls_list_size)),  # Au moins 15 segments dans la playlist
-            "-hls_delete_threshold", str(min(3, self.hls_delete_threshold)),  # Attendre au moins 3 segments avant suppression
-            "-hls_flags", "delete_segments+append_list+program_date_time+independent_segments+discont_start+split_by_time+round_durations",
-            "-start_number", "0",
-            "-hls_segment_type", "mpegts",
-            "-max_delay", "2000000",  # Délai max réduit
-            "-avoid_negative_ts", "make_zero",
-            "-hls_init_time", "2",  # Durée initiale
-            "-hls_segment_filename", f"{output_dir}/segment_%d.ts",
-            f"{output_dir}/playlist.m3u8"
-        ]   
+        # Si on a des MKV, on utilise des paramètres optimisés
+        if has_mkv:
+            logger.info(f"[{self.channel_name}] 📼 Paramètres optimisés pour MKV")
+            
+            # Paramètres de base
+            params = [
+                "-c:v", "h264_vaapi" if self.use_gpu else "libx264",
+                "-profile:v", "main",
+                "-preset", "fast",
+                "-level", "4.1",
+                "-b:v", self.video_bitrate,
+                "-maxrate", self.max_bitrate,
+                "-bufsize", self.buffer_size,
+                "-g", str(self.gop_size),
+                "-keyint_min", str(self.keyint_min),
+                "-sc_threshold", "0",  # Désactive la détection de changement de scène
+                "-force_key_frames", "expr:gte(t,n_forced*2)"  # Force des keyframes toutes les 2s
+            ]
+            
+            # Paramètres GPU si activé
+            if self.use_gpu:
+                params.extend([
+                    "-vf", "format=nv12|vaapi,hwupload",
+                    "-low_power", "1"  # Mode basse consommation
+                ])
+            
+            # Paramètres audio
+            params.extend([
+                "-c:a", "aac",
+                "-b:a", "192k",
+                "-ar", "48000",
+                "-ac", "2"  # Force stereo
+            ])
+            
+            # Désactivation explicite des sous-titres et pistes de données
+            params.extend([
+                "-sn",  # Pas de sous-titres
+                "-dn",  # Pas de flux de données
+                "-map", "0:v:0",  # Map uniquement le premier flux vidéo
+                "-map", "0:a:0"   # Map uniquement le premier flux audio
+            ])
+            
+        # Mode copie pour fichiers déjà normalisés
+        else:
+            logger.info(f"[{self.channel_name}] 📄 Mode copie optimisé")
+            params = [
+                "-c:v", "copy",      # Copie du flux vidéo
+                "-c:a", "aac",       # Force conversion audio en AAC
+                "-b:a", "192k",      # Bitrate audio constant
+                "-ac", "2",          # Force stereo
+                "-sn",               # Pas de sous-titres
+                "-dn",               # Pas de flux de données
+                "-map", "0:v:0",     # Map uniquement le premier flux vidéo
+                "-map", "0:a:0?",    # Map uniquement le premier flux audio s'il existe
+                "-max_muxing_queue_size", "2048"  # Évite les erreurs de muxing
+            ]
+        
+        return params  
         
     def build_fallback_command(self, input_file, output_dir):
         """
