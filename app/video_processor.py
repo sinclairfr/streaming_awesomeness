@@ -108,6 +108,101 @@ class VideoProcessor:
             self.USE_GPU = False
             return False
 
+    def _wait_for_file_stability(self, file_path: Path, timeout=60) -> bool:
+        """
+        Attend que le fichier soit stable (taille constante) avant de le traiter
+        
+        Args:
+            file_path: Chemin du fichier à vérifier
+            timeout: Délai maximum d'attente en secondes
+            
+        Returns:
+            bool: True si le fichier est stable, False sinon
+        """
+        if not file_path.exists():
+            logger.error(f"Fichier introuvable: {file_path}")
+            return False
+        
+        start_time = time.time()
+        last_size = -1
+        stable_count = 0
+        
+        logger.info(f"Vérification de la stabilité du fichier: {file_path.name}")
+        
+        while time.time() - start_time < timeout:
+            try:
+                current_size = file_path.stat().st_size
+                
+                # Si c'est un petit fichier, on fait une vérification moins stricte
+                min_stable_seconds = 3
+                if current_size > 100 * 1024 * 1024:  # > 100 MB
+                    min_stable_seconds = 5
+                
+                # Log l'évolution de la taille
+                if last_size != -1:
+                    if current_size == last_size:
+                        stable_count += 1
+                        logger.info(f"Fichier stable depuis {stable_count}s: {file_path.name} ({current_size/1024/1024:.1f} MB)")
+                    else:
+                        stable_count = 0
+                        logger.info(f"Taille en évolution: {current_size/1024/1024:.1f} MB (était {last_size/1024/1024:.1f} MB)")
+                
+                # Si la taille est stable pendant le temps requis
+                if current_size == last_size and stable_count >= min_stable_seconds:
+                    logger.info(f"✅ Fichier {file_path.name} stable depuis {stable_count}s, prêt pour traitement")
+                    return True
+                    
+                last_size = current_size
+                time.sleep(1)
+                
+            except Exception as e:
+                logger.error(f"Erreur vérification stabilité {file_path.name}: {e}")
+                time.sleep(1)
+                
+        logger.warning(f"⏰ Timeout en attendant la stabilité de {file_path.name}")
+        return False 
+    
+    def notify_file_processed(self, file_path):
+        """Notifie que le fichier a été traité avec succès et met à jour le statut de la chaîne"""
+        try:
+            # Obtient le nom de la chaîne à partir du chemin
+            channel_name = Path(self.channel_dir).name
+            
+            # Trouve l'instance de IPTVManager dans la pile d'appels
+            import inspect
+            frame = inspect.currentframe()
+            manager = None
+            
+            # Cherche un objet qui contient 'channels' et 'channel_ready_status'
+            while frame:
+                if 'self' in frame.f_locals:
+                    obj = frame.f_locals['self']
+                    if hasattr(obj, 'channels') and hasattr(obj, 'channel_ready_status'):
+                        manager = obj
+                        break
+                frame = frame.f_back
+            
+            if manager:
+                # Met à jour le statut de préparation de la chaîne
+                if channel_name in manager.channels:
+                    channel = manager.channels[channel_name]
+                    
+                    # Marque la chaîne comme prête
+                    channel.ready_for_streaming = True
+                    
+                    # Met à jour le statut dans le manager
+                    with manager.scan_lock:
+                        manager.channel_ready_status[channel_name] = True
+                    
+                    logger.info(f"[{channel_name}] ✅ Chaîne marquée comme prête après traitement de {Path(file_path).name}")
+                    
+                    # Force un rafraîchissement de la playlist maître
+                    if hasattr(manager, '_manage_master_playlist'):
+                        threading.Thread(target=manager._manage_master_playlist, daemon=True).start()
+        
+        except Exception as e:
+            logger.error(f"❌ Erreur notification traitement: {e}")
+    
     def _background_processor(self):
         """Thread d'arrière-plan qui traite les vidéos en file d'attente"""
         while not self.stop_processing.is_set():
@@ -127,10 +222,32 @@ class VideoProcessor:
                         self.currently_processing.add(video)
                     
                     try:
+                        # Attendre que le fichier source soit stable avant de le copier
+                        if not self._wait_for_file_stability(video, timeout=120):
+                            logger.warning(f"⚠️ Fichier {video.name} instable, on reporte le traitement")
+                            # Remet le fichier dans la queue pour traitement ultérieur
+                            self.processing_queue.put(video)
+                            with self.processing_lock:
+                                self.currently_processing.discard(video)
+                            self.processing_queue.task_done()
+                            time.sleep(30)  # Attente plus longue avant de réessayer
+                            continue
+                        
                         # Déplacement vers processing
                         temp_path = self.processing_dir / video.name
                         if not temp_path.exists() and video.exists():
+                            logger.info(f"Copie de {video.name} vers le dossier processing...")
                             shutil.copy2(video, temp_path)
+                            
+                            # Attendre que la copie soit stable
+                            if not self._wait_for_file_stability(temp_path, timeout=60):
+                                logger.warning(f"⚠️ Copie de {video.name} instable, on annule le traitement")
+                                if temp_path.exists():
+                                    temp_path.unlink()
+                                with self.processing_lock:
+                                    self.currently_processing.discard(video)
+                                self.processing_queue.task_done()
+                                continue
                         
                         # Traitement
                         processed = self.process_video(temp_path)
@@ -153,6 +270,10 @@ class VideoProcessor:
                             if temp_path.exists():
                                 temp_path.unlink()
                                 
+                            # Notifie que le traitement est terminé et met à jour le statut de la chaîne
+                            if hasattr(self, 'notify_file_processed'):
+                                self.notify_file_processed(processed)
+                                
                     except Exception as e:
                         logger.error(f"❌ Erreur traitement {video.name}: {e}")
                     finally:
@@ -165,8 +286,8 @@ class VideoProcessor:
                 
             except Exception as e:
                 logger.error(f"❌ Erreur dans le thread de traitement: {e}")
-                time.sleep(5)
-
+                time.sleep(5) 
+    
     def scan_for_new_videos(self) -> int:
         """
         Scanne les nouveaux fichiers à traiter
@@ -280,7 +401,76 @@ class VideoProcessor:
             base, ext = os.path.splitext(sanitized)
             sanitized = base[:96] + ext  # On garde l'extension
         return sanitized
-
+    
+    def _verify_output_file(self, file_path: Path, max_retries=3) -> bool:
+        """
+        Vérifie que le fichier de sortie est valide et complet.
+        
+        Args:
+            file_path: Chemin du fichier à vérifier
+            max_retries: Nombre maximal de tentatives
+            
+        Returns:
+            bool: True si le fichier est valide, False sinon
+        """
+        if not file_path.exists():
+            logger.error(f"❌ Fichier introuvable: {file_path}")
+            return False
+            
+        # Vérification de la taille du fichier (doit être > 0)
+        try:
+            file_size = file_path.stat().st_size
+            if file_size == 0:
+                logger.error(f"❌ Fichier vide: {file_path}")
+                return False
+        except Exception as e:
+            logger.error(f"❌ Erreur accès fichier {file_path}: {e}")
+            return False
+            
+        # Vérification que le fichier est stable (taille constante)
+        if not self._wait_for_file_stability(file_path, timeout=30):
+            logger.error(f"❌ Fichier instable: {file_path}")
+            return False
+            
+        # Vérification que le fichier est lisible par ffprobe
+        for attempt in range(max_retries):
+            try:
+                cmd = [
+                    "ffprobe",
+                    "-v", "error",
+                    "-select_streams", "v:0",
+                    "-show_entries", "stream=codec_name",
+                    "-of", "json",
+                    str(file_path)
+                ]
+                
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+                
+                if result.returncode == 0:
+                    # Vérification que la sortie JSON est valide
+                    try:
+                        output = json.loads(result.stdout)
+                        if 'streams' in output and len(output['streams']) > 0:
+                            logger.info(f"✅ Fichier validé: {file_path}")
+                            return True
+                    except json.JSONDecodeError:
+                        logger.warning(f"⚠️ JSON invalide pour {file_path}, tentative {attempt+1}/{max_retries}")
+                else:
+                    logger.warning(f"⚠️ ffprobe a échoué pour {file_path} (code {result.returncode}), tentative {attempt+1}/{max_retries}")
+                    if result.stderr:
+                        logger.warning(f"⚠️ Erreur: {result.stderr}")
+                        
+                # Pause avant de réessayer
+                time.sleep(2)
+                
+            except subprocess.TimeoutExpired:
+                logger.warning(f"⚠️ Timeout ffprobe pour {file_path}, tentative {attempt+1}/{max_retries}")
+            except Exception as e:
+                logger.warning(f"⚠️ Erreur vérification {file_path}: {e}, tentative {attempt+1}/{max_retries}")
+                
+        logger.error(f"❌ Échec validation après {max_retries} tentatives: {file_path}")
+        return False
+    
     def process_video(self, video_path: Path) -> Optional[Path]:
         """Traite un fichier vidéo avec gestion spéciale pour HEVC 10-bit"""
         try:
@@ -309,40 +499,17 @@ class VideoProcessor:
             # Skip if already processed and optimized
             if output_path.exists() and self.is_already_optimized(output_path):
                 logger.info(f"✅ {output_name} déjà optimisé dans ready_to_stream")
+                # Notifie même si déjà traité
+                self.notify_file_processed(output_path)
                 return output_path
 
-            # Vérifier si le fichier est HEVC 10-bit pour adapter l'approche
+            # Version plus simple et directe pour HEVC 10-bit
             is_hevc_10bit = self._check_hevc_10bit(video_path)
             
-            # Prepare FFmpeg command
-            command = ["ffmpeg", "-y"]  # Force overwrite if exists
+            # Utilisation d'un chemin temporaire pour le fichier de sortie
+            temp_output_path = self.processing_dir / f"tmp_{output_name}"
             
-            # CORRECTION : Placer les options GPU AVANT l'input
-            if self.USE_GPU and not is_hevc_10bit:
-                command.extend([
-                    "-hwaccel", "vaapi",
-                    "-hwaccel_output_format", "vaapi",
-                    "-vaapi_device", "/dev/dri/renderD128"
-                ])
-            
-            # Paramètres d'entrée
-            command.extend([
-                "-analyzeduration", "100M",
-                "-probesize", "100M",
-                "-fflags", "+igndts+discardcorrupt",
-                "-i", str(video_path)  # Fichier d'entrée
-            ])
-            
-            # Input file
-            command.extend(["-i", str(video_path)])
-            
-            # Désactive explicitement les sous-titres et les données métadonnées
-            command.extend(["-sn", "-dn", "-map_chapters", "-1"])
-            
-            # Conserve uniquement la première piste audio et vidéo
-            command.extend(["-map", "0:v:0", "-map", "0:a:0?"])
-            
-            # Version plus simple et directe pour HEVC 10-bit
+            # Configuration de la commande ffmpeg selon le type de vidéo
             if is_hevc_10bit:
                 command = [
                     "ffmpeg", "-y",
@@ -351,9 +518,8 @@ class VideoProcessor:
                     "-c:a", "aac", "-b:a", "192k", "-ac", "2",
                     "-sn", "-dn", "-map_chapters", "-1",
                     "-map", "0:v:0", "-map", "0:a:0?",
-                    str(output_path)
+                    str(temp_output_path)  # Utilisation du chemin temporaire
                 ]
-            # Version pour GPU
             elif self.USE_GPU:
                 command = [
                     "ffmpeg", "-y",
@@ -364,9 +530,8 @@ class VideoProcessor:
                     "-c:a", "aac", "-b:a", "192k", "-ac", "2",
                     "-sn", "-dn", "-map_chapters", "-1", 
                     "-map", "0:v:0", "-map", "0:a:0?",
-                    str(output_path)
+                    str(temp_output_path)  # Utilisation du chemin temporaire
                 ]
-            # Version CPU standard
             else:
                 command = [
                     "ffmpeg", "-y",
@@ -375,7 +540,7 @@ class VideoProcessor:
                     "-c:a", "aac", "-b:a", "192k", "-ac", "2",
                     "-sn", "-dn", "-map_chapters", "-1",
                     "-map", "0:v:0", "-map", "0:a:0?",
-                    str(output_path)
+                    str(temp_output_path)  # Utilisation du chemin temporaire
                 ]
             
             # Exécuter la commande
@@ -387,15 +552,41 @@ class VideoProcessor:
             # Vérifier le résultat
             if result.returncode != 0:
                 logger.error(f"❌ Erreur FFmpeg: {result.stderr}")
+                if temp_output_path.exists():
+                    temp_output_path.unlink()
+                return None
+            
+            # Vérification que le fichier temporaire est valide
+            if not self._verify_output_file(temp_output_path):
+                logger.error(f"❌ Fichier de sortie invalide ou incomplet: {temp_output_path}")
+                if temp_output_path.exists():
+                    temp_output_path.unlink()
                 return None
                 
-            logger.info(f"✅ {video_path.name} traité avec succès -> {output_path}")
-            return output_path
+            # Déplacement vers le dossier final seulement après vérification
+            if temp_output_path.exists():
+                # Suppression du fichier de destination s'il existe déjà
+                if output_path.exists():
+                    output_path.unlink()
+                # Déplacement du fichier temporaire vers le dossier final
+                shutil.move(str(temp_output_path), str(output_path))
+                logger.info(f"✅ {video_path.name} traité avec succès -> {output_path}")
+                
+                # Attente que le fichier soit complètement écrit
+                self._wait_for_file_stability(output_path, timeout=30)
+                
+                # Notifie que le fichier a été traité avec succès
+                self.notify_file_processed(output_path)
+                
+                return output_path
+            else:
+                logger.error(f"❌ Fichier temporaire {temp_output_path} introuvable")
+                return None
         
         except Exception as e:
             logger.error(f"Error processing video {video_path}: {e}")
-            return None
-
+            return None        
+    
     def _check_hevc_10bit(self, video_path: Path) -> bool:
         """Vérifie si un fichier est encodé en HEVC 10-bit"""
         try:

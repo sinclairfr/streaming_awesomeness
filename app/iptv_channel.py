@@ -68,7 +68,122 @@ class IPTVChannel:
 
         # Scan initial des vidéos
         threading.Thread(target=self._scan_videos_async, daemon=True).start()
+    
+    def _verify_file_ready(self, file_path: Path) -> bool:
+        """
+        Vérifie qu'un fichier MP4 est complet et utilisable
+        
+        Args:
+            file_path: Chemin du fichier MP4 à vérifier
+            
+        Returns:
+            bool: True si le fichier est valide, False sinon
+        """
+        try:
+            # Vérification que le fichier existe et est de taille non nulle
+            if not file_path.exists():
+                logger.warning(f"[{self.name}] ⚠️ Fichier introuvable: {file_path}")
+                return False
+                
+            file_size = file_path.stat().st_size
+            if file_size == 0:
+                logger.warning(f"[{self.name}] ⚠️ Fichier vide: {file_path}")
+                return False
+                
+            # Vérification que le fichier est lisible par ffprobe
+            cmd = [
+                "ffprobe",
+                "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                str(file_path)
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            
+            if result.returncode != 0:
+                logger.warning(f"[{self.name}] ⚠️ Erreur ffprobe pour {file_path.name}: {result.stderr}")
+                return False
+                
+            # Vérification que la durée est valide
+            try:
+                duration = float(result.stdout.strip())
+                if duration <= 0:
+                    logger.warning(f"[{self.name}] ⚠️ Durée invalide pour {file_path.name}: {duration}s")
+                    return False
+                    
+                logger.info(f"[{self.name}] ✅ Fichier valide: {file_path.name}, durée: {duration:.2f}s")
+                return True
+            except ValueError:
+                logger.warning(f"[{self.name}] ⚠️ Durée non numérique pour {file_path.name}: {result.stdout}")
+                return False
+                
+        except subprocess.TimeoutExpired:
+            logger.warning(f"[{self.name}] ⚠️ Timeout ffprobe pour {file_path.name}")
+            return False
+        except Exception as e:
+            logger.warning(f"[{self.name}] ⚠️ Erreur vérification {file_path.name}: {e}")
+            return False
+    
+    def _scan_videos(self) -> bool:
+        """Scanne les fichiers vidéos et met à jour processed_videos"""
+        try:
+            source_dir = Path(self.video_dir)
+            ready_to_stream_dir = source_dir / "ready_to_stream"
+            ready_to_stream_dir.mkdir(exist_ok=True)
+            
+            self._verify_processor()
+            
+            # On réinitialise la liste des vidéos traitées
+            self.processed_videos = []
+            
+            # On scanne d'abord les vidéos dans ready_to_stream
+            mp4_files = list(ready_to_stream_dir.glob("*.mp4"))
+            
+            # Vérification que les fichiers sont valides
+            valid_files = []
+            for video_file in mp4_files:
+                if self._verify_file_ready(video_file):
+                    valid_files.append(video_file)
+                else:
+                    logger.warning(f"[{self.name}] ⚠️ Fichier {video_file.name} ignoré car non valide")
+            
+            if valid_files:
+                self.processed_videos.extend(valid_files)
+                logger.info(f"[{self.name}] ✅ {len(valid_files)} vidéos valides trouvées dans ready_to_stream")
+                
+                # La chaîne est prête si on a des vidéos valides
+                self.ready_for_streaming = True
+                
+                # Mise à jour explicite du statut dans le manager
+                if hasattr(self, 'channel_ready_status') and self.name in getattr(self, 'channel_ready_status', {}):
+                    self.channel_ready_status[self.name] = True
+                
+                return True
 
+            # Si aucun fichier valide dans ready_to_stream, on vérifie s'il y a des fichiers à traiter
+            video_extensions = (".mp4", ".avi", ".mkv", ".mov")
+            source_files = []
+            for ext in video_extensions:
+                source_files.extend(source_dir.glob(f"*{ext}"))
+
+            if not source_files:
+                logger.warning(f"[{self.name}] ⚠️ Aucun fichier vidéo dans {self.video_dir}")
+                return False
+
+            # La chaîne n'est pas encore prête, mais on va traiter les vidéos
+            logger.info(f"[{self.name}] 🔄 {len(source_files)} fichiers sources à traiter")
+            
+            # Marque la chaîne comme non prête jusqu'à ce que les vidéos soient traitées
+            self.ready_for_streaming = False
+            
+            return False
+
+        except Exception as e:
+            logger.error(f"[{self.name}] ❌ Erreur scan des vidéos: {str(e)}")
+            return False       
+    
     def _scan_videos_async(self):
         """Scanne les vidéos en tâche de fond pour ne pas bloquer"""
         try:
@@ -189,7 +304,14 @@ class IPTVChannel:
         video_str = str(video_path)
         if video_str in self._duration_cache:
             return self._duration_cache[video_str]
-            
+        
+        # Vérification que le fichier est stable avant de lire la durée
+        if hasattr(self, 'processor') and hasattr(self.processor, '_wait_for_file_stability'):
+            is_stable = self.processor._wait_for_file_stability(video_path, timeout=15)
+            if not is_stable:
+                logger.warning(f"[{self.name}] ⚠️ Fichier instable pour mesure de durée: {video_path.name}")
+                time.sleep(2)  # Pause supplémentaire
+                
         max_retries = 3
         for attempt in range(max_retries):
             try:
@@ -206,7 +328,7 @@ class IPTVChannel:
             
                 logger.warning(f"[{self.name}] ⚠️ Tentative {attempt+1}/{max_retries} pour {video_path}")
                 
-                result = subprocess.run(cmd, capture_output=True, text=True)
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
                 
                 if result.returncode == 0 and result.stdout.strip():
                     try:
@@ -237,7 +359,8 @@ class IPTVChannel:
                         alt_result = subprocess.run(
                             alternate_cmd,
                             capture_output=True,
-                            text=True
+                            text=True,
+                            timeout=20
                         )
                         
                         # Cherche la durée dans la sortie d'erreur
@@ -252,18 +375,21 @@ class IPTVChannel:
                         logger.error(f"[{self.name}] ❌ Erreur méthode alternative: {e}")
                 
                 # Pause entre les tentatives
-                import time
-                time.sleep(0.5)
+                time.sleep(2)
                 
+            except subprocess.TimeoutExpired:
+                logger.error(f"[{self.name}] ❌ Timeout ffprobe pour {video_path.name}")
+                time.sleep(2)
             except Exception as e:
                 logger.error(f"[{self.name}] ❌ Erreur ffprobe durée {video_path.name}: {e}")
+                time.sleep(2)
         
         # Valeur par défaut si impossible de déterminer la durée
         logger.error(f"[{self.name}] ❌ Impossible d'obtenir la durée pour {video_path.name}, utilisation valeur par défaut")
         default_duration = 3600.0  # 1 heure par défaut
         self._duration_cache[video_str] = default_duration
-        return default_duration  
-
+        return default_duration
+    
     def _create_concat_file(self) -> Optional[Path]:
         """Crée le fichier de concaténation avec les bons chemins"""
         try:
@@ -484,50 +610,42 @@ class IPTVChannel:
         except Exception as e:
             logger.error(f"[{self.name}] ❌ Erreur arrêt stream: {e}")
     
-    def _scan_videos(self) -> bool:
-        """Scanne les fichiers vidéos et met à jour processed_videos"""
-        try:
-            source_dir = Path(self.video_dir)
-            ready_to_stream_dir = source_dir / "ready_to_stream"
-            ready_to_stream_dir.mkdir(exist_ok=True)
-            
-            self._verify_processor()
-            
-            # On réinitialise la liste des vidéos traitées
-            self.processed_videos = []
-            
-            # On scanne d'abord les vidéos dans ready_to_stream
-            mp4_files = list(ready_to_stream_dir.glob("*.mp4"))
-            if mp4_files:
-                self.processed_videos.extend(mp4_files)
-                logger.info(f"[{self.name}] ✅ {len(mp4_files)} vidéos trouvées dans ready_to_stream")
+    def refresh_videos(self):
+        """Force un nouveau scan des vidéos et notifie le manager"""
+        def scan_and_notify():
+            try:
+                # Exécute le scan
+                self._scan_videos_async()
                 
-                # La chaîne est prête si on a des vidéos
-                self.ready_for_streaming = True
-                return True
-
-            # Si aucun fichier dans ready_to_stream, on vérifie s'il y a des fichiers à traiter
-            video_extensions = (".mp4", ".avi", ".mkv", ".mov")
-            source_files = []
-            for ext in video_extensions:
-                source_files.extend(source_dir.glob(f"*{ext}"))
-
-            if not source_files:
-                logger.warning(f"[{self.name}] ⚠️ Aucun fichier vidéo dans {self.video_dir}")
-                return False
-
-            # La chaîne n'est pas encore prête, mais on va traiter les vidéos
-            logger.info(f"[{self.name}] 🔄 {len(source_files)} fichiers sources à traiter")
-            
-            # Marque la chaîne comme non prête jusqu'à ce que les vidéos soient traitées
-            self.ready_for_streaming = False
-            
-            return False
-
-        except Exception as e:
-            logger.error(f"[{self.name}] ❌ Erreur scan des vidéos: {str(e)}")
-            return False
-    
+                # S'assure que le statut est correctement reporté au manager
+                # Attend un peu que le scan asynchrone progresse
+                time.sleep(2)
+                
+                # Vérification directe si des vidéos ont été traitées
+                ready_files = list((Path(self.video_dir) / "ready_to_stream").glob("*.mp4"))
+                if ready_files:
+                    self.ready_for_streaming = True
+                    
+                    # Trouve le manager parent pour mettre à jour le statut
+                    import inspect
+                    frame = inspect.currentframe()
+                    while frame:
+                        if 'self' in frame.f_locals and hasattr(frame.f_locals['self'], 'channel_ready_status'):
+                            manager = frame.f_locals['self']
+                            with manager.scan_lock:
+                                manager.channel_ready_status[self.name] = True
+                            logger.info(f"[{self.name}] ✅ Statut 'prêt' mis à jour dans le manager")
+                            break
+                        frame = frame.f_back
+                    
+                logger.info(f"[{self.name}] 🔄 Rafraîchissement terminé, prêt: {self.ready_for_streaming}")
+            except Exception as e:
+                logger.error(f"[{self.name}] ❌ Erreur dans scan_and_notify: {e}")
+        
+        # Lance le scan dans un thread séparé
+        threading.Thread(target=scan_and_notify, daemon=True).start()
+        return True  
+     
     def update_watchers(self, count: int):
         """Mise à jour du nombre de watchers"""
         with self.lock:

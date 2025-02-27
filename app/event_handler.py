@@ -35,6 +35,16 @@ class ChannelEventHandler(FileSystemEventHandler):
         last_size = -1
         stable_count = 0
         
+        # Vérification initiale de la taille pour les gros fichiers
+        try:
+            initial_size = path.stat().st_size
+            # On attend au moins 5 secondes pour les fichiers > 100 MB
+            if initial_size > 100 * 1024 * 1024:  # > 100 MB
+                logger.info(f"Gros fichier détecté ({initial_size/1024/1024:.1f} MB), attente minimum 5s")
+                time.sleep(5)
+        except Exception:
+            pass
+            
         while time.time() - start_time < timeout:
             try:
                 # On vérifie si le fichier est accessible
@@ -47,11 +57,13 @@ class ChannelEventHandler(FileSystemEventHandler):
                 # Si la taille n'a pas changé
                 if current_size == last_size:
                     stable_count += 1
-                    # Si stable pendant 3 secondes, on considère que c'est fini
-                    if stable_count >= 3:
+                    logger.info(f"Fichier stable depuis {stable_count}s: {file_path} ({current_size/1024/1024:.1f} MB)")
+                    # Si stable pendant 5 secondes pour les gros fichiers, on considère que c'est fini
+                    if stable_count >= 5:
                         return True
                 else:
                     stable_count = 0
+                    logger.info(f"Taille en évolution: {current_size/1024/1024:.1f} MB (était {last_size/1024/1024:.1f} MB)")
                     
                 last_size = current_size
                 time.sleep(1)
@@ -64,7 +76,7 @@ class ChannelEventHandler(FileSystemEventHandler):
                 
         logger.warning(f"⏰ Timeout en attendant {file_path}")
         return False
-
+    
     def get_channel_from_path(self, path: str) -> str:
         """Extrait le nom de la chaîne à partir du chemin"""
         try:
@@ -125,8 +137,20 @@ class ChannelEventHandler(FileSystemEventHandler):
     def _wait_for_copy_completion(self, file_path: str, channel_name: str = ""):
         """Attend la fin de la copie et déclenche le scan pour une chaîne spécifique"""
         try:
-            if self.is_file_ready(file_path):
+            file_size = Path(file_path).stat().st_size if Path(file_path).exists() else 0
+            logger.info(f"Surveillance de la copie de {Path(file_path).name} ({file_size/1024/1024:.1f} MB)")
+            
+            # Pour les fichiers volumineux, attente plus longue
+            timeout = 600  # 10 minutes par défaut
+            if file_size > 1024 * 1024 * 1024:  # > 1 GB
+                timeout = 1200  # 20 minutes pour les fichiers > 1 GB
+                logger.info(f"Fichier volumineux détecté (> 1 GB), timeout étendu à {timeout}s")
+            
+            if self.is_file_ready(file_path, timeout=timeout):
                 logger.info(f"✅ Copie terminée: {file_path}")
+                
+                # On attend un peu pour s'assurer que le système de fichiers a fini
+                time.sleep(2)
                 
                 # Si on a le nom de la chaîne, on peut demander juste un refresh de celle-ci
                 if channel_name and channel_name in self.manager.channels:
@@ -144,7 +168,7 @@ class ChannelEventHandler(FileSystemEventHandler):
         finally:
             with self.lock:
                 self.copying_files.pop(file_path, None)
-
+    
     def on_modified(self, event):
         if not event.is_directory:
             # On ignore les modifications si le fichier est en cours de copie

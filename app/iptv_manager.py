@@ -356,35 +356,66 @@ class IPTVManager:
     def _manage_master_playlist(self):
         """
         Gère la création et mise à jour de la playlist principale.
-        Cette méthode tourne en boucle et regénère la playlist toutes les 60s.
+        Cette méthode tourne en boucle et regénère la playlist toutes les 60s,
+        ou peut être appelée explicitement après un changement.
         """
+        # Si c'est un appel direct (après mise à jour d'une chaîne), faire une mise à jour unique
+        if threading.current_thread() != self.master_playlist_updater:
+            try:
+                self._update_master_playlist()
+                return
+            except Exception as e:
+                logger.error(f"Erreur mise à jour ponctuelle de la playlist: {e}")
+                return
+                
+        # Sinon, c'est la boucle normale
         while True:
             try:
-                playlist_path = os.path.abspath("/app/hls/playlist.m3u")
-                logger.info(f"On génère la master playlist: {playlist_path}")
-
-                with open(playlist_path, "w", encoding="utf-8") as f:
-                    f.write("#EXTM3U\n")
-
-                    # Ne référence que les chaînes prêtes
-                    ready_channels = []
-                    for name, channel in sorted(self.channels.items()):
-                        if name in self.channel_ready_status and self.channel_ready_status[name]:
-                            ready_channels.append((name, channel))
-                    
-                    # Écriture des chaînes prêtes
-                    for name, channel in ready_channels:
-                        f.write(f'#EXTINF:-1 tvg-id="{name}" tvg-name="{name}",{name}\n')
-                        f.write(f"http://{SERVER_URL}/hls/{name}/playlist.m3u8\n")
-
-                logger.info(f"Playlist mise à jour ({len(ready_channels)} chaînes prêtes sur {len(self.channels)} totales)")
+                self._update_master_playlist()
                 time.sleep(60)  # On attend 60s avant la prochaine mise à jour
-
             except Exception as e:
                 logger.error(f"Erreur maj master playlist: {e}")
                 logger.error(traceback.format_exc())
                 time.sleep(60)  # On attend même en cas d'erreur
 
+    def _update_master_playlist(self):
+        """Effectue la mise à jour de la playlist principale"""
+        playlist_path = os.path.abspath("/app/hls/playlist.m3u")
+        logger.info(f"On génère la master playlist: {playlist_path}")
+
+        with open(playlist_path, "w", encoding="utf-8") as f:
+            f.write("#EXTM3U\n")
+
+            # Re-vérifie chaque chaîne pour confirmer qu'elle est prête
+            with self.scan_lock:
+                for name, channel in self.channels.items():
+                    # Vérification directe des fichiers
+                    ready_dir = Path(channel.video_dir) / "ready_to_stream"
+                    has_videos = list(ready_dir.glob("*.mp4")) if ready_dir.exists() else []
+                    
+                    # Mise à jour du statut si nécessaire
+                    if has_videos and not self.channel_ready_status.get(name, False):
+                        logger.info(f"[{name}] 🔄 Mise à jour auto du statut: chaîne prête (vidéos trouvées)")
+                        self.channel_ready_status[name] = True
+                        channel.ready_for_streaming = True
+                    elif not has_videos and self.channel_ready_status.get(name, False):
+                        logger.info(f"[{name}] ⚠️ Mise à jour auto du statut: chaîne non prête (aucune vidéo)")
+                        self.channel_ready_status[name] = False
+                        channel.ready_for_streaming = False
+            
+            # Ne référence que les chaînes prêtes
+            ready_channels = []
+            for name, channel in sorted(self.channels.items()):
+                if name in self.channel_ready_status and self.channel_ready_status[name]:
+                    ready_channels.append((name, channel))
+            
+            # Écriture des chaînes prêtes
+            for name, channel in ready_channels:
+                f.write(f'#EXTINF:-1 tvg-id="{name}" tvg-name="{name}",{name}\n')
+                f.write(f"http://{SERVER_URL}/hls/{name}/playlist.m3u8\n")
+
+        logger.info(f"Playlist mise à jour ({len(ready_channels)} chaînes prêtes sur {len(self.channels)} totales)")
+    
     def cleanup(self):
         logger.info("Début du nettoyage...")
         
