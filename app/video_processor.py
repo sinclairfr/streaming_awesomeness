@@ -2,49 +2,193 @@ import json
 import shutil
 import subprocess
 from pathlib import Path
-from config import logger
-from queue import Queue
 import threading
 import os
 import logging
 import re
+from queue import Queue
+import time
+from typing import List, Dict, Optional, Set
+from config import logger
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("video_processor")
 
 class VideoProcessor:
     def __init__(self, channel_dir: str):
         self.channel_dir = Path(channel_dir)
-        self.processed_dir = self.channel_dir / "processed"
-        self.processed_dir.mkdir(exist_ok=True)
         
-        # Queue et threading
+        # Création des nouveaux dossiers avec des noms plus explicites
+        self.ready_to_stream_dir = self.channel_dir / "ready_to_stream"
+        self.ready_to_stream_dir.mkdir(exist_ok=True)
+        
+        self.processing_dir = self.channel_dir / "processing"
+        self.processing_dir.mkdir(exist_ok=True)
+        
+        self.already_processed_dir = self.channel_dir / "already_processed"
+        self.already_processed_dir.mkdir(exist_ok=True)
+        
+        # Migration des fichiers de l'ancien dossier "processed" si nécessaire
+        self._migrate_from_processed()
+        
+        # Queue et threading pour le traitement asynchrone
         self.processing_queue = Queue()
         self.processed_files = []
-        self.processing_thread = None
+        self.currently_processing: Set[Path] = set()  # Pour suivre les fichiers en cours de traitement
         self.processing_lock = threading.Lock()
         
         # Configuration GPU
         self.USE_GPU = os.getenv('FFMPEG_HARDWARE_ACCELERATION', '').lower() == 'vaapi'
-        self.logger = logging.getLogger('config')
         
         # Vérification du support GPU au démarrage
         if self.USE_GPU:
             self.check_gpu_support()
+            
+        # Démarrage du thread de traitement en arrière-plan
+        self.stop_processing = threading.Event()
+        self.processing_thread = threading.Thread(target=self._background_processor, daemon=True)
+        self.processing_thread.start()
+        
+    def _migrate_from_processed(self):
+        """Migration des fichiers de l'ancien dossier 'processed' vers la nouvelle structure"""
+        old_processed = self.channel_dir / "processed"
+        if not old_processed.exists():
+            return
+            
+        logger.info(f"Migration des fichiers de 'processed' vers la nouvelle structure pour {self.channel_dir.name}")
+        
+        # On déplace tous les fichiers .mp4 vers ready_to_stream
+        for video in old_processed.glob("*.mp4"):
+            dest = self.ready_to_stream_dir / video.name
+            if not dest.exists():
+                try:
+                    shutil.move(str(video), str(dest))
+                    logger.info(f"Fichier migré vers ready_to_stream: {video.name}")
+                except Exception as e:
+                    logger.error(f"Erreur migration {video.name}: {e}")
+        
+        # On déplace les .mkv vers already_processed (ils ne devraient pas être dans ready_to_stream)
+        for video in old_processed.glob("*.mkv"):
+            dest = self.already_processed_dir / video.name
+            if not dest.exists():
+                try:
+                    shutil.move(str(video), str(dest))
+                    logger.info(f"Fichier MKV migré vers already_processed: {video.name}")
+                except Exception as e:
+                    logger.error(f"Erreur migration MKV {video.name}: {e}")
 
     def check_gpu_support(self):
         """Vérifie si le support GPU est disponible"""
         try:
             result = subprocess.run(['vainfo'], capture_output=True, text=True)
             if result.returncode == 0 and 'VAEntrypointVLD' in result.stdout:
-                self.logger.info("✅ Support VAAPI détecté et activé")
+                logger.info("✅ Support VAAPI détecté et activé")
                 return True
             else:
-                self.logger.warning("⚠️ VAAPI configuré mais non fonctionnel, retour au mode CPU")
+                logger.warning("⚠️ VAAPI configuré mais non fonctionnel, retour au mode CPU")
                 self.USE_GPU = False
                 return False
         except Exception as e:
-            self.logger.error(f"❌ Erreur vérification VAAPI: {str(e)}")
+            logger.error(f"❌ Erreur vérification VAAPI: {str(e)}")
             self.USE_GPU = False
             return False
-        
+
+    def _background_processor(self):
+        """Thread d'arrière-plan qui traite les vidéos en file d'attente"""
+        while not self.stop_processing.is_set():
+            try:
+                # Scan pour les nouveaux fichiers
+                self.scan_for_new_videos()
+                
+                # Traitement des fichiers en queue
+                if not self.processing_queue.empty():
+                    video = self.processing_queue.get()
+                    
+                    # Vérifie si le fichier n'est pas déjà en cours de traitement
+                    with self.processing_lock:
+                        if video in self.currently_processing:
+                            self.processing_queue.task_done()
+                            continue
+                        self.currently_processing.add(video)
+                    
+                    try:
+                        # Déplacement vers processing
+                        temp_path = self.processing_dir / video.name
+                        if not temp_path.exists() and video.exists():
+                            shutil.copy2(video, temp_path)
+                        
+                        # Traitement
+                        processed = self.process_video(temp_path)
+                        
+                        if processed:
+                            with self.processing_lock:
+                                self.processed_files.append(processed)
+                                
+                            # Déplacer l'original dans already_processed
+                            if video.exists():
+                                already_path = self.already_processed_dir / video.name
+                                if not already_path.exists():
+                                    try:
+                                        shutil.move(str(video), str(already_path))
+                                        logger.info(f"Original déplacé vers already_processed: {video.name}")
+                                    except Exception as e:
+                                        logger.error(f"Erreur déplacement original {video.name}: {e}")
+                            
+                            # Supprimer le fichier temporaire de processing
+                            if temp_path.exists():
+                                temp_path.unlink()
+                                
+                    except Exception as e:
+                        logger.error(f"❌ Erreur traitement {video.name}: {e}")
+                    finally:
+                        with self.processing_lock:
+                            self.currently_processing.discard(video)
+                        self.processing_queue.task_done()
+                        
+                # Pause entre les cycles
+                time.sleep(5)
+                
+            except Exception as e:
+                logger.error(f"❌ Erreur dans le thread de traitement: {e}")
+                time.sleep(5)
+
+    def scan_for_new_videos(self) -> int:
+        """
+        Scanne les nouveaux fichiers à traiter
+        Retourne le nombre de nouveaux fichiers détectés
+        """
+        try:
+            count = 0
+            video_extensions = (".mp4", ".avi", ".mkv", ".mov")
+            
+            # Liste des fichiers déjà traités ou en cours de traitement pour éviter les doublons
+            with self.processing_lock:
+                already_processed_names = {f.name for f in self.already_processed_dir.glob("*.*")}
+                ready_to_stream_names = {f.name for f in self.ready_to_stream_dir.glob("*.*")}
+                processing_names = {f.name for f in self.processing_dir.glob("*.*")}
+                currently_processing_names = {f.name for f in self.currently_processing}
+            
+            # Parcours des fichiers source
+            for ext in video_extensions:
+                for source in self.channel_dir.glob(f"*{ext}"):
+                    # Si déjà traité ou en cours, on ignore
+                    if (source.name in already_processed_names or 
+                        source.name in ready_to_stream_names or
+                        source.name in processing_names or
+                        source.name in currently_processing_names):
+                        continue
+                    
+                    # Ajout à la queue de traitement
+                    self.processing_queue.put(source)
+                    count += 1
+                    logger.info(f"Nouveau fichier détecté pour traitement: {source.name}")
+            
+            return count
+            
+        except Exception as e:
+            logger.error(f"❌ Erreur scan nouveaux fichiers: {e}")
+            return 0
+
     def get_gpu_filters(self, video_path: Path = None, is_streaming: bool = False) -> list:
         """Génère les filtres vidéo pour le GPU"""
         filters = []
@@ -70,46 +214,46 @@ class VideoProcessor:
         return args
 
     def get_encoding_args(self, is_streaming: bool = False) -> list:
-            """Génère les arguments d'encodage selon le mode GPU/CPU"""
-            if self.USE_GPU:
-                args = [
-                    "-c:v", "h264_vaapi",
-                    "-profile:v", "main",
-                    "-level", "4.1",
-                    "-bf", "0",
-                    "-bufsize", "5M",
+        """Génère les arguments d'encodage selon le mode GPU/CPU"""
+        if self.USE_GPU:
+            args = [
+                "-c:v", "h264_vaapi",
+                "-profile:v", "main",
+                "-level", "4.1",
+                "-bf", "0",
+                "-bufsize", "5M",
+                "-maxrate", "5M",
+                "-low_power", "1",
+                "-c:a", "aac",
+                "-b:a", "192k",
+                "-ar", "48000"
+            ]
+            
+            if is_streaming:
+                args.extend([
+                    "-g", "60",  # GOP size for streaming
                     "-maxrate", "5M",
-                    "-low_power", "1",
-                    "-c:a", "aac",
-                    "-b:a", "192k",
-                    "-ar", "48000"
-                ]
+                    "-bufsize", "10M",
+                    "-flags", "+cgop",  # Closed GOP for streaming
+                    "-sc_threshold", "0"  # Disable scene change detection for smoother streaming
+                ])
+        else:
+            args = [
+                "-c:v", "libx264",
+                "-profile:v", "main",
+                "-preset", "fast" if not is_streaming else "ultrafast",
+                "-crf", "23"
+            ]
+            
+            if is_streaming:
+                args.extend([
+                    "-tune", "zerolatency",
+                    "-maxrate", "5M",
+                    "-bufsize", "10M",
+                    "-g", "60"
+                ])
                 
-                if is_streaming:
-                    args.extend([
-                        "-g", "60",  # GOP size for streaming
-                        "-maxrate", "5M",
-                        "-bufsize", "10M",
-                        "-flags", "+cgop",  # Closed GOP for streaming
-                        "-sc_threshold", "0"  # Disable scene change detection for smoother streaming
-                    ])
-            else:
-                args = [
-                    "-c:v", "libx264",
-                    "-profile:v", "main",
-                    "-preset", "fast" if not is_streaming else "ultrafast",
-                    "-crf", "23"
-                ]
-                
-                if is_streaming:
-                    args.extend([
-                        "-tune", "zerolatency",
-                        "-maxrate", "5M",
-                        "-bufsize", "10M",
-                        "-g", "60"
-                    ])
-                    
-            return args
+        return args
     
     def sanitize_filename(self, filename: str) -> str:
         """Sanitize le nom de fichier en retirant TOUS les caractères problématiques"""
@@ -123,9 +267,8 @@ class VideoProcessor:
             base, ext = os.path.splitext(sanitized)
             sanitized = base[:96] + ext  # On garde l'extension
         return sanitized
-    
 
-    def process_video(self, video_path: Path) -> Path:
+    def process_video(self, video_path: Path) -> Optional[Path]:
         """Traite un fichier vidéo avec gestion spéciale pour HEVC 10-bit"""
         try:
             # Sanitize the source filename
@@ -135,15 +278,24 @@ class VideoProcessor:
             # Rename the source file if needed
             if video_path.name != sanitized_name:
                 logger.info(f"Renaming source file: {video_path.name} -> {sanitized_name}")
+                if sanitized_path.exists():
+                    sanitized_path.unlink()
                 video_path.rename(sanitized_path)
                 video_path = sanitized_path
             
-            # Create sanitized output path
-            output_path = self.processed_dir / sanitized_name.replace(".mkv", ".mp4")
+            # Force l'extension en .mp4 pour le fichier de sortie
+            output_name = video_path.stem
+            if not output_name.endswith('.mp4'):
+                output_name = f"{output_name}.mp4"
+            else:
+                output_name = video_path.name
+                
+            # Create sanitized output path dans ready_to_stream
+            output_path = self.ready_to_stream_dir / output_name
             
             # Skip if already processed and optimized
             if output_path.exists() and self.is_already_optimized(output_path):
-                logger.info(f"✅ {video_path.name} déjà optimisé")
+                logger.info(f"✅ {output_name} déjà optimisé dans ready_to_stream")
                 return output_path
 
             # Vérifier si le fichier est HEVC 10-bit pour adapter l'approche
@@ -166,7 +318,7 @@ class VideoProcessor:
             command.extend(["-sn", "-dn", "-map_chapters", "-1"])
             
             # Conserve uniquement la première piste audio et vidéo
-            command.extend(["-map", "0:v:0", "-map", "0:a:0"])
+            command.extend(["-map", "0:v:0", "-map", "0:a:0?"])
             
             # Pour HEVC 10-bit, on utilise une approche différente sans GPU
             if is_hevc_10bit:
@@ -229,7 +381,7 @@ class VideoProcessor:
                 logger.error(f"❌ Erreur FFmpeg: {result.stderr}")
                 return None
 
-            logger.info(f"✅ {video_path.name} traité avec succès")
+            logger.info(f"✅ {video_path.name} traité avec succès -> {output_path}")
             return output_path
 
         except Exception as e:
@@ -270,14 +422,14 @@ class VideoProcessor:
         """Conversion HEVC en deux étapes avec fichier intermédiaire"""
         try:
             # Créer un fichier temporaire
-            temp_file = input_path.parent / f"temp_{input_path.stem}.mp4"
+            temp_file = self.processing_dir / f"temp_{input_path.stem}.mp4"
             
             # Première étape: Extraction simple sans réencodage vidéo
             extract_cmd = [
                 "ffmpeg", "-y",
                 "-i", str(input_path),
                 "-map", "0:v:0",            # Premier flux vidéo
-                "-map", "0:a:0",            # Premier flux audio
+                "-map", "0:a:0?",           # Premier flux audio s'il existe
                 "-c:v", "copy",             # Copie sans réencodage
                 "-c:a", "aac",              # Conversion audio en AAC
                 "-b:a", "192k",
@@ -328,45 +480,49 @@ class VideoProcessor:
         except Exception as e:
             logger.error(f"❌ Erreur conversion deux étapes: {e}")
             return None
-    def _process_queue(self):
-        """Traite les vidéos dans la queue"""
-        while not self.processing_queue.empty():
-            video = self.processing_queue.get()
-            try:
-                processed = self.process_video(video)
-                if processed:
-                    with self.processing_lock:
-                        self.processed_files.append(processed)
-            except Exception as e:
-                logger.error(f"❌ Erreur traitement {video.name}: {e}")
-            finally:
-                self.processing_queue.task_done()
 
-    def wait_for_completion(self, timeout: int = 600) -> list:
-        """
-        Attend la fin du traitement des vidéos.
-        Retourne la liste des fichiers traités.
-        
-        Args:
-            timeout (int): Timeout en secondes
-            
-        Returns:
-            list: Liste des fichiers traités
-        """
-        if not self.processing_thread:
+    def get_processed_files(self) -> List[Path]:
+        """Renvoie la liste des fichiers traités et prêts pour le streaming"""
+        try:
+            mp4_files = list(self.ready_to_stream_dir.glob("*.mp4"))
+            return sorted(mp4_files) if mp4_files else []
+        except Exception as e:
+            logger.error(f"❌ Erreur récupération des fichiers traités: {e}")
             return []
 
-        start_time = time.time()
-        while self.processing_thread.is_alive():
-            if time.time() - start_time > timeout:
-                logger.error("⏰ Timeout pendant le traitement des vidéos")
-                return []
-            time.sleep(1)
+    def is_large_resolution(self, video_path: Path) -> bool:
+        """
+        Vérifie si une vidéo a une résolution significativement supérieure à 1080p.
+        On tolère une marge de 10% pour éviter des conversions inutiles.
+        """
+        try:
+            cmd = [
+                "ffprobe", "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=width,height",
+                "-of", "json",
+                str(video_path)
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            video_info = json.loads(result.stdout)
+            
+            if 'streams' not in video_info or not video_info['streams']:
+                return False
+                
+            stream = video_info['streams'][0]
+            width = int(stream.get('width', 0))
+            height = int(stream.get('height', 0))
+            
+            # On tolère une marge de 10% au-dessus de 1080p
+            max_height = int(1080 * 1.1)  # ~1188p
+            max_width = int(1920 * 1.1)   # ~2112px
+            
+            return width > max_width or height > max_height
+            
+        except (subprocess.SubprocessError, json.JSONDecodeError, ValueError, KeyError) as e:
+            logger.error(f"❌ Erreur vérification résolution {video_path.name}: {e}")
+            return False
 
-        with self.processing_lock:
-            processed = self.processed_files.copy()
-        return processed
-    
     def is_already_optimized(self, video_path: Path) -> bool:
         """
         Vérifie si une vidéo est déjà optimisée pour le streaming.
@@ -461,35 +617,10 @@ class VideoProcessor:
         except Exception as e:
             logger.error(f"❌ Erreur générale vérification optimisation: {str(e)}")
             return False
-    def is_large_resolution(self, video_path: Path) -> bool:
-        """
-        Vérifie si une vidéo a une résolution significativement supérieure à 1080p.
-        On tolère une marge de 10% pour éviter des conversions inutiles.
-        """
-        try:
-            cmd = [
-                "ffprobe", "-v", "error",
-                "-select_streams", "v:0",
-                "-show_entries", "stream=width,height",
-                "-of", "json",
-                str(video_path)
-            ]
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            video_info = json.loads(result.stdout)
-            
-            if 'streams' not in video_info or not video_info['streams']:
-                return False
-                
-            stream = video_info['streams'][0]
-            width = int(stream.get('width', 0))
-            height = int(stream.get('height', 0))
-            
-            # On tolère une marge de 10% au-dessus de 1080p
-            max_height = int(1080 * 1.1)  # ~1188p
-            max_width = int(1920 * 1.1)   # ~2112px
-            
-            return width > max_width or height > max_height
-            
-        except (subprocess.SubprocessError, json.JSONDecodeError, ValueError, KeyError) as e:
-            logger.error(f"❌ Erreur vérification résolution {video_path.name}: {e}")
-            return False
+
+    def stop(self):
+        """Arrête proprement le thread de traitement"""
+        self.stop_processing.set()
+        if self.processing_thread and self.processing_thread.is_alive():
+            self.processing_thread.join(timeout=5)
+            logger.info("Thread de traitement vidéo arrêté")

@@ -25,3 +25,6 @@ nginx_logs/
 # Ignore FFmpeg logs
 logs/ffmpeg/
 app/state/
+app/deploy_improvements.sh
+app/migration.py
+app/update.sh

@@ -3,7 +3,7 @@ import os
 import time
 import threading
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 import shutil
 import json
 from video_processor import VideoProcessor
@@ -15,7 +15,7 @@ from ffmpeg_command_builder import FFmpegCommandBuilder
 from ffmpeg_process_manager import FFmpegProcessManager
 from playback_position_manager import PlaybackPositionManager
 import subprocess
-
+import re
 from config import (
     TIMEOUT_NO_VIEWERS,
     logger,
@@ -31,7 +31,7 @@ class IPTVChannel:
         name: str,
         video_dir: str,
         hls_cleaner: HLSCleaner,
-        use_gpu: USE_GPU
+        use_gpu: bool = False
     ):
         self.name = name
         self.video_dir = video_dir
@@ -39,6 +39,7 @@ class IPTVChannel:
         self.hls_cleaner = hls_cleaner
         self.error_handler = StreamErrorHandler(self.name)
         self.lock = threading.Lock()
+        self.ready_for_streaming = False  # Indique si la chaîne est prête
 
         # Initialisation des managers
         self.logger = FFmpegLogger(name)
@@ -60,14 +61,34 @@ class IPTVChannel:
         self.watchers_count = 0
         self.last_watcher_time = time.time()
         self.last_segment_time = time.time()
+        
+        # État du scan initial
+        self.initial_scan_complete = False
+        self.scan_lock = threading.Lock()
 
         # Scan initial des vidéos
-        self._scan_videos()
-        
-        # Calcul de la durée totale
-        total_duration = self._calculate_total_duration()
-        self.position_manager.set_total_duration(total_duration)
-        self.process_manager.set_total_duration(total_duration)
+        threading.Thread(target=self._scan_videos_async, daemon=True).start()
+
+    def _scan_videos_async(self):
+        """Scanne les vidéos en tâche de fond pour ne pas bloquer"""
+        try:
+            with self.scan_lock:
+                logger.info(f"[{self.name}] 🔍 Scan initial des vidéos en cours...")
+                self._scan_videos()
+                
+                # Calcul de la durée totale
+                total_duration = self._calculate_total_duration()
+                self.position_manager.set_total_duration(total_duration)
+                self.process_manager.set_total_duration(total_duration)
+                
+                self.initial_scan_complete = True
+                self.ready_for_streaming = len(self.processed_videos) > 0
+                
+                logger.info(f"[{self.name}] ✅ Scan initial terminé. Chaîne prête: {self.ready_for_streaming}")
+        except Exception as e:
+            logger.error(f"[{self.name}] ❌ Erreur scan initial: {e}")
+            self.initial_scan_complete = True  # Pour ne pas bloquer indéfiniment
+            self.ready_for_streaming = False
 
     def _calculate_total_duration(self) -> float:
         """Calcule la durée totale en utilisant le PositionManager"""
@@ -242,93 +263,41 @@ class IPTVChannel:
         default_duration = 3600.0  # 1 heure par défaut
         self._duration_cache[video_str] = default_duration
         return default_duration  
+
     def _create_concat_file(self) -> Optional[Path]:
         """Crée le fichier de concaténation avec les bons chemins"""
         try:
             logger.info(f"[{self.name}] 🛠️ Création de _playlist.txt")
 
-            processed_dir = Path(CONTENT_DIR) / self.name / "processed"
-            concat_file = Path(CONTENT_DIR) / self.name / "_playlist.txt"
+            # Utiliser ready_to_stream au lieu de processed
+            ready_to_stream_dir = Path(self.video_dir) / "ready_to_stream"
+            if not ready_to_stream_dir.exists():
+                logger.error(f"[{self.name}] ❌ Dossier ready_to_stream introuvable")
+                return None
+                
+            concat_file = Path(self.video_dir) / "_playlist.txt"
 
-            processed_files = sorted(processed_dir.glob("*.mp4")) + sorted(processed_dir.glob("*.mkv"))
-            if not processed_files:
-                logger.error(f"[{self.name}] ❌ Aucune vidéo dans {processed_dir}")
+            # Ne prendre que les fichiers .mp4 (pas de .mkv)
+            ready_files = sorted(ready_to_stream_dir.glob("*.mp4"))
+            if not ready_files:
+                logger.error(f"[{self.name}] ❌ Aucune vidéo dans {ready_to_stream_dir}")
                 return None
 
             logger.info(f"[{self.name}] 📝 Écriture de _playlist.txt")
 
             with open(concat_file, "w", encoding="utf-8") as f:
-                for video in processed_files:
+                for video in ready_files:
                     escaped_path = str(video.absolute()).replace("'", "'\\''")
                     f.write(f"file '{escaped_path}'\n")
                     logger.info(f"[{self.name}] ✅ Ajout de {video.name}")
 
-            logger.info(f"[{self.name}] 🎥 Playlist créée")
+            logger.info(f"[{self.name}] 🎥 Playlist créée avec {len(ready_files)} fichiers")
             return concat_file
 
         except Exception as e:
             logger.error(f"[{self.name}] ❌ Erreur _playlist.txt: {e}")
             return None
 
-    def _rename_all_videos_simple(self):
-        """Renomme tous les fichiers problématiques avec des noms ultra simples"""
-        try:
-            processed_dir = Path(CONTENT_DIR) / self.name / "processed"
-            if not processed_dir.exists():
-                processed_dir.mkdir(parents=True, exist_ok=True)
-                
-            source_dir = Path(CONTENT_DIR) / self.name
-            
-            # D'abord, on traite les fichiers sources
-            for i, video in enumerate(source_dir.glob("*.mp4")):
-                if any(c in video.name for c in " ,;'\"()[]{}=+^%$#@!&~`|<>?"):
-                    simple_name = f"video_{i+1}.mp4"
-                    new_path = video.parent / simple_name
-                    try:
-                        video.rename(new_path)
-                        logger.info(f"[{self.name}] Source renommé: {video.name} -> {simple_name}")
-                    except Exception as e:
-                        logger.error(f"[{self.name}] Erreur renommage source {video.name}: {e}")
-                        
-            # Ensuite, on traite les fichiers du dossier processed
-            for i, video in enumerate(processed_dir.glob("*.mp4")):
-                if any(c in video.name for c in " ,;'\"()[]{}=+^%$#@!&~`|<>?"):
-                    simple_name = f"processed_{i+1}.mp4"
-                    new_path = video.parent / simple_name
-                    try:
-                        video.rename(new_path)
-                        logger.info(f"[{self.name}] Processed renommé: {video.name} -> {simple_name}")
-                    except Exception as e:
-                        logger.error(f"[{self.name}] Erreur renommage processed {video.name}: {e}")
-                        
-        except Exception as e:
-            logger.error(f"[{self.name}] Erreur renommage global: {e}")
-
-    def _rename_problematic_files(self) -> None:
-        """Renomme les fichiers avec des caractères problématiques"""
-        try:
-            processed_dir = Path(CONTENT_DIR) / self.name / "processed"
-            if not processed_dir.exists():
-                return
-                
-            for video in processed_dir.glob("*.*"):
-                # On vérifie si le nom contient des caractères problématiques
-                if any(c in str(video.name) for c in "(),\\[]'\""):
-                    # Génère un nom propre basé sur le nom original
-                    safe_name = self.processor.sanitize_filename(video.name)
-                    
-                    # Si le nom a changé, on renomme
-                    if safe_name != video.name:
-                        new_path = video.parent / safe_name
-                        try:
-                            video.rename(new_path)
-                            logger.info(f"[{self.name}] 🔄 Fichier renommé: {video.name} -> {safe_name}")
-                        except Exception as e:
-                            logger.error(f"[{self.name}] ❌ Erreur renommage {video.name}: {e}")
-            
-        except Exception as e:
-            logger.error(f"[{self.name}] ❌ Erreur renommage fichiers: {e}")    
-            
     def _verify_playlist(self):
         """Vérifie que le fichier playlist est valide"""
         try:
@@ -379,6 +348,19 @@ class IPTVChannel:
     def start_stream(self) -> bool:
         """Démarre le stream avec FFmpeg en utilisant les nouvelles classes"""
         try:
+            # Si le scan initial n'est pas terminé ou si la chaîne n'est pas prête, on attend
+            if not self.initial_scan_complete:
+                logger.info(f"[{self.name}] ⏳ Attente de la fin du scan initial...")
+                # On attend au maximum 10 secondes
+                for _ in range(10):
+                    time.sleep(1)
+                    if self.initial_scan_complete:
+                        break
+                        
+            if not self.ready_for_streaming:
+                logger.warning(f"[{self.name}] ⚠️ Chaîne non prête pour le streaming (pas de vidéos)")
+                return False
+
             logger.info(f"[{self.name}] 🚀 Démarrage du stream...")
 
             hls_dir = Path(f"/app/hls/{self.name}")
@@ -397,10 +379,13 @@ class IPTVChannel:
             logger.info(f"[{self.name}] Décalage de démarrage: {start_offset}")
             
             logger.info(f"[{self.name}] Optimisation pour le matériel...")
-            self.command_builder.optimize_for_hardware()
-            logger.info(f"[{self.name}] Vérification mkv...")
-            has_mkv = self.command_builder.detect_mkv_in_playlist(concat_file)
-
+            #TODO fix
+            #self.command_builder.optimize_for_hardware()
+            
+            #logger.info(f"[{self.name}] Vérification mkv...")
+            #has_mkv = self.command_builder.detect_mkv_in_playlist(concat_file)
+            has_mkv = False
+            
             logger.info(f"[{self.name}] Construction de la commande FFmpeg...")
             command = self.command_builder.build_command(
                 input_file=concat_file,
@@ -453,7 +438,12 @@ class IPTVChannel:
             
         with self.lock:
             if self.process_manager.is_running():
-                return True  
+                return True
+
+            # Vérification si la chaîne est prête pour le streaming
+            if not self.ready_for_streaming:
+                logger.warning(f"[{self.name}] ⚠️ Chaîne non prête pour le streaming")
+                return False
 
             self.last_watcher_time = time.time()
 
@@ -463,13 +453,14 @@ class IPTVChannel:
                 hls_path.mkdir(parents=True, exist_ok=True)
                 os.chmod(hls_path, 0o777)
 
-            if not self._verify_playlist():
-                logger.error(f"[{self.name}] ❌ Vérification de playlist échouée")
-                return False
-
+            # Crée et vérifie la playlist
             concat_file = self._create_concat_file()
             if not concat_file or not concat_file.exists():
                 logger.error(f"[{self.name}] ❌ _playlist.txt est introuvable")
+                return False
+
+            if not self._verify_playlist():
+                logger.error(f"[{self.name}] ❌ Vérification de playlist échouée")
                 return False
 
             return self.start_stream()
@@ -499,18 +490,25 @@ class IPTVChannel:
         """Scanne les fichiers vidéos et met à jour processed_videos"""
         try:
             source_dir = Path(self.video_dir)
-            processed_dir = source_dir / "processed"
-            processed_dir.mkdir(exist_ok=True)
+            ready_to_stream_dir = source_dir / "ready_to_stream"
+            ready_to_stream_dir.mkdir(exist_ok=True)
             
             self._verify_processor()
             
-            # On renomme d'abord les fichiers problématiques
-            self._rename_problematic_files()
+            # On réinitialise la liste des vidéos traitées
+            self.processed_videos = []
             
-            if not source_dir.exists():
-                logger.error(f"[{self.name}] ❌ Dossier source introuvable: {source_dir}")
-                return False
+            # On scanne d'abord les vidéos dans ready_to_stream
+            mp4_files = list(ready_to_stream_dir.glob("*.mp4"))
+            if mp4_files:
+                self.processed_videos.extend(mp4_files)
+                logger.info(f"[{self.name}] ✅ {len(mp4_files)} vidéos trouvées dans ready_to_stream")
+                
+                # La chaîne est prête si on a des vidéos
+                self.ready_for_streaming = True
+                return True
 
+            # Si aucun fichier dans ready_to_stream, on vérifie s'il y a des fichiers à traiter
             video_extensions = (".mp4", ".avi", ".mkv", ".mov")
             source_files = []
             for ext in video_extensions:
@@ -520,65 +518,13 @@ class IPTVChannel:
                 logger.warning(f"[{self.name}] ⚠️ Aucun fichier vidéo dans {self.video_dir}")
                 return False
 
-            # On réinitialise la liste des vidéos traitées
-            self.processed_videos = []
-
-            # IMPORTANT: On traite TOUTES les vidéos sources, même si aucune n'est déjà traitée
-            for source in source_files:
-                try:
-                    processed_file = processed_dir / f"{source.stem}.mp4"
-                    
-                    if processed_file.exists():
-                        logger.info(f"[{self.name}] ✅ Vidéo déjà présente: {source.name}")
-                        self.processed_videos.append(processed_file)
-                        continue
-
-                    if not self.processor:
-                        logger.error(f"[{self.name}] ❌ VideoProcessor non initialisé")
-                        continue
-
-                    try:
-                        is_optimized = self.processor.is_already_optimized(source)
-                    except Exception as e:
-                        logger.error(f"[{self.name}] ❌ Erreur vérification optimisation {source.name}: {e}")
-                        continue
-
-                    if is_optimized:
-                        logger.info(f"[{self.name}] ✅ Vidéo déjà optimisée: {source.name}")
-                        try:
-                            shutil.copy2(source, processed_file)
-                            self.processed_videos.append(processed_file)
-                        except Exception as e:
-                            logger.error(f"[{self.name}] ❌ Erreur copie {source.name}: {e}")
-                            continue
-                    else:
-                        try:
-                            processed = self.processor.process_video(source)
-                            if processed and processed.exists():
-                                self.processed_videos.append(processed)
-                                logger.info(f"[{self.name}] ✅ Vidéo traitée: {source.name}")
-                            else:
-                                logger.error(f"[{self.name}] ❌ Échec traitement: {source.name}")
-                        except Exception as e:
-                            logger.error(f"[{self.name}] ❌ Erreur traitement {source.name}: {e}")
-                            continue
-
-                except Exception as e:
-                    logger.error(f"[{self.name}] ❌ Erreur traitement fichier {source.name}: {e}")
-                    continue
-
-            # Ajout d'un scan récursif pour ramasser les vidéos qui pourraient être dans processed
-            # mais pas encore dans notre liste
-            for ext in video_extensions:
-                processed_files = processed_dir.glob(f"*{ext}")
-                for pf in processed_files:
-                    if pf not in self.processed_videos:
-                        self.processed_videos.append(pf)
-                        logger.info(f"[{self.name}] ✅ Ajout de la vidéo déjà traitée: {pf.name}")
-
-            self.processed_videos.sort()
-            logger.info(f"[{self.name}] ✅ Scan terminé: {len(self.processed_videos)} vidéos traitées")
-            return True
+            # La chaîne n'est pas encore prête, mais on va traiter les vidéos
+            logger.info(f"[{self.name}] 🔄 {len(source_files)} fichiers sources à traiter")
+            
+            # Marque la chaîne comme non prête jusqu'à ce que les vidéos soient traitées
+            self.ready_for_streaming = False
+            
+            return False
 
         except Exception as e:
             logger.error(f"[{self.name}] ❌ Erreur scan des vidéos: {str(e)}")
@@ -599,35 +545,6 @@ class IPTVChannel:
                 logger.info(f"[{self.name}] 🔥 Premier watcher, démarrage du stream")
                 self.start_stream_if_needed()
   
-    def _contains_mkv(self) -> bool:
-        """Détecte la présence de fichiers MKV dans la playlist"""
-        try:
-            for video in self.processed_videos:
-                path = str(video)
-                if path.lower().endswith('.mkv'):
-                    logger.info(f"[{self.name}] ✅ MKV détecté dans processed_videos: {path}")
-                    return True
-                    
-            source_dir = Path(self.video_dir)
-            mkv_files = list(source_dir.glob("*.mkv"))
-            if mkv_files:
-                logger.info(f"[{self.name}] ✅ MKV détectés dans source: {[f.name for f in mkv_files]}")
-                return True
-
-            playlist_path = Path(CONTENT_DIR) / self.name / "_playlist.txt"
-            if playlist_path.exists():
-                with open(playlist_path, 'r') as f:
-                    content = f.read()
-                    if '.mkv' in content.lower():
-                        logger.info(f"[{self.name}] ✅ MKV détecté dans la playlist")
-                        return True
-                    
-            return False
-
-        except Exception as e:
-            logger.error(f"[{self.name}] ❌ Erreur détection MKV: {e}")
-            return False
-    
     def _verify_processor(self) -> bool:
         """Vérifie que le VideoProcessor est correctement initialisé"""
         try:
@@ -644,11 +561,11 @@ class IPTVChannel:
                 logger.error(f"[{self.name}] ❌ Permissions insuffisantes sur {video_dir}")
                 return False
                 
-            processed_dir = video_dir / "processed"
+            ready_to_stream_dir = video_dir / "ready_to_stream"
             try:
-                processed_dir.mkdir(exist_ok=True)
+                ready_to_stream_dir.mkdir(exist_ok=True)
             except Exception as e:
-                logger.error(f"[{self.name}] ❌ Impossible de créer {processed_dir}: {e}")
+                logger.error(f"[{self.name}] ❌ Impossible de créer {ready_to_stream_dir}: {e}")
                 return False
                 
             logger.info(f"[{self.name}] ✅ VideoProcessor correctement initialisé")
@@ -674,54 +591,7 @@ class IPTVChannel:
         if self.logger:
             self.logger.log_segment(segment_path, size)
             
-# Modification à apporter à la méthode report_segment_jump dans iptv_channel.py
-
     def report_segment_jump(self, prev_segment: int, curr_segment: int):
-        """
-        Gère les sauts détectés dans les segments HLS
-        
-        Args:
-            prev_segment: Le segment précédent
-            curr_segment: Le segment actuel (avec un saut)
-        """
-        try:
-            jump_size = curr_segment - prev_segment
-            
-            # On ne s'inquiète que des sauts importants
-            if jump_size <= 5:
-                return
-                
-            logger.warning(f"[{self.name}] 🚨 Saut de segment détecté: {prev_segment} → {curr_segment} (delta: {jump_size})")
-            
-            # Si les sauts sont vraiment grands (>= 20), on envisage un redémarrage
-            if jump_size >= 20:
-                # On ajoute toujours l'erreur
-                self.error_handler.add_error("segment_jump")
-                
-                # On vérifie si on a assez d'erreurs pour redémarrer
-                if self.error_handler.error_count >= 3:
-                    logger.warning(f"[{self.name}] 🔄 Tentative de redémarrage suite à des sauts importants répétés")
-                    
-                    # On sauvegarde la position actuelle
-                    if hasattr(self, 'position_manager'):
-                        self.position_manager.save_position()
-                    
-                    # Vérification des stats de visionnage
-                    watchers = getattr(self, 'watchers_count', 0)
-                    if watchers > 0:
-                        return self._restart_stream()
-                    else:
-                        logger.info(f"[{self.name}] ℹ️ Pas de redémarrage: aucun watcher actif")
-                else:
-                    logger.info(f"[{self.name}] ⚠️ Saut important détecté ({self.error_handler.error_count}/3)")
-                    
-            # Sinon, on log juste le problème
-            else:
-                logger.info(f"[{self.name}] ℹ️ Saut mineur détecté, surveillance continue")
-                
-        except Exception as e:
-            logger.error(f"[{self.name}] ❌ Erreur gestion saut de segment: {e}")
-            return False
         """
         Gère les sauts détectés dans les segments HLS
         
@@ -762,3 +632,8 @@ class IPTVChannel:
         except Exception as e:
             logger.error(f"[{self.name}] ❌ Erreur gestion saut de segment: {e}")
             return False
+
+    def refresh_videos(self):
+        """Force un nouveau scan des vidéos"""
+        threading.Thread(target=self._scan_videos_async, daemon=True).start()
+        return True

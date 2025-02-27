@@ -9,7 +9,7 @@ import random
 import psutil
 import traceback
 import subprocess 
-from queue import Queue
+from queue import Queue, Empty
 from pathlib import Path
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
@@ -34,7 +34,10 @@ from config import (
 
 class IPTVManager:
     """
-    # On gère toutes les chaînes, le nettoyage HLS, la playlist principale, etc.
+    Gestionnaire principal du service IPTV - version améliorée avec:
+    - Meilleure gestion des dossiers
+    - Lancement non bloquant des chaînes
+    - Meilleure détection et gestion des fichiers
     """
     
     def __init__(self, content_dir: str, use_gpu: bool = False):
@@ -43,6 +46,13 @@ class IPTVManager:
         self.content_dir = content_dir
         self.use_gpu = use_gpu
         self.channels = {}
+        self.channel_ready_status = {}  # Pour suivre l'état de préparation des chaînes
+        
+        # Queue pour les chaînes à initialiser en parallèle
+        self.channel_init_queue = Queue()
+        self.max_parallel_inits = 3  # Nombre max d'initialisations parallèles
+        self.active_init_threads = 0
+        self.init_threads_lock = threading.Lock()
 
         # Moniteur FFmpeg
         self.ffmpeg_monitor = FFmpegMonitor(self.channels)
@@ -56,13 +66,18 @@ class IPTVManager:
         self.scan_lock = threading.Lock()
         self.failing_channels = set()
 
-        logger.info("Initialisation du gestionnaire IPTV")
+        logger.info("Initialisation du gestionnaire IPTV amélioré")
         self._clean_startup()
 
         # Observer
         self.observer = Observer()
         event_handler = ChannelEventHandler(self)
         self.observer.schedule(event_handler, self.content_dir, recursive=True)
+
+        # Démarrage du thread d'initialisation des chaînes
+        self.stop_init_thread = threading.Event()
+        self.channel_init_thread = threading.Thread(target=self._process_channel_init_queue, daemon=True)
+        self.channel_init_thread.start()
 
         # On crée tous les objets IPTVChannel mais SANS démarrer FFmpeg
         logger.info(f"Scan initial dans {self.content_dir}")
@@ -89,8 +104,79 @@ class IPTVManager:
             daemon=True
         )
         self.watchers_thread.start()
-        self.watchers_thread = threading.Thread(target=self._watchers_loop, daemon=True)
         self.running = True
+    
+    def _process_channel_init_queue(self):
+        """Traite la queue d'initialisation des chaînes en parallèle"""
+        while not self.stop_init_thread.is_set():
+            try:
+                # Limite le nombre d'initialisations parallèles
+                with self.init_threads_lock:
+                    if self.active_init_threads >= self.max_parallel_inits:
+                        time.sleep(0.5)
+                        continue
+                
+                # Essaie de récupérer une chaîne de la queue
+                try:
+                    channel_data = self.channel_init_queue.get(block=False)
+                except Empty:
+                    time.sleep(0.5)
+                    continue
+                
+                # Incrémente le compteur de threads actifs
+                with self.init_threads_lock:
+                    self.active_init_threads += 1
+                
+                # Lance un thread pour initialiser cette chaîne
+                threading.Thread(
+                    target=self._init_channel_async,
+                    args=(channel_data,),
+                    daemon=True
+                ).start()
+                
+            except Exception as e:
+                logger.error(f"Erreur dans le thread d'initialisation: {e}")
+                time.sleep(1)
+    
+    def _init_channel_async(self, channel_data):
+        """Initialise une chaîne de manière asynchrone"""
+        try:
+            channel_name = channel_data["name"]
+            channel_dir = channel_data["dir"]
+            
+            logger.info(f"Initialisation asynchrone de la chaîne: {channel_name}")
+            
+            # Crée l'objet chaîne
+            channel = IPTVChannel(
+                channel_name,
+                str(channel_dir),
+                hls_cleaner=self.hls_cleaner,
+                use_gpu=self.use_gpu
+            )
+            
+            # Ajoute la chaîne au dictionnaire
+            with self.scan_lock:
+                self.channels[channel_name] = channel
+                self.channel_ready_status[channel_name] = False  # Pas encore prête
+            
+            # Attente que la chaîne soit prête (max 30 secondes)
+            for _ in range(30):
+                if hasattr(channel, 'ready_for_streaming') and channel.ready_for_streaming:
+                    with self.scan_lock:
+                        self.channel_ready_status[channel_name] = True
+                    logger.info(f"✅ Chaîne {channel_name} prête pour le streaming")
+                    break
+                time.sleep(1)
+            
+        except Exception as e:
+            logger.error(f"Erreur initialisation de la chaîne {channel_data.get('name')}: {e}")
+        finally:
+            # Décrémente le compteur de threads actifs
+            with self.init_threads_lock:
+                self.active_init_threads -= 1
+            
+            # Marque la tâche comme terminée
+            self.channel_init_queue.task_done()
     
     def _watchers_loop(self):
         """Surveille l'activité des watchers et arrête les streams inutilisés"""
@@ -165,9 +251,13 @@ class IPTVManager:
                 logger.info(f"📊 Mise à jour {channel_name}: {count} watchers")
 
                 if old_count == 0 and count > 0:
-                    logger.info(f"[{channel_name}] 🔥 Premier watcher, démarrage du stream")
-                    if not channel.start_stream():
-                        logger.error(f"[{channel_name}] ❌ Échec démarrage stream")
+                    # Vérification si la chaîne est prête
+                    if channel_name in self.channel_ready_status and self.channel_ready_status[channel_name]:
+                        logger.info(f"[{channel_name}] 🔥 Premier watcher, démarrage du stream")
+                        if not channel.start_stream():
+                            logger.error(f"[{channel_name}] ❌ Échec démarrage stream")
+                    else:
+                        logger.warning(f"[{channel_name}] ⚠️ Chaîne pas encore prête, impossible de démarrer le stream")
                 elif old_count > 0 and count == 0:
                     # On ne coupe PAS immédiatement, on laisse le monitoring gérer ça
                     logger.info(f"[{channel_name}] ⚠️ Plus de watchers recensés")
@@ -176,7 +266,7 @@ class IPTVManager:
             logger.error(f"❌ Erreur update_watchers: {e}")
 
     def _clean_startup(self):
-        """# On nettoie avant de démarrer"""
+        """Nettoie avant de démarrer"""
         try:
             logger.info("🧹 Nettoyage initial...")
             patterns_to_clean = [
@@ -203,7 +293,8 @@ class IPTVManager:
 
     def scan_channels(self, force: bool = False, initial: bool = False):
         """
-        On scanne le contenu pour détecter les nouveaux dossiers (chaînes).
+        Scanne le contenu pour détecter les nouveaux dossiers (chaînes).
+        Version améliorée avec initialisation non bloquante
         """
         with self.scan_lock:
             try:
@@ -219,18 +310,25 @@ class IPTVManager:
                     channel_name = channel_dir.name
 
                     if channel_name in self.channels:
-                        logger.info(f"🔄 Chaîne existante : {channel_name}")
+                        # Si la chaîne existe déjà, on vérifie son état
+                        if force:
+                            logger.info(f"🔄 Rafraîchissement de la chaîne {channel_name}")
+                            channel = self.channels[channel_name]
+                            if hasattr(channel, 'refresh_videos'):
+                                channel.refresh_videos()
+                        else:
+                            logger.info(f"✅ Chaîne existante: {channel_name}")
                         continue
 
-                    logger.info(f"✅ Nouvelle chaîne trouvée : {channel_name}")
-                    self.channels[channel_name] = IPTVChannel(
-                        channel_name,
-                        str(channel_dir),
-                        hls_cleaner=self.hls_cleaner,
-                        use_gpu=self.use_gpu
-                    )
+                    logger.info(f"✅ Nouvelle chaîne trouvée: {channel_name}")
+                    
+                    # Ajoute la chaîne à la queue d'initialisation
+                    self.channel_init_queue.put({
+                        "name": channel_name,
+                        "dir": channel_dir
+                    })
 
-                logger.info(f"📡 Scan terminé, {len(self.channels)} chaînes enregistrées.")
+                logger.info(f"📡 Scan terminé, {len(channel_dirs)} chaînes identifiées")
 
             except Exception as e:
                 logger.error(f"Erreur scan des chaînes: {e}")
@@ -255,24 +353,10 @@ class IPTVManager:
         except Exception as e:
             logger.error(f"❌ Erreur création dossiers HLS: {e}")
 
-    def _scan_new_videos(self, channel_dir: Path) -> list:
-        """# On détecte les nouvelles vidéos non encore traitées"""
-        try:
-            processed_dir = channel_dir / "processed"
-            if not processed_dir.exists():
-                return []
-            current_videos = {f.stem for f in processed_dir.glob("*.mp4")}
-            all_videos = {f.stem for f in channel_dir.glob("*.mp4")}
-            new_videos = all_videos - current_videos
-            return [channel_dir / f"{video}.mp4" for video in new_videos]
-        except Exception as e:
-            logger.error(f"Erreur scan nouveaux fichiers: {e}")
-            return []
-
     def _manage_master_playlist(self):
         """
-        # On gère la création et mise à jour de la playlist principale.
-        # Cette méthode tourne en boucle et regénère la playlist toutes les 60s.
+        Gère la création et mise à jour de la playlist principale.
+        Cette méthode tourne en boucle et regénère la playlist toutes les 60s.
         """
         while True:
             try:
@@ -282,12 +366,18 @@ class IPTVManager:
                 with open(playlist_path, "w", encoding="utf-8") as f:
                     f.write("#EXTM3U\n")
 
-                    # On référence TOUTES les chaînes self.channels
+                    # Ne référence que les chaînes prêtes
+                    ready_channels = []
                     for name, channel in sorted(self.channels.items()):
+                        if name in self.channel_ready_status and self.channel_ready_status[name]:
+                            ready_channels.append((name, channel))
+                    
+                    # Écriture des chaînes prêtes
+                    for name, channel in ready_channels:
                         f.write(f'#EXTINF:-1 tvg-id="{name}" tvg-name="{name}",{name}\n')
                         f.write(f"http://{SERVER_URL}/hls/{name}/playlist.m3u8\n")
 
-                logger.info(f"Playlist mise à jour ({len(self.channels)} chaînes)")
+                logger.info(f"Playlist mise à jour ({len(ready_channels)} chaînes prêtes sur {len(self.channels)} totales)")
                 time.sleep(60)  # On attend 60s avant la prochaine mise à jour
 
             except Exception as e:
@@ -297,6 +387,12 @@ class IPTVManager:
 
     def cleanup(self):
         logger.info("Début du nettoyage...")
+        
+        # Arrêt du thread d'initialisation
+        self.stop_init_thread.set()
+        if hasattr(self, "channel_init_thread") and self.channel_init_thread.is_alive():
+            self.channel_init_thread.join(timeout=5)
+        
         if hasattr(self, "hls_cleaner"):
             self.hls_cleaner.stop()
 
@@ -312,10 +408,13 @@ class IPTVManager:
     def run(self):
         try:
             # Démarrer la boucle de surveillance des watchers
-            self.watchers_thread.start()
+            if hasattr(self, 'watchers_thread') and not self.watchers_thread.is_alive():
+                self.watchers_thread.start()
             logger.info("🔄 Boucle de surveillance des watchers démarrée")
+            
             logger.debug("📥 Scan initial des chaînes...")
             self.scan_channels()
+            
             logger.debug("🕵️ Démarrage de l'observer...")
             self.observer.start()
 
