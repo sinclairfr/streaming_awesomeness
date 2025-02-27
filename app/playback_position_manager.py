@@ -232,12 +232,13 @@ class PlaybackPositionManager:
         for i in range(max_retries + 1):
             try:
                 cmd = [
-                    "ffprobe", "-v", "error",
+                    "ffprobe",
+                    "-v", "error",
                     "-show_entries", "format=duration",
                     "-of", "default=noprint_wrappers=1:nokey=1",
                     str(video_path)
                 ]
-                
+
                 result = subprocess.run(cmd, capture_output=True, text=True)
                 
                 if result.returncode == 0:

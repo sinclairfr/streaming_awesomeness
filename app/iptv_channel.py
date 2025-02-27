@@ -197,13 +197,13 @@ class IPTVChannel:
                 cmd = [
                     "ffprobe",
                     "-v", "error",
-                    "-analyzeduration", "100M",  # Augmente le temps d'analyse
-                    "-probesize", "100M",        # Et la taille analysée
-                    "-i", str(video_path),       # Explicite le fichier d'entrée
+                    "-analyzeduration", "20M",  # Réduit le temps d'analyse pour un équilibre entre performance et précision
+                    "-probesize", "50M",        # Réduit la taille analysée pour un équilibre similaire
+                    "-i", str(video_path),      # Explicite le fichier d'entrée
                     "-show_entries", "format=duration",
                     "-of", "default=noprint_wrappers=1:nokey=1"
                 ]
-                
+            
                 logger.warning(f"[{self.name}] ⚠️ Tentative {attempt+1}/{max_retries} pour {video_path}")
                 
                 result = subprocess.run(cmd, capture_output=True, text=True)

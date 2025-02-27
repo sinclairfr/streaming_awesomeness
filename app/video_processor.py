@@ -25,6 +25,8 @@ class VideoProcessor:
         self.processing_dir = self.channel_dir / "processing"
         self.processing_dir.mkdir(exist_ok=True)
         
+        self._clean_processing_dir()
+        
         self.already_processed_dir = self.channel_dir / "already_processed"
         self.already_processed_dir.mkdir(exist_ok=True)
         
@@ -49,6 +51,19 @@ class VideoProcessor:
         self.processing_thread = threading.Thread(target=self._background_processor, daemon=True)
         self.processing_thread.start()
         
+    def _clean_processing_dir(self):
+        """Vide le dossier processing au démarrage"""
+        try:
+            if self.processing_dir.exists():
+                for file in self.processing_dir.glob("*.*"):
+                    try:
+                        file.unlink()
+                        logger.info(f"Fichier temporaire supprimé: {file.name}")
+                    except Exception as e:
+                        logger.error(f"Erreur suppression {file.name}: {e}")
+        except Exception as e:
+            logger.error(f"Erreur nettoyage dossier processing: {e}")      
+            
     def _migrate_from_processed(self):
         """Migration des fichiers de l'ancien dossier 'processed' vers la nouvelle structure"""
         old_processed = self.channel_dir / "processed"
@@ -202,15 +217,13 @@ class VideoProcessor:
 
     def get_gpu_args(self, is_streaming: bool = False) -> list:
         """Génère les arguments de base pour le GPU"""
+        # Options d'accélération GPU pour l'entrée uniquement
         args = [
-            "-vaapi_device", "/dev/dri/renderD128",
             "-hwaccel", "vaapi",
-            "-hwaccel_output_format", "vaapi"
+            "-hwaccel_output_format", "vaapi",
+            "-vaapi_device", "/dev/dri/renderD128"
         ]
         
-        if is_streaming:
-            args.extend(["-init_hw_device", "vaapi=va:/dev/dri/renderD128"])
-            
         return args
 
     def get_encoding_args(self, is_streaming: bool = False) -> list:
@@ -304,11 +317,20 @@ class VideoProcessor:
             # Prepare FFmpeg command
             command = ["ffmpeg", "-y"]  # Force overwrite if exists
             
-            # Paramètres d'entrée améliorés pour fichiers problématiques
+            # CORRECTION : Placer les options GPU AVANT l'input
+            if self.USE_GPU and not is_hevc_10bit:
+                command.extend([
+                    "-hwaccel", "vaapi",
+                    "-hwaccel_output_format", "vaapi",
+                    "-vaapi_device", "/dev/dri/renderD128"
+                ])
+            
+            # Paramètres d'entrée
             command.extend([
                 "-analyzeduration", "100M",
                 "-probesize", "100M",
-                "-fflags", "+igndts+discardcorrupt"
+                "-fflags", "+igndts+discardcorrupt",
+                "-i", str(video_path)  # Fichier d'entrée
             ])
             
             # Input file
@@ -320,74 +342,58 @@ class VideoProcessor:
             # Conserve uniquement la première piste audio et vidéo
             command.extend(["-map", "0:v:0", "-map", "0:a:0?"])
             
-            # Pour HEVC 10-bit, on utilise une approche différente sans GPU
+            # Version plus simple et directe pour HEVC 10-bit
             if is_hevc_10bit:
-                logger.info(f"🔄 Détection HEVC 10-bit, utilisation d'un encodage CPU optimisé")
-                command.extend([
-                    "-c:v", "libx264", 
-                    "-crf", "22",
-                    "-preset", "fast",
-                    "-pix_fmt", "yuv420p",  # Assure la compatibilité maximale
-                    "-profile:v", "high",
-                    "-level", "4.1",
-                    "-maxrate", "5M",
-                    "-bufsize", "10M",
-                    "-g", "48",
-                    "-keyint_min", "48",
-                    "-sc_threshold", "0",  # Désactive la détection de scène
-                    "-c:a", "aac",
-                    "-b:a", "192k",
-                    "-ar", "48000",
-                    "-ac", "2"  # Force stereo
-                ])
+                command = [
+                    "ffmpeg", "-y",
+                    "-i", str(video_path),
+                    "-c:v", "libx264", "-crf", "22", "-preset", "fast",
+                    "-c:a", "aac", "-b:a", "192k", "-ac", "2",
+                    "-sn", "-dn", "-map_chapters", "-1",
+                    "-map", "0:v:0", "-map", "0:a:0?",
+                    str(output_path)
+                ]
+            # Version pour GPU
+            elif self.USE_GPU:
+                command = [
+                    "ffmpeg", "-y",
+                    "-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi",
+                    "-vaapi_device", "/dev/dri/renderD128",
+                    "-i", str(video_path),
+                    "-c:v", "h264_vaapi", "-profile:v", "main",
+                    "-c:a", "aac", "-b:a", "192k", "-ac", "2",
+                    "-sn", "-dn", "-map_chapters", "-1", 
+                    "-map", "0:v:0", "-map", "0:a:0?",
+                    str(output_path)
+                ]
+            # Version CPU standard
             else:
-                # Si on peut utiliser le GPU
-                if self.USE_GPU:
-                    command.extend(self.get_gpu_args())
-                    filters = self.get_gpu_filters(video_path)
-                    if filters:
-                        command.extend(["-vf", ",".join(filters)])
-                
-                # Paramètres d'encodage standard
-                command.extend(self.get_encoding_args())
-                
-                # Audio encoding
-                command.extend([
-                    "-c:a", "aac",
-                    "-b:a", "192k",
-                    "-ar", "48000",
-                    "-ac", "2"  # Force stereo
-                ])
+                command = [
+                    "ffmpeg", "-y",
+                    "-i", str(video_path),
+                    "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                    "-c:a", "aac", "-b:a", "192k", "-ac", "2",
+                    "-sn", "-dn", "-map_chapters", "-1",
+                    "-map", "0:v:0", "-map", "0:a:0?",
+                    str(output_path)
+                ]
             
-            # Output file
-            command.append(str(output_path))
-
-            # Execute FFmpeg
+            # Exécuter la commande
             logger.info(f"🎬 Traitement de {video_path.name}")
             logger.debug(f"Commande: {' '.join(command)}")
             
-            result = subprocess.run(
-                command,
-                capture_output=True,
-                text=True
-            )
-
-            # Si ça échoue encore avec le mode HEVC, on essaie une approche en deux étapes
-            if result.returncode != 0 and is_hevc_10bit:
-                logger.warning(f"⚠️ Première approche échouée, tentative avec méthode en deux étapes")
-                return self._two_pass_hevc_conversion(video_path, output_path)
-
+            result = subprocess.run(command, capture_output=True, text=True)
+            
+            # Vérifier le résultat
             if result.returncode != 0:
                 logger.error(f"❌ Erreur FFmpeg: {result.stderr}")
                 return None
-
+                
             logger.info(f"✅ {video_path.name} traité avec succès -> {output_path}")
             return output_path
-
+        
         except Exception as e:
             logger.error(f"Error processing video {video_path}: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
             return None
 
     def _check_hevc_10bit(self, video_path: Path) -> bool:
