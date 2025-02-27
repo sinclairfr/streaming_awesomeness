@@ -221,27 +221,26 @@ class FFmpegCommandBuilder:
         
         return params
     
-# Mise à jour de la méthode build_hls_params dans ffmpeg_command_builder.py
-
-def build_hls_params(self, output_dir):
-    """
-    # Construit les paramètres HLS optimisés pour éviter les sauts de segments
-    """
-    return [
-        "-f", "hls",
-        "-hls_time", str(self.hls_time),  # Durée des segments
-        "-hls_list_size", str(max(15, self.hls_list_size)),  # Plus de segments dans la playlist
-        "-hls_delete_threshold", str(max(5, self.hls_delete_threshold)),  # Attendre plus longtemps avant suppression
-        "-hls_flags", "delete_segments+append_list+program_date_time+independent_segments+split_by_time+round_durations",
-        "-hls_allow_cache", "1",  # Autorise mise en cache des segments
-        "-start_number", "0",
-        "-hls_segment_type", "mpegts",
-        "-max_delay", "2000000",  # Délai max réduit
-        "-avoid_negative_ts", "make_zero",
-        "-hls_init_time", "2",  # Durée initiale
-        "-hls_segment_filename", f"{output_dir}/segment_%d.ts",
-        f"{output_dir}/playlist.m3u8"
-    ]
+    # Mise à jour de la méthode build_hls_params dans ffmpeg_command_builder.py
+    def build_hls_params(self, output_dir):
+        """
+        # Construit les paramètres HLS optimisés pour éviter les sauts de segments
+        """
+        return [
+            "-f", "hls",
+            "-hls_time", str(self.hls_time),  # Durée des segments
+            "-hls_list_size", str(max(15, self.hls_list_size)),  # Plus de segments dans la playlist
+            "-hls_delete_threshold", str(max(5, self.hls_delete_threshold)),  # Attendre plus longtemps avant suppression
+            "-hls_flags", "delete_segments+append_list+program_date_time+independent_segments+split_by_time+round_durations",
+            "-hls_allow_cache", "1",  # Autorise mise en cache des segments
+            "-start_number", "0",
+            "-hls_segment_type", "mpegts",
+            "-max_delay", "2000000",  # Délai max réduit
+            "-avoid_negative_ts", "make_zero",
+            "-hls_init_time", "2",  # Durée initiale
+            "-hls_segment_filename", f"{output_dir}/segment_%d.ts",
+            f"{output_dir}/playlist.m3u8"
+        ]
 
     def build_encoding_params(self, has_mkv=False):
         """

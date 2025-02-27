@@ -379,13 +379,11 @@ class IPTVChannel:
             logger.info(f"[{self.name}] Décalage de démarrage: {start_offset}")
             
             logger.info(f"[{self.name}] Optimisation pour le matériel...")
-            #TODO fix
-            #self.command_builder.optimize_for_hardware()
+            self.command_builder.optimize_for_hardware()
             
-            #logger.info(f"[{self.name}] Vérification mkv...")
-            #has_mkv = self.command_builder.detect_mkv_in_playlist(concat_file)
-            has_mkv = False
-            
+            logger.info(f"[{self.name}] Vérification mkv...")
+            has_mkv = self.command_builder.detect_mkv_in_playlist(concat_file)
+
             logger.info(f"[{self.name}] Construction de la commande FFmpeg...")
             command = self.command_builder.build_command(
                 input_file=concat_file,
