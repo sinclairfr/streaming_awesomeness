@@ -110,8 +110,14 @@ class ChannelEventHandler(FileSystemEventHandler):
                 self.manager.scan_channels()
             return
 
-        # Pour les fichiers, vérification du type de fichier
+        # Pour les fichiers, vérification du type de fichier et ignorer les tmp_
         path = Path(event.src_path)
+        
+        # Ignorer les fichiers temporaires de transcodage
+        if "tmp_" in path.name:
+            logger.debug(f"Fichier temporaire ignoré: {path.name}")
+            return
+            
         if path.suffix.lower() not in ['.mp4', '.mkv', '.avi', '.mov']:
             return  # On ignore les fichiers non vidéo
 
@@ -133,17 +139,22 @@ class ChannelEventHandler(FileSystemEventHandler):
             args=(event.src_path, channel_name),
             daemon=True
         ).start()
-
+        
     def _wait_for_copy_completion(self, file_path: str, channel_name: str = ""):
         """Attend la fin de la copie et déclenche le scan pour une chaîne spécifique"""
         try:
+            # Ignorer les fichiers temporaires de transcodage
+            if "tmp_" in Path(file_path).name:
+                logger.info(f"Fichier temporaire de transcodage détecté, suivi via FFmpeg: {Path(file_path).name}")
+                return
+                
             file_size = Path(file_path).stat().st_size if Path(file_path).exists() else 0
             logger.info(f"Surveillance de la copie de {Path(file_path).name} ({file_size/1024/1024:.1f} MB)")
             
             # Pour les fichiers volumineux, attente plus longue
-            timeout = 600  # 10 minutes par défaut
+            timeout = 300  # 5 minutes par défaut
             if file_size > 1024 * 1024 * 1024:  # > 1 GB
-                timeout = 1200  # 20 minutes pour les fichiers > 1 GB
+                timeout = 600  # 10 minutes pour les fichiers > 1 GB
                 logger.info(f"Fichier volumineux détecté (> 1 GB), timeout étendu à {timeout}s")
             
             if self.is_file_ready(file_path, timeout=timeout):

@@ -401,14 +401,13 @@ class VideoProcessor:
             base, ext = os.path.splitext(sanitized)
             sanitized = base[:96] + ext  # On garde l'extension
         return sanitized
-    
-    def _verify_output_file(self, file_path: Path, max_retries=3) -> bool:
+        
+    def _verify_output_file(self, file_path: Path) -> bool:
         """
-        Vérifie que le fichier de sortie est valide et complet.
+        Vérifie que le fichier de sortie est valide après transcodage
         
         Args:
             file_path: Chemin du fichier à vérifier
-            max_retries: Nombre maximal de tentatives
             
         Returns:
             bool: True si le fichier est valide, False sinon
@@ -417,60 +416,160 @@ class VideoProcessor:
             logger.error(f"❌ Fichier introuvable: {file_path}")
             return False
             
-        # Vérification de la taille du fichier (doit être > 0)
+        # Vérification de la taille du fichier
         try:
             file_size = file_path.stat().st_size
-            if file_size == 0:
-                logger.error(f"❌ Fichier vide: {file_path}")
+            if file_size < 10000:  # Moins de 10KB est suspicieux pour une vidéo
+                logger.error(f"❌ Fichier trop petit: {file_path} ({file_size} bytes)")
                 return False
         except Exception as e:
             logger.error(f"❌ Erreur accès fichier {file_path}: {e}")
             return False
             
-        # Vérification que le fichier est stable (taille constante)
-        if not self._wait_for_file_stability(file_path, timeout=30):
-            logger.error(f"❌ Fichier instable: {file_path}")
-            return False
+        # Vérification basique avec ffprobe
+        try:
+            cmd = [
+                "ffprobe",
+                "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=codec_name,width,height",
+                "-of", "json",
+                str(file_path)
+            ]
             
-        # Vérification que le fichier est lisible par ffprobe
-        for attempt in range(max_retries):
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            
+            if result.returncode != 0:
+                logger.error(f"❌ Erreur ffprobe: {result.stderr}")
+                return False
+                
+            # Essai de parse du JSON
+            try:
+                data = json.loads(result.stdout)
+                if 'streams' in data and len(data['streams']) > 0:
+                    stream = data['streams'][0]
+                    logger.info(f"✅ Vidéo validée: {file_path.name} ({stream.get('width')}x{stream.get('height')}, codec: {stream.get('codec_name')})")
+                    return True
+                else:
+                    logger.error(f"❌ Pas de flux vidéo dans {file_path}")
+                    return False
+            except json.JSONDecodeError:
+                logger.error(f"❌ Sortie JSON invalide: {result.stdout}")
+                return False
+                
+        except subprocess.TimeoutExpired:
+            logger.error(f"❌ Timeout ffprobe pour {file_path}")
+            return False
+        except Exception as e:
+            logger.error(f"❌ Erreur vérification {file_path}: {e}")
+            return False
+
+    def _get_video_duration(self, video_path, max_retries=2):
+        """
+        # Obtient la durée d'un fichier vidéo avec retries
+        """
+        for i in range(max_retries + 1):
             try:
                 cmd = [
                     "ffprobe",
                     "-v", "error",
-                    "-select_streams", "v:0",
-                    "-show_entries", "stream=codec_name",
-                    "-of", "json",
-                    str(file_path)
+                    "-show_entries", "format=duration",
+                    "-of", "default=noprint_wrappers=1:nokey=1",
+                    str(video_path)
                 ]
-                
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+
+                result = subprocess.run(cmd, capture_output=True, text=True)
                 
                 if result.returncode == 0:
-                    # Vérification que la sortie JSON est valide
                     try:
-                        output = json.loads(result.stdout)
-                        if 'streams' in output and len(output['streams']) > 0:
-                            logger.info(f"✅ Fichier validé: {file_path}")
-                            return True
-                    except json.JSONDecodeError:
-                        logger.warning(f"⚠️ JSON invalide pour {file_path}, tentative {attempt+1}/{max_retries}")
-                else:
-                    logger.warning(f"⚠️ ffprobe a échoué pour {file_path} (code {result.returncode}), tentative {attempt+1}/{max_retries}")
-                    if result.stderr:
-                        logger.warning(f"⚠️ Erreur: {result.stderr}")
-                        
-                # Pause avant de réessayer
-                time.sleep(2)
+                        duration = float(result.stdout.strip())
+                        if duration > 0:
+                            return duration
+                    except ValueError:
+                        pass
                 
-            except subprocess.TimeoutExpired:
-                logger.warning(f"⚠️ Timeout ffprobe pour {file_path}, tentative {attempt+1}/{max_retries}")
+                # Si on arrive ici, c'est que ça a échoué
+                logger.warning(f"[{self.channel_name}] ⚠️ Tentative {i+1}/{max_retries+1} échouée pour {video_path}")
+                time.sleep(0.5)  # Petite pause avant la prochaine tentative
+                
             except Exception as e:
-                logger.warning(f"⚠️ Erreur vérification {file_path}: {e}, tentative {attempt+1}/{max_retries}")
+                logger.error(f"[{self.channel_name}] ❌ Erreur ffprobe: {e}")
+        
+        # Si on a échoué après toutes les tentatives, on renvoie une durée par défaut
+        logger.error(f"[{self.channel_name}] ❌ Impossible d'obtenir la durée pour {video_path}")
+        return 0
+ 
+    def _format_time(self, seconds: float) -> str:
+        """Formate un temps en secondes au format HH:MM:SS.mmm"""
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        seconds_part = seconds % 60
+        return f"{hours:02d}:{minutes:02d}:{seconds_part:06.3f}"
+
+    def _concatenate_segments(self, segment_dir: Path, output_path: Path) -> Optional[Path]:
+        """Concatène les segments en un seul fichier MP4"""
+        try:
+            # Liste tous les segments
+            segments = sorted(segment_dir.glob("segment_*.mp4"))
+            
+            if not segments:
+                logger.error(f"❌ Aucun segment trouvé dans {segment_dir}")
+                self._cleanup_temp_dir(segment_dir)
+                return None
                 
-        logger.error(f"❌ Échec validation après {max_retries} tentatives: {file_path}")
-        return False
-    
+            logger.info(f"🔄 Concaténation de {len(segments)} segments")
+            
+            # Création du fichier de concaténation
+            concat_file = segment_dir / "concat.txt"
+            with open(concat_file, "w") as f:
+                for segment in segments:
+                    f.write(f"file '{segment.name}'\n")
+            
+            # Concaténation avec ffmpeg
+            cmd = [
+                "ffmpeg", "-y",
+                "-f", "concat",
+                "-safe", "0",
+                "-i", str(concat_file),
+                "-c", "copy",  # Copie sans réencodage
+                "-movflags", "+faststart",  # Optimisation streaming
+                str(output_path)
+            ]
+            
+            result = subprocess.run(cmd, 
+                                cwd=str(segment_dir),
+                                capture_output=True, 
+                                text=True)
+            
+            if result.returncode != 0:
+                logger.error(f"❌ Erreur concaténation: {result.stderr}")
+                self._cleanup_temp_dir(segment_dir)
+                return None
+                
+            logger.info(f"✅ Concaténation réussie -> {output_path}")
+            
+            # Nettoyer les segments temporaires
+            self._cleanup_temp_dir(segment_dir)
+            
+            # Notifier la fin du traitement
+            self.notify_file_processed(output_path)
+            
+            return output_path
+            
+        except Exception as e:
+            logger.error(f"❌ Erreur concaténation: {e}")
+            self._cleanup_temp_dir(segment_dir)
+            return None
+
+    def _cleanup_temp_dir(self, temp_dir: Path):
+        """Nettoie un répertoire temporaire"""
+        try:
+            if temp_dir.exists():
+                shutil.rmtree(temp_dir)
+                logger.info(f"🧹 Répertoire temporaire nettoyé: {temp_dir}")
+        except Exception as e:
+            logger.error(f"❌ Erreur nettoyage répertoire temporaire: {e}")
+       
     def process_video(self, video_path: Path) -> Optional[Path]:
         """Traite un fichier vidéo avec gestion spéciale pour HEVC 10-bit"""
         try:
@@ -503,90 +602,226 @@ class VideoProcessor:
                 self.notify_file_processed(output_path)
                 return output_path
 
-            # Version plus simple et directe pour HEVC 10-bit
-            is_hevc_10bit = self._check_hevc_10bit(video_path)
-            
             # Utilisation d'un chemin temporaire pour le fichier de sortie
             temp_output_path = self.processing_dir / f"tmp_{output_name}"
+            if temp_output_path.exists():
+                temp_output_path.unlink()
             
-            # Configuration de la commande ffmpeg selon le type de vidéo
+            # Vérifier si le fichier est HEVC 10-bit pour adapter l'approche
+            is_hevc_10bit = self._check_hevc_10bit(video_path)
+            
+            # Déterminer la durée totale de la vidéo source pour estimer le temps restant
+            total_duration = self._get_video_duration(str(video_path))
+            if total_duration <= 0:
+                total_duration = None
+                logger.warning(f"⚠️ Impossible de déterminer la durée de {video_path.name}, les estimations seront désactivées")
+            else:
+                logger.info(f"📊 Durée totale de la vidéo source: {self._format_time(total_duration)}")
+            
+            # Configuration et préparation des options FFmpeg
+            command_base = [
+                "ffmpeg", "-y",
+                "-i", str(video_path),
+                "-max_muxing_queue_size", "4096",  # Queue plus grande
+                "-flush_packets", "1",            # Force le flush des paquets
+                "-fflags", "+flush_packets",      # Option supplémentaire de flush
+            ]
+            
+            # Options spécifiques selon le type
             if is_hevc_10bit:
-                command = [
-                    "ffmpeg", "-y",
-                    "-i", str(video_path),
+                command_opts = [
                     "-c:v", "libx264", "-crf", "22", "-preset", "fast",
                     "-c:a", "aac", "-b:a", "192k", "-ac", "2",
                     "-sn", "-dn", "-map_chapters", "-1",
                     "-map", "0:v:0", "-map", "0:a:0?",
-                    str(temp_output_path)  # Utilisation du chemin temporaire
+                    "-segment_time_metadata", "1",  # Force les métadonnées temporelles
+                    "-vsync", "1",                 # Synchronisation vidéo
+                    "-progress", "pipe:1",
+                    "-fs", "4G",                  # Limite taille fichier max
+                    "-t", "7200",                 # Durée max transcodage
                 ]
             elif self.USE_GPU:
-                command = [
-                    "ffmpeg", "-y",
+                command_opts = [
                     "-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi",
                     "-vaapi_device", "/dev/dri/renderD128",
-                    "-i", str(video_path),
                     "-c:v", "h264_vaapi", "-profile:v", "main",
                     "-c:a", "aac", "-b:a", "192k", "-ac", "2",
-                    "-sn", "-dn", "-map_chapters", "-1", 
+                    "-sn", "-dn", "-map_chapters", "-1",
                     "-map", "0:v:0", "-map", "0:a:0?",
-                    str(temp_output_path)  # Utilisation du chemin temporaire
+                    "-segment_time_metadata", "1",  # Force les métadonnées temporelles
+                    "-vsync", "1",                 # Synchronisation vidéo
+                    "-progress", "pipe:1",
+                    "-fs", "4G",                  # Limite taille fichier max
+                    "-t", "7200",                 # Durée max transcodage
                 ]
             else:
-                command = [
-                    "ffmpeg", "-y",
-                    "-i", str(video_path),
+                command_opts = [
                     "-c:v", "libx264", "-preset", "fast", "-crf", "23",
                     "-c:a", "aac", "-b:a", "192k", "-ac", "2",
                     "-sn", "-dn", "-map_chapters", "-1",
                     "-map", "0:v:0", "-map", "0:a:0?",
-                    str(temp_output_path)  # Utilisation du chemin temporaire
+                    "-segment_time_metadata", "1",  # Force les métadonnées temporelles
+                    "-vsync", "1",                 # Synchronisation vidéo
+                    "-progress", "pipe:1",
+                    "-fs", "4G",                  # Limite taille fichier max
+                    "-t", "7200",                 # Durée max transcodage
                 ]
             
-            # Exécuter la commande
-            logger.info(f"🎬 Traitement de {video_path.name}")
+            # Ajouter les flags de split pour forcer l'écriture au fur et à mesure
+            # Chemin temporaire modifié pour utiliser un format segmenté
+            temp_dir = self.processing_dir / f"tmp_{video_path.stem}"
+            temp_dir.mkdir(exist_ok=True)
+            temp_segment_pattern = temp_dir / f"segment_%03d.mp4"
+            final_output_path = self.ready_to_stream_dir / f"{output_name}"
+            
+            # On ajoute les options de segmentation
+            segment_opts = [
+                "-f", "segment",
+                "-segment_time", "60",  # Segments de 60 secondes
+                "-reset_timestamps", "1",
+                "-segment_format", "mp4",
+                "-segment_list", str(temp_dir / "segments.txt"),
+                str(temp_segment_pattern)
+            ]
+            
+            # Commande complète avec segmentation
+            command = command_base + command_opts + segment_opts
+            
+            # Exécuter la commande avec suivi de progression
+            logger.info(f"🎬 Transcodage segmenté de {video_path.name}")
             logger.debug(f"Commande: {' '.join(command)}")
             
-            result = subprocess.run(command, capture_output=True, text=True)
+            process = None
             
-            # Vérifier le résultat
-            if result.returncode != 0:
-                logger.error(f"❌ Erreur FFmpeg: {result.stderr}")
-                if temp_output_path.exists():
-                    temp_output_path.unlink()
-                return None
-            
-            # Vérification que le fichier temporaire est valide
-            if not self._verify_output_file(temp_output_path):
-                logger.error(f"❌ Fichier de sortie invalide ou incomplet: {temp_output_path}")
-                if temp_output_path.exists():
-                    temp_output_path.unlink()
-                return None
+            try:
+                process = subprocess.Popen(
+                    command,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    universal_newlines=True,
+                    bufsize=1
+                )
                 
-            # Déplacement vers le dossier final seulement après vérification
-            if temp_output_path.exists():
-                # Suppression du fichier de destination s'il existe déjà
-                if output_path.exists():
-                    output_path.unlink()
-                # Déplacement du fichier temporaire vers le dossier final
-                shutil.move(str(temp_output_path), str(output_path))
-                logger.info(f"✅ {video_path.name} traité avec succès -> {output_path}")
+                # Suivi de la progression avec timeout
+                start_time = time.time()
+                last_progress_time = start_time
+                last_progress_update = start_time
+                last_write_check = start_time
+                progress_data = {}
                 
-                # Attente que le fichier soit complètement écrit
-                self._wait_for_file_stability(output_path, timeout=30)
+                # Variables pour suivre la progression
+                last_segment_count = 0
+                last_out_time_seconds = 0
                 
-                # Notifie que le fichier a été traité avec succès
-                self.notify_file_processed(output_path)
+                while process.poll() is None:
+                    # Vérification du timeout global (30 minutes)
+                    current_time = time.time()
+                    if current_time - start_time > 30 * 60:
+                        logger.error(f"⏰ Timeout global de 30 minutes dépassé pour {video_path.name}")
+                        process.kill()
+                        self._cleanup_temp_dir(temp_dir)
+                        return None
+                    
+                    # Vérification du timeout d'inactivité (pas de progression pendant 5 minutes)
+                    if current_time - last_progress_update > 300:
+                        logger.error(f"⏰ Aucune progression depuis 5 minutes pour {video_path.name}")
+                        process.kill()
+                        self._cleanup_temp_dir(temp_dir)
+                        return None
+                    
+                    # Vérification des segments écrits
+                    if current_time - last_write_check > 30:  # Toutes les 30 secondes
+                        segments = list(temp_dir.glob("segment_*.mp4"))
+                        new_count = len(segments)
+                        
+                        if new_count > last_segment_count:
+                            logger.info(f"✅ {new_count - last_segment_count} nouveaux segments écrits (total: {new_count})")
+                            last_segment_count = new_count
+                            last_write_check = current_time
+                        else:
+                            # Aucun nouveau segment depuis 30s
+                            logger.warning(f"⚠️ Aucun nouveau segment depuis 30s (toujours {new_count})")
+                            # Si pas de nouveau segment depuis 2 minutes, on abandonne
+                            if current_time - last_write_check > 120:
+                                logger.error(f"❌ Pas de nouveaux segments depuis 2 minutes, abandon")
+                                process.kill()
+                                self._cleanup_temp_dir(temp_dir)
+                                return None
+                    
+                    # Lecture d'une ligne de sortie avec timeout
+                    try:
+                        # Lecture non bloquante avec select
+                        import select
+                        ready_to_read, _, _ = select.select([process.stdout], [], [], 0.5)
+                        if ready_to_read:
+                            stdout_line = process.stdout.readline().strip()
+                            if stdout_line and '=' in stdout_line:
+                                key, value = stdout_line.split('=', 1)
+                                progress_data[key] = value
+                                last_progress_update = current_time
+                                
+                                # Extraction du temps de traitement actuel
+                                if key == 'out_time':
+                                    # Convertir out_time en secondes
+                                    time_parts = value.split(':')
+                                    if len(time_parts) == 3:
+                                        hours, minutes, seconds = time_parts
+                                        seconds_parts = seconds.split('.')
+                                        seconds = float(f"{seconds_parts[0]}.{seconds_parts[1]}" if len(seconds_parts) > 1 else seconds_parts[0])
+                                        out_time_seconds = int(hours) * 3600 + int(minutes) * 60 + seconds
+                                        
+                                        # Affichage de la progression toutes les 5 secondes
+                                        if current_time - last_progress_time >= 5 or out_time_seconds - last_out_time_seconds >= 10:
+                                            # Calcul de la vitesse et du temps restant
+                                            elapsed = current_time - start_time
+                                            if elapsed > 0:
+                                                speed = out_time_seconds / elapsed
+                                                
+                                                if total_duration and speed > 0:
+                                                    remaining_seconds = (total_duration - out_time_seconds) / speed
+                                                    percent_done = (out_time_seconds / total_duration) * 100 if total_duration > 0 else 0
+                                                    eta = time.strftime("%H:%M:%S", time.gmtime(remaining_seconds))
+                                                    
+                                                    logger.info(f"🔄 Progression: {value} / {self._format_time(total_duration)} "
+                                                            f"({percent_done:.1f}%) - ETA: {eta} - "
+                                                            f"Vitesse: {speed:.2f}x")
+                                                else:
+                                                    logger.info(f"🔄 Progression: {value} - Vitesse: {speed:.2f}x")
+                                            else:
+                                                logger.info(f"🔄 Progression: {value}")
+                                            
+                                            last_progress_time = current_time
+                                            last_out_time_seconds = out_time_seconds
+                    except Exception as e:
+                        logger.warning(f"Erreur lecture progression: {e}")
+                    
+                    # Pause courte pour éviter de consommer trop de CPU
+                    time.sleep(0.1)
                 
-                return output_path
-            else:
-                logger.error(f"❌ Fichier temporaire {temp_output_path} introuvable")
+                # Vérification du résultat
+                return_code = process.wait()
+                stderr_output = process.stderr.read()
+                
+                if return_code != 0:
+                    logger.error(f"❌ Erreur FFmpeg: {stderr_output}")
+                    self._cleanup_temp_dir(temp_dir)
+                    return None
+                    
+                # Concaténation des segments en un seul fichier
+                logger.info(f"🔄 Concaténation des segments en un seul fichier")
+                return self._concatenate_segments(temp_dir, final_output_path)
+                
+            except Exception as e:
+                logger.error(f"❌ Exception pendant le transcodage: {e}")
+                if process and process.poll() is None:
+                    process.kill()
+                self._cleanup_temp_dir(temp_dir)
                 return None
         
         except Exception as e:
             logger.error(f"Error processing video {video_path}: {e}")
-            return None        
-    
+            return None
+
     def _check_hevc_10bit(self, video_path: Path) -> bool:
         """Vérifie si un fichier est encodé en HEVC 10-bit"""
         try:
