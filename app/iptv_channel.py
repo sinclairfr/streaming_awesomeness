@@ -66,10 +66,25 @@ class IPTVChannel:
         # État du scan initial
         self.initial_scan_complete = False
         self.scan_lock = threading.Lock()
-
-        # Scan initial des vidéos
-        threading.Thread(target=self._scan_videos_async, daemon=True).start()
-    
+        
+        # Créer le _playlist.txt immédiatement pour être prêt quand un spectateur arrive
+        logger.info(f"[{self.name}] 🔄 Préparation initiale de la chaîne")
+        self._scan_videos()
+        self._create_concat_file()
+        self._verify_playlist()
+        
+        # Calcul de la durée totale
+        total_duration = self._calculate_total_duration()
+        self.position_manager.set_total_duration(total_duration)
+        self.process_manager.set_total_duration(total_duration)
+        
+        self.initial_scan_complete = True
+        self.ready_for_streaming = len(self.processed_videos) > 0
+        
+        logger.info(f"[{self.name}] ✅ Initialisation complète. Chaîne prête: {self.ready_for_streaming}")
+        
+        # Maintenant que tout est initialisé, on lance le scan asynchrone pour mettre à jour en arrière-plan
+        threading.Thread(target=self._scan_videos_async, daemon=True).start() 
     def _verify_file_ready(self, file_path: Path) -> bool:
         """
         Vérifie qu'un fichier MP4 est complet et utilisable
@@ -291,26 +306,27 @@ class IPTVChannel:
         except Exception as e:
             logger.error(f"[{self.name}] ❌ Erreur scan des vidéos: {str(e)}")
             return False
+
     def _scan_videos_async(self):
-        """Scanne les vidéos en tâche de fond pour ne pas bloquer"""
+        """Scanne les vidéos en tâche de fond pour les mises à jour ultérieures"""
         try:
+            time.sleep(30)  # Attente initiale pour laisser le système se stabiliser
+            
             with self.scan_lock:
-                logger.info(f"[{self.name}] 🔍 Scan initial des vidéos en cours...")
+                logger.info(f"[{self.name}] 🔍 Scan de mise à jour des vidéos en cours...")
                 self._scan_videos()
                 
-                # Calcul de la durée totale
+                # Mise à jour de la durée totale
                 total_duration = self._calculate_total_duration()
                 self.position_manager.set_total_duration(total_duration)
                 self.process_manager.set_total_duration(total_duration)
                 
-                self.initial_scan_complete = True
-                self.ready_for_streaming = len(self.processed_videos) > 0
+                # Mise à jour de la playlist
+                self._create_concat_file()
                 
-                logger.info(f"[{self.name}] ✅ Scan initial terminé. Chaîne prête: {self.ready_for_streaming}")
+                logger.info(f"[{self.name}] ✅ Scan de mise à jour terminé. Chaîne prête: {self.ready_for_streaming}")
         except Exception as e:
-            logger.error(f"[{self.name}] ❌ Erreur scan initial: {e}")
-            self.initial_scan_complete = True  # Pour ne pas bloquer indéfiniment
-            self.ready_for_streaming = False
+            logger.error(f"[{self.name}] ❌ Erreur scan de mise à jour: {e}")
 
     def _calculate_total_duration(self) -> float:
         """Calcule la durée totale en utilisant le PositionManager"""
@@ -667,40 +683,63 @@ class IPTVChannel:
             logger.error(f"Erreur lors du redémarrage de {self.name}: {e}")
             return False    
     
-    def start_stream_if_needed(self) -> bool:
-        """Démarre le stream si nécessaire"""
-        if not hasattr(self, 'lock'):
-            self.lock = threading.Lock()
-            
-        with self.lock:
-            if self.process_manager.is_running():
-                return True
-
-            # Vérification si la chaîne est prête pour le streaming
+    def start_stream(self) -> bool:
+        """Démarre le stream avec FFmpeg en utilisant les nouvelles classes"""
+        try:
+            # Vérification rapide que la chaîne est prête
             if not self.ready_for_streaming:
-                logger.warning(f"[{self.name}] ⚠️ Chaîne non prête pour le streaming")
+                logger.warning(f"[{self.name}] ⚠️ Chaîne non prête pour le streaming (pas de vidéos)")
                 return False
 
-            self.last_watcher_time = time.time()
+            logger.info(f"[{self.name}] 🚀 Démarrage du stream...")
 
-            hls_path = Path(f"/app/hls/{self.name}")
-            if not hls_path.exists():
-                logger.info(f"[{self.name}] 📂 Création automatique du dossier HLS")
-                hls_path.mkdir(parents=True, exist_ok=True)
-                os.chmod(hls_path, 0o777)
-
-            # Crée et vérifie la playlist
-            concat_file = self._create_concat_file()
+            hls_dir = Path(f"/app/hls/{self.name}")
+            logger.info(f"[{self.name}] Création du répertoire HLS: {hls_dir}")
+            hls_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Utilisation du fichier playlist déjà créé
+            concat_file = Path(self.video_dir) / "_playlist.txt"
+            if not concat_file.exists():
+                # Recréation en cas d'absence
+                concat_file = self._create_concat_file()
+                
             if not concat_file or not concat_file.exists():
-                logger.error(f"[{self.name}] ❌ _playlist.txt est introuvable")
+                logger.error(f"[{self.name}] ❌ _playlist.txt introuvable")
                 return False
+            else:
+                logger.info(f"[{self.name}] ✅ _playlist.txt trouvé")
 
-            if not self._verify_playlist():
-                logger.error(f"[{self.name}] ❌ Vérification de playlist échouée")
+            start_offset = self.position_manager.get_start_offset()
+            logger.info(f"[{self.name}] Décalage de démarrage: {start_offset}")
+            
+            logger.info(f"[{self.name}] Optimisation pour le matériel...")
+            self.command_builder.optimize_for_hardware()
+            
+            logger.info(f"[{self.name}] Vérification mkv...")
+            has_mkv = self.command_builder.detect_mkv_in_playlist(concat_file)
+
+            logger.info(f"[{self.name}] Construction de la commande FFmpeg...")
+            command = self.command_builder.build_command(
+                input_file=concat_file,
+                output_dir=hls_dir,
+                playback_offset=start_offset,
+                progress_file=self.logger.get_progress_file(),
+                has_mkv=has_mkv
+            )
+            
+            if not self.process_manager.start_process(command, hls_dir):
+                logger.error(f"[{self.name}] ❌ Échec démarrage FFmpeg")
                 return False
+                
+            self.position_manager.set_playing(True)
+            
+            logger.info(f"[{self.name}] ✅ Stream démarré avec succès")
+            return True
 
-            return self.start_stream()
-    
+        except Exception as e:
+            logger.error(f"Erreur démarrage stream {self.name}: {e}")
+            return False
+        
     def stop_stream_if_needed(self):
         """Arrête proprement le stream en utilisant les managers"""
         try:

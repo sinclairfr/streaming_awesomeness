@@ -132,7 +132,8 @@ class VideoProcessor:
         """
         # Vérification EXPLICITE pour éviter de monitorer les fichiers dans processing
         if 'processing' in str(file_path):
-            # On ne monitore jamais les fichiers dans processing
+            # On considère les fichiers dans processing comme déjà stables
+            logger.info(f"Fichier dans processing, skip de la vérification de stabilité: {file_path.name}")
             return True
         
         if not file_path.exists():
@@ -188,7 +189,8 @@ class VideoProcessor:
                 time.sleep(1)
                 
         logger.warning(f"⏰ Timeout en attendant la stabilité de {file_path.name}")
-        return False
+        return False    
+    
     def _verify_mp4_completeness(self, file_path: Path) -> bool:
         """
         Vérifie qu'un fichier MP4 est complet en recherchant l'atome MOOV

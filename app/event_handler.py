@@ -33,11 +33,17 @@ class ChannelEventHandler(FileSystemEventHandler):
         path = Path(file_path)
         if not path.exists():
             return False
-            
+                
+        # Ignorer explicitement les fichiers dans le dossier processing
+        if "processing" in str(path):
+            logger.info(f"Fichier dans dossier processing, on le considère comme stable: {path.name}")
+            return True
+        
         start_time = time.time()
         last_size = -1
         stable_count = 0
         
+
         # Vérification initiale de la taille pour les gros fichiers
         try:
             initial_size = path.stat().st_size
