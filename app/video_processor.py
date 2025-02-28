@@ -64,15 +64,16 @@ class VideoProcessor:
         """Vide le dossier processing au démarrage"""
         try:
             if self.processing_dir.exists():
+                logger.info(f"[{self.channel_name}] 🧹 Nettoyage du dossier processing")
                 for file in self.processing_dir.glob("*.*"):
                     try:
                         file.unlink()
-                        logger.info(f"Fichier temporaire supprimé: {file.name}")
+                        logger.info(f"[{self.channel_name}] 🗑️ Fichier temporaire supprimé: {file.name}")
                     except Exception as e:
-                        logger.error(f"Erreur suppression {file.name}: {e}")
+                        logger.error(f"[{self.channel_name}] ❌ Erreur suppression {file.name}: {e}")
         except Exception as e:
-            logger.error(f"Erreur nettoyage dossier processing: {e}")      
-            
+            logger.error(f"[{self.channel_name}] ❌ Erreur nettoyage dossier processing: {e}")            
+    
     def _migrate_from_processed(self):
         """Migration des fichiers de l'ancien dossier 'processed' vers la nouvelle structure"""
         old_processed = self.channel_dir / "processed"
@@ -129,6 +130,11 @@ class VideoProcessor:
         Returns:
             bool: True si le fichier est stable, False sinon
         """
+        # Vérification EXPLICITE pour éviter de monitorer les fichiers dans processing
+        if 'processing' in str(file_path):
+            # On ne monitore jamais les fichiers dans processing
+            return True
+        
         if not file_path.exists():
             logger.error(f"Fichier introuvable: {file_path}")
             return False
@@ -159,7 +165,7 @@ class VideoProcessor:
                 
                 # Si la taille est stable pendant le temps requis
                 if current_size == last_size and stable_count >= min_stable_seconds:
-                    # Vérification supplémentaire pour les MP4 - vérifie que l'atome MOOV est présent
+                    # Vérification supplémentaire pour les MP4
                     if file_path.suffix.lower() == '.mp4' and stable_count >= 5:
                         if not self._verify_mp4_completeness(file_path):
                             # Continuer à attendre pour les MP4 incomplets
@@ -183,7 +189,6 @@ class VideoProcessor:
                 
         logger.warning(f"⏰ Timeout en attendant la stabilité de {file_path.name}")
         return False
-
     def _verify_mp4_completeness(self, file_path: Path) -> bool:
         """
         Vérifie qu'un fichier MP4 est complet en recherchant l'atome MOOV
@@ -292,8 +297,9 @@ class VideoProcessor:
                         self.currently_processing.add(video)
                     
                     try:
-                        # Attendre que le fichier source soit stable avant de le copier
-                        if not self._wait_for_file_stability(video, timeout=120):
+                        # Attendre que le fichier source soit stable avant de le traiter
+                        # (uniquement pour les fichiers source, pas ceux dans processing)
+                        if video.parent != self.processing_dir and not self._wait_for_file_stability(video, timeout=120):
                             logger.warning(f"⚠️ Fichier {video.name} instable, on reporte le traitement")
                             # Remet le fichier dans la queue pour traitement ultérieur
                             self.processing_queue.put(video)
@@ -303,44 +309,17 @@ class VideoProcessor:
                             time.sleep(30)  # Attente plus longue avant de réessayer
                             continue
                         
-                        # Déplacement vers processing
-                        temp_path = self.processing_dir / video.name
-                        if not temp_path.exists() and video.exists():
-                            logger.info(f"Copie de {video.name} vers le dossier processing...")
-                            shutil.copy2(video, temp_path)
-                            
-                            # Attendre que la copie soit stable
-                            if not self._wait_for_file_stability(temp_path, timeout=60):
-                                logger.warning(f"⚠️ Copie de {video.name} instable, on annule le traitement")
-                                if temp_path.exists():
-                                    temp_path.unlink()
-                                with self.processing_lock:
-                                    self.currently_processing.discard(video)
-                                self.processing_queue.task_done()
-                                continue
-                        
-                        # Traitement
-                        processed = self.process_video(temp_path)
+                        # Traitement du fichier
+                        processed = self.process_video(video)
                         
                         if processed:
                             with self.processing_lock:
                                 self.processed_files.append(processed)
                                 
-                            # Déplacer l'original dans already_processed
-                            if video.exists():
-                                already_path = self.already_processed_dir / video.name
-                                if not already_path.exists():
-                                    try:
-                                        shutil.move(str(video), str(already_path))
-                                        logger.info(f"Original déplacé vers already_processed: {video.name}")
-                                    except Exception as e:
-                                        logger.error(f"Erreur déplacement original {video.name}: {e}")
-                            
-                            # Supprimer le fichier temporaire de processing
-                            if temp_path.exists():
-                                temp_path.unlink()
+                            # Note: Le déplacement du fichier source vers already_processed
+                            # est désormais géré dans process_video
                                 
-                            # Notifie que le traitement est terminé et met à jour le statut de la chaîne
+                            # Notifie que le traitement est terminé
                             if hasattr(self, 'notify_file_processed'):
                                 self.notify_file_processed(processed)
                                 
@@ -356,8 +335,8 @@ class VideoProcessor:
                 
             except Exception as e:
                 logger.error(f"❌ Erreur dans le thread de traitement: {e}")
-                time.sleep(5) 
-    
+                time.sleep(5)    
+                
     def scan_for_new_videos(self) -> int:
         """
         Scanne les nouveaux fichiers à traiter
@@ -642,37 +621,48 @@ class VideoProcessor:
 
     def process_video(self, video_path: Path) -> Optional[Path]:
         """Traite un fichier vidéo avec gestion adaptative des codecs"""
-        filename = video_path.name  # Extraction du nom du fichier
+        original_filename = video_path.name  # On garde le nom d'origine pour les logs
         try:
-            # Sanitize the source filename
-            sanitized_name = self.sanitize_filename(filename)
+            # 1. Première étape: Sanitize le nom du fichier source avant tout traitement
+            sanitized_name = self.sanitize_filename(original_filename)
             sanitized_path = video_path.parent / sanitized_name
             
-            # Rename the source file if needed
-            if filename != sanitized_name:
-                logger.info(f"[{self.channel_name}] Renommage: {filename} -> {sanitized_name}")
+            # Renommage du fichier source si nécessaire
+            if original_filename != sanitized_name:
+                logger.info(f"[{self.channel_name}] 🔄 Renommage: {original_filename} -> {sanitized_name}")
                 if sanitized_path.exists():
                     sanitized_path.unlink()
                 video_path.rename(sanitized_path)
                 video_path = sanitized_path
-                filename = sanitized_name  # Mise à jour du nom du fichier
-            
-            # Force l'extension en .mp4 pour le fichier de sortie
-            output_name = video_path.stem
-            if not output_name.endswith('.mp4'):
-                output_name = f"{output_name}.mp4"
-            else:
-                output_name = filename
                 
-            # Create sanitized output path dans ready_to_stream
-            output_path = self.ready_to_stream_dir / output_name
+            # 2. Création du nom de fichier de sortie (toujours en .mp4)
+            output_stem = video_path.stem
+            if video_path.suffix.lower() != '.mp4':
+                output_name = f"{output_stem}.mp4"
+            else:
+                output_name = sanitized_name
+                
+            # 3. Chemins pour les différentes étapes
+            temp_path = self.processing_dir / output_name
+            final_output_path = self.ready_to_stream_dir / output_name
+            already_processed_path = self.already_processed_dir / video_path.name
             
-            # Skip if already processed and optimized
-            if output_path.exists() and self.is_already_optimized(output_path):
+            # 4. Vérification si le fichier est déjà traité
+            if final_output_path.exists() and self.is_already_optimized(final_output_path):
                 logger.info(f"[{self.channel_name}] ✅ {output_name} déjà optimisé")
-                # Notifie même si déjà traité
-                self.notify_file_processed(output_path)
-                return output_path
+                
+                # Déplacement du fichier source vers already_processed s'il n'y est pas déjà
+                if video_path.exists() and video_path.parent != self.already_processed_dir:
+                    if not already_processed_path.exists():
+                        shutil.move(str(video_path), str(already_processed_path))
+                        logger.info(f"[{self.channel_name}] 📦 Fichier source déplacé vers already_processed")
+                    else:
+                        logger.info(f"[{self.channel_name}] ⚠️ Fichier déjà présent dans already_processed, suppression du doublon")
+                        video_path.unlink()
+                
+                # Notifier même si déjà traité
+                self.notify_file_processed(final_output_path)
+                return final_output_path
 
             # Check file size and estimate transcoding time
             file_size_gb = video_path.stat().st_size / (1024**3)
@@ -746,9 +736,9 @@ class VideoProcessor:
                 # Log détaillé des raisons de normalisation
                 if reasons:
                     reasons_str = ", ".join(reasons)
-                    logger.info(f"[{self.channel_name}] 🔄 Normalisation de {filename} nécessaire: {reasons_str}")
+                    logger.info(f"[{self.channel_name}] 🔄 Normalisation de {sanitized_name} nécessaire: {reasons_str}")
             except Exception as e:
-                logger.warning(f"[{self.channel_name}] ⚠️ Impossible d'analyser les raisons de normalisation pour {filename}: {e}")
+                logger.warning(f"[{self.channel_name}] ⚠️ Impossible d'analyser les raisons de normalisation pour {sanitized_name}: {e}")
                 # Par sécurité, on désactive VAAPI si on ne peut pas analyser
                 use_hardware_accel = False
             
@@ -756,9 +746,9 @@ class VideoProcessor:
             total_duration = self._get_video_duration(str(video_path))
             if total_duration <= 0:
                 total_duration = None
-                logger.warning(f"[{self.channel_name}] ⚠️ Impossible de déterminer la durée de {filename}")
+                logger.warning(f"[{self.channel_name}] ⚠️ Impossible de déterminer la durée de {sanitized_name}")
             else:
-                logger.info(f"[{self.channel_name}] 📊 Durée de {filename}: {self._format_time(total_duration)}")
+                logger.info(f"[{self.channel_name}] 📊 Durée de {sanitized_name}: {self._format_time(total_duration)}")
             
             # Estimation du temps de transcodage (très approximative)
             # Augmenté pour les codecs incompatibles qui sont plus lents
@@ -774,10 +764,9 @@ class VideoProcessor:
             # Vérifier si le fichier est HEVC 10-bit pour adapter l'approche
             is_hevc_10bit = self._check_hevc_10bit(video_path)
             
-            # Utilisation d'un chemin temporaire pour le fichier de sortie
-            temp_output_path = self.processing_dir / f"tmp_{output_name}"
-            if temp_output_path.exists():
-                temp_output_path.unlink()
+            # On supprime le fichier temporaire s'il existe déjà
+            if temp_path.exists():
+                temp_path.unlink()
                 
             # Construction de la commande FFmpeg - version adaptée selon compatibilité
             if is_hevc_10bit or incompatible_codecs:
@@ -794,7 +783,7 @@ class VideoProcessor:
                     "-movflags", "+faststart",
                     "-max_muxing_queue_size", "4096",
                     "-progress", "pipe:1",
-                    str(output_path)
+                    str(temp_path)
                 ]
             elif use_hardware_accel:
                 # Mode VAAPI pour accélération matérielle
@@ -812,7 +801,7 @@ class VideoProcessor:
                     "-movflags", "+faststart",
                     "-max_muxing_queue_size", "4096",
                     "-progress", "pipe:1",
-                    str(output_path)
+                    str(temp_path)
                 ]
             else:
                 # Mode CPU standard
@@ -828,11 +817,11 @@ class VideoProcessor:
                     "-movflags", "+faststart",
                     "-max_muxing_queue_size", "4096",
                     "-progress", "pipe:1",
-                    str(output_path)
+                    str(temp_path)
                 ]
             
             # Log de la commande complète
-            logger.info(f"[{self.channel_name}] 🎬 Commande pour {filename}:")
+            logger.info(f"[{self.channel_name}] 🎬 Commande pour {sanitized_name}:")
             logger.info(f"$ {' '.join(command)}")
             
             # Exécution de la commande
@@ -854,7 +843,7 @@ class VideoProcessor:
                     # Vérification du timeout global
                     current_time = time.time()
                     if current_time - start_time > timeout_seconds:
-                        logger.error(f"[{self.channel_name}] ⏰ Timeout de {timeout_hours:.1f}h pour {filename}")
+                        logger.error(f"[{self.channel_name}] ⏰ Timeout de {timeout_hours:.1f}h pour {sanitized_name}")
                         process.kill()
                         
                         # On déplace le fichier vers ignored avec raison spécifique
@@ -890,10 +879,10 @@ class VideoProcessor:
                                                 remaining = (total_duration - out_time_seconds) / max(0.1, speed)
                                                 eta = time.strftime("%H:%M:%S", time.gmtime(remaining))
                                                 
-                                                logger.info(f"[{self.channel_name}] 🔄 {filename}: {value} / {self._format_time(total_duration)} "
+                                                logger.info(f"[{self.channel_name}] 🔄 {sanitized_name}: {value} / {self._format_time(total_duration)} "
                                                         f"({percent_done:.1f}%) - ETA: {eta} - Vitesse: {speed:.2f}x")
                                     else:
-                                        logger.info(f"[{self.channel_name}] 🔄 {filename}: {value}")
+                                        logger.info(f"[{self.channel_name}] 🔄 {sanitized_name}: {value}")
                                     
                                     last_progress_time = current_time
                     except Exception as e:
@@ -906,15 +895,15 @@ class VideoProcessor:
                 stderr_output = process.stderr.read()
                 
                 if return_code != 0:
-                    logger.error(f"[{self.channel_name}] ❌ Erreur FFmpeg pour {filename}: {stderr_output}")
+                    logger.error(f"[{self.channel_name}] ❌ Erreur FFmpeg pour {sanitized_name}: {stderr_output}")
                     
                     # Si l'erreur est liée à VAAPI, on réessaie en mode CPU
                     if use_hardware_accel and ("vaapi" in stderr_output.lower() or "hwaccel" in stderr_output.lower()):
                         logger.warning(f"[{self.channel_name}] ⚠️ Échec VAAPI, nouvelle tentative en mode CPU")
                         
-                        # Nettoyer le fichier de sortie s'il existe
-                        if output_path.exists():
-                            output_path.unlink()
+                        # Nettoyer le fichier temporaire s'il existe
+                        if temp_path.exists():
+                            temp_path.unlink()
                         
                         # Nouvelle commande sans accélération matérielle
                         cpu_command = [
@@ -929,61 +918,81 @@ class VideoProcessor:
                             "-movflags", "+faststart",
                             "-max_muxing_queue_size", "4096",
                             "-progress", "pipe:1",
-                            str(output_path)
+                            str(temp_path)
                         ]
                         
-                        logger.info(f"[{self.channel_name}] 🎬 Nouvelle commande CPU pour {filename}:")
+                        logger.info(f"[{self.channel_name}] 🎬 Nouvelle commande CPU pour {sanitized_name}:")
                         logger.info(f"$ {' '.join(cpu_command)}")
                         
                         # Lancer la nouvelle commande
                         fallback_result = subprocess.run(cpu_command, capture_output=True, text=True)
                         
                         if fallback_result.returncode == 0:
+                            # Fichier temporaire créé avec succès, on continue le workflow normal
                             logger.info(f"[{self.channel_name}] ✅ Transcodage CPU réussi: {output_name}")
-                            self.notify_file_processed(output_path)
-                            return output_path
                         else:
                             logger.error(f"[{self.channel_name}] ❌ Échec transcodage CPU: {fallback_result.stderr}")
                             self._move_to_ignored(video_path, f"échec transcodage CPU code {fallback_result.returncode}")
                             return None
+                    else:
+                        # Échec qui n'est pas lié à VAAPI, on abandonne
+                        self._move_to_ignored(video_path, f"erreur FFmpeg code {return_code}")
+                        return None
+                
+                # Vérification que le fichier temporaire existe et est valide
+                if not temp_path.exists() or temp_path.stat().st_size == 0:
+                    logger.error(f"[{self.channel_name}] ❌ Fichier temporaire invalide ou absent: {temp_path}")
+                    self._move_to_ignored(video_path, "fichier temporaire invalide")
+                    return None
                     
-                    self._move_to_ignored(video_path, f"erreur FFmpeg code {return_code}")
+                # Vérification que le MP4 est complet
+                cmd_check = [
+                    "ffprobe", "-v", "error",
+                    "-show_entries", "format=duration",
+                    "-of", "default=noprint_wrappers=1:nokey=1",
+                    str(temp_path)
+                ]
+                
+                check_result = subprocess.run(cmd_check, capture_output=True, text=True)
+                
+                if check_result.returncode != 0 or not check_result.stdout.strip():
+                    logger.error(f"[{self.channel_name}] ❌ Validation MP4 échouée: {check_result.stderr}")
+                    if temp_path.exists():
+                        temp_path.unlink()
+                    self._move_to_ignored(video_path, "fichier MP4 final invalide")
                     return None
                 
-                # Vérification que le fichier de sortie existe et est valide
-                if output_path.exists() and output_path.stat().st_size > 0:
-                    # Vérification que le MP4 est complet
-                    cmd_check = [
-                        "ffprobe", "-v", "error",
-                        "-show_entries", "format=duration",
-                        "-of", "default=noprint_wrappers=1:nokey=1",
-                        str(output_path)
-                    ]
-                    
-                    check_result = subprocess.run(cmd_check, capture_output=True, text=True)
-                    
-                    if check_result.returncode == 0 and check_result.stdout.strip():
-                        logger.info(f"[{self.channel_name}] ✅ Transcodage réussi: {output_name}")
-                        self.notify_file_processed(output_path)
-                        return output_path
-                    else:
-                        logger.error(f"[{self.channel_name}] ❌ Validation MP4 échouée: {check_result.stderr}")
-                        if output_path.exists():
-                            output_path.unlink()
-                        self._move_to_ignored(video_path, "fichier MP4 final invalide")
-                        return None
-                else:
-                    logger.error(f"[{self.channel_name}] ❌ Fichier de sortie invalide: {output_name}")
-                    return None
+                # Déplacer le fichier temporaire vers le dossier ready_to_stream
+                if final_output_path.exists():
+                    final_output_path.unlink()
+                
+                shutil.move(str(temp_path), str(final_output_path))
+                logger.info(f"[{self.channel_name}] ✅ Fichier déplacé vers ready_to_stream: {output_name}")
+                
+                # Déplacer le fichier source vers already_processed
+                if video_path.exists():
+                    if already_processed_path.exists():
+                        already_processed_path.unlink()
+                    shutil.move(str(video_path), str(already_processed_path))
+                    logger.info(f"[{self.channel_name}] 📦 Source déplacée vers already_processed: {video_path.name}")
+                
+                # Notifier que le traitement est terminé
+                self.notify_file_processed(final_output_path)
+                return final_output_path
                     
             except Exception as e:
-                logger.error(f"[{self.channel_name}] ❌ Exception transcodage {filename}: {e}")
+                logger.error(f"[{self.channel_name}] ❌ Exception transcodage {sanitized_name}: {e}")
                 if process and process.poll() is None:
                     process.kill()
+                # Déplacement du fichier source vers ignored
+                self._move_to_ignored(video_path, f"exception: {str(e)[:200]}")
                 return None
         
         except Exception as e:
-            logger.error(f"[{self.channel_name}] ❌ Erreur processing {filename}: {e}")
+            logger.error(f"[{self.channel_name}] ❌ Erreur processing {original_filename}: {e}")
+            # En cas d'erreur, on déplace vers ignored
+            if 'video_path' in locals() and video_path.exists():
+                self._move_to_ignored(video_path, f"erreur: {str(e)[:200]}")
             return None
     
     def _retry_with_cpu(self, video_path: Path, temp_output_path: Path, final_output_path: Path) -> Optional[Path]:
@@ -1056,13 +1065,21 @@ class VideoProcessor:
             self.notify_file_processed(final_output_path)
             return final_output_path
 
+        # En cas d'erreur dans process_video
         except Exception as e:
-            logger.error(f"[{self.channel_name}] ❌ Exception mode CPU pour {filename}: {e}")
+            logger.error(f"[{self.channel_name}] ❌ Exception transcodage {sanitized_name}: {e}")
             if process and process.poll() is None:
                 process.kill()
-            if temp_output_path.exists():
-                temp_output_path.unlink()
-            self._move_to_ignored(video_path, f"exception CPU: {str(e)[:200]}...")
+                
+            # Récupérer le chemin original (racine) du fichier source si possible
+            source_path = Path(self.channel_dir) / original_filename
+            if source_path.exists():
+                # Si le fichier source est toujours dans la racine, on utilise celui-là
+                self._move_to_ignored(source_path, f"exception transcodage: {str(e)[:200]}")
+            else:
+                # Sinon, on utilise le chemin actuel du fichier
+                self._move_to_ignored(video_path, f"exception transcodage: {str(e)[:200]}")
+            
             return None
 
     def _check_hevc_10bit(self, video_path: Path) -> bool:
@@ -1352,6 +1369,69 @@ class VideoProcessor:
         return False
   
     def _move_to_ignored(self, file_path: Path, reason: str):
+        """
+        Déplace un fichier invalide vers le dossier 'ignored' et nettoie les fichiers temporaires
+        
+        Args:
+            file_path: Chemin du fichier source à déplacer
+            reason: Raison de l'invalidité du fichier
+        """
+        try:
+            # S'assurer que le dossier ignored existe
+            ignored_dir = Path(self.channel_dir) / "ignored"
+            ignored_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Obtenir le nom d'origine et le nom sanitizé pour nettoyer tous les fichiers associés
+            original_name = file_path.name
+            sanitized_name = self.sanitize_filename(original_name)
+            stem = Path(sanitized_name).stem  # Nom sans extension
+            
+            # 1. Nettoyer les fichiers temporaires dans processing
+            processing_files = list(self.processing_dir.glob(f"{stem}*"))
+            for temp_file in processing_files:
+                try:
+                    temp_file.unlink()
+                    logger.info(f"[{self.channel_name}] 🗑️ Suppression du fichier temporaire: {temp_file}")
+                except Exception as e:
+                    logger.error(f"[{self.channel_name}] ❌ Erreur suppression {temp_file}: {e}")
+            
+            # 2. Créer le chemin de destination pour le fichier source
+            dest_path = ignored_dir / original_name
+            
+            # Si le fichier de destination existe déjà, le supprimer
+            if dest_path.exists():
+                dest_path.unlink()
+                logger.info(f"[{self.channel_name}] 🗑️ Suppression du fichier existant dans ignored: {dest_path.name}")
+            
+            # 3. Déplacer le fichier source vers ignored
+            if file_path.exists():
+                # Si le fichier source est dans la racine, on le déplace
+                if file_path.parent == Path(self.channel_dir):
+                    shutil.move(str(file_path), str(dest_path))
+                    logger.info(f"[{self.channel_name}] 🚫 Fichier source déplacé vers ignored: {original_name}")
+                else:
+                    # Si le fichier n'est pas dans la racine mais existe ailleurs
+                    # (par exemple s'il a déjà été déplacé dans processing)
+                    # On le déplace aussi vers ignored
+                    shutil.move(str(file_path), str(dest_path))
+                    logger.info(f"[{self.channel_name}] 🚫 Fichier déplacé de {file_path.parent.name} vers ignored: {original_name}")
+                    
+                    # On vérifie si une copie existe encore dans la racine et on la supprime
+                    root_copy = Path(self.channel_dir) / original_name
+                    if root_copy.exists():
+                        root_copy.unlink()
+                        logger.info(f"[{self.channel_name}] 🗑️ Suppression du fichier source restant dans la racine: {original_name}")
+                
+                # 4. Créer un fichier de log à côté avec la raison
+                log_path = ignored_dir / f"{Path(original_name).stem}_reason.txt"
+                with open(log_path, "w") as f:
+                    f.write(f"Fichier ignoré le {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    f.write(f"Raison: {reason}\n")
+                    
+                logger.info(f"[{self.channel_name}] 📝 Raison enregistrée: {reason}")
+                
+        except Exception as e:
+            logger.error(f"[{self.channel_name}] ❌ Erreur déplacement fichier vers ignored: {e}")
         """
         Déplace un fichier invalide vers le dossier 'ignored'
         
