@@ -63,7 +63,7 @@ class ChannelEventHandler(FileSystemEventHandler):
                         return True
                 else:
                     stable_count = 0
-                    logger.info(f"Taille en évolution: {current_size/1024/1024:.1f} MB (était {last_size/1024/1024:.1f} MB)")
+                    logger.info(f"{file_path} Taille en évolution: {current_size/1024/1024:.1f} MB (était {last_size/1024/1024:.1f} MB)")
                     
                 last_size = current_size
                 time.sleep(1)
@@ -118,7 +118,7 @@ class ChannelEventHandler(FileSystemEventHandler):
             logger.debug(f"Fichier temporaire ignoré: {path.name}")
             return
             
-        if path.suffix.lower() not in ['.mp4', '.mkv', '.avi', '.mov']:
+        if path.suffix.lower() not in ['.mp4', '.mkv', '.avi', '.mov','m4v']:
             return  # On ignore les fichiers non vidéo
 
         # On vérifie si les fichiers sont en cours de copie
@@ -189,7 +189,7 @@ class ChannelEventHandler(FileSystemEventHandler):
                     
             # Vérification du type de fichier
             path = Path(event.src_path)
-            if path.suffix.lower() not in ['.mp4', '.mkv', '.avi', '.mov', '.txt']:
+            if path.suffix.lower() not in ['.mp4', '.mkv', '.avi', '.mov', 'm4v', '.txt']:
                 return  # On ignore les fichiers non vidéo/non playlist
                 
             self._handle_event(event)
@@ -199,7 +199,7 @@ class ChannelEventHandler(FileSystemEventHandler):
         if not event.is_directory:
             # Vérification du type de fichier
             dest_path = Path(event.dest_path)
-            if dest_path.suffix.lower() not in ['.mp4', '.mkv', '.avi', '.mov', '.txt']:
+            if dest_path.suffix.lower() not in ['.mp4', '.mkv', '.avi', '.mov', '.m4v', '.txt']:
                 return  # On ignore les fichiers non vidéo/non playlist
                 
             # On note la chaîne concernée

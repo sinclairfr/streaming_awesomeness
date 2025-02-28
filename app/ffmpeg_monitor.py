@@ -81,41 +81,43 @@ class FFmpegMonitor(threading.Thread):
                 channels_checked = set()
 
                 # Pour chaque chaîne, on vérifie l'activité
-                for channel_name, channel in self.channels.items():
-                    if not hasattr(channel, 'last_watcher_time'):
-                        continue
+                # Vérification que self.channels n'est pas None avant d'itérer dessus
+                if self.channels:
+                    for channel_name, channel in self.channels.items():
+                        if not hasattr(channel, 'last_watcher_time'):
+                            continue
 
-                    # On calcule l'inactivité
-                    inactivity_duration = current_time - channel.last_watcher_time
+                        # On calcule l'inactivité
+                        inactivity_duration = current_time - channel.last_watcher_time
 
-                    # Si inactif depuis plus de TIMEOUT_NO_VIEWERS (120s par défaut)
-                    if inactivity_duration > TIMEOUT_NO_VIEWERS:
-                        if channel.process_manager.is_running():
-                            logger.warning(
-                                f"[{channel_name}] ⚠️ Stream inactif depuis {inactivity_duration:.1f}s, on arrête FFmpeg"
-                            )
-                            channel.stop_stream_if_needed()
+                        # Si inactif depuis plus de TIMEOUT_NO_VIEWERS (120s par défaut)
+                        if inactivity_duration > TIMEOUT_NO_VIEWERS:
+                            if channel.process_manager.is_running():
+                                logger.warning(
+                                    f"[{channel_name}] ⚠️ Stream inactif depuis {inactivity_duration:.1f}s, on arrête FFmpeg"
+                                )
+                                channel.stop_stream_if_needed()
 
-                    channels_checked.add(channel_name)
+                        channels_checked.add(channel_name)
 
-                # On vérifie les processus FFmpeg orphelins
-                for proc in psutil.process_iter(attrs=["pid", "name", "cmdline"]):
-                    try:
-                        if "ffmpeg" in proc.info["name"].lower():
-                            cmd_str = " ".join(str(arg) for arg in proc.info.get("cmdline", []))
-                            
-                            # Pour chaque chaîne, on vérifie si le process lui appartient
-                            for channel_name in self.channels:
-                                if f"/hls/{channel_name}/" in cmd_str:
-                                    if channel_name not in channels_checked:
-                                        logger.warning(f"🔥 Process FFmpeg orphelin détecté pour {channel_name}, PID {proc.info['pid']}")
-                                        try:
-                                            os.kill(proc.info['pid'], signal.SIGKILL)
-                                            logger.info(f"✅ Process orphelin {proc.info['pid']} nettoyé")
-                                        except:
-                                            pass
-                    except (psutil.NoSuchProcess, psutil.AccessDenied):
-                        continue
+                    # On vérifie les processus FFmpeg orphelins
+                    for proc in psutil.process_iter(attrs=["pid", "name", "cmdline"]):
+                        try:
+                            if "ffmpeg" in proc.info["name"].lower():
+                                cmd_str = " ".join(str(arg) for arg in proc.info.get("cmdline", []))
+                                
+                                # Pour chaque chaîne, on vérifie si le process lui appartient
+                                for channel_name in self.channels:
+                                    if f"/hls/{channel_name}/" in cmd_str:
+                                        if channel_name not in channels_checked:
+                                            logger.warning(f"🔥 Process FFmpeg orphelin détecté pour {channel_name}, PID {proc.pid}")
+                                            try:
+                                                os.kill(proc.pid, signal.SIGKILL)
+                                                logger.info(f"✅ Process orphelin {proc.pid} nettoyé")
+                                            except:
+                                                pass
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            continue
 
                 time.sleep(10)  # Vérification toutes les 10s
 

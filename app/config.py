@@ -23,7 +23,7 @@ FFMPEG_LOGS_DIR = os.getenv('FFMPEG_LOGS_DIR', '/app/logs/ffmpeg')
 
 USE_GPU = os.getenv('USE_GPU', 'false')
 
-VIDEO_EXTENSIONS = os.getenv('VIDEO_EXTENSIONS', '.mp4,.avi,.mkv,.mov').split(',')
+VIDEO_EXTENSIONS = os.getenv('VIDEO_EXTENSIONS', '.mp4,.avi,.mkv,.mov, .m4v').split(',')
 SEGMENT_AGE_THRESHOLD = int(os.getenv('SEGMENT_AGE_THRESHOLD', '120'))
 def get_log_level(level_str: str) -> int:
     """Convertit un niveau de log en string vers sa valeur numérique"""

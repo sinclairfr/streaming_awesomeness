@@ -34,6 +34,7 @@ class IPTVChannel:
         use_gpu: bool = False
     ):
         self.name = name
+        self.channel_name = name
         self.video_dir = video_dir
         self.use_gpu = use_gpu
         self.hls_cleaner = hls_cleaner
@@ -69,6 +70,7 @@ class IPTVChannel:
         # Scan initial des vidéos
         threading.Thread(target=self._scan_videos_async, daemon=True).start()
     
+
     def _verify_file_ready(self, file_path: Path) -> bool:
         """
         Vérifie qu'un fichier MP4 est complet et utilisable
@@ -79,15 +81,17 @@ class IPTVChannel:
         Returns:
             bool: True si le fichier est valide, False sinon
         """
+        filename = file_path.name  # Extraction du nom du fichier
         try:
             # Vérification que le fichier existe et est de taille non nulle
             if not file_path.exists():
-                logger.warning(f"[{self.name}] ⚠️ Fichier introuvable: {file_path}")
+                logger.warning(f"[{self.channel_name}] ⚠️ Fichier introuvable: {filename}")
                 return False
                 
             file_size = file_path.stat().st_size
             if file_size == 0:
-                logger.warning(f"[{self.name}] ⚠️ Fichier vide: {file_path}")
+                logger.warning(f"[{self.channel_name}] ⚠️ Fichier vide: {filename}")
+                self._move_to_ignored(file_path, "fichier vide")
                 return False
                 
             # Vérification que le fichier est lisible par ffprobe
@@ -103,29 +107,72 @@ class IPTVChannel:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
             
             if result.returncode != 0:
-                logger.warning(f"[{self.name}] ⚠️ Erreur ffprobe pour {file_path.name}: {result.stderr}")
+                logger.warning(f"[{self.channel_name}] ⚠️ Erreur ffprobe pour {filename}: {result.stderr}")
+                self._move_to_ignored(file_path, f"erreur ffprobe: {result.stderr}")
                 return False
                 
             # Vérification que la durée est valide
             try:
                 duration = float(result.stdout.strip())
                 if duration <= 0:
-                    logger.warning(f"[{self.name}] ⚠️ Durée invalide pour {file_path.name}: {duration}s")
+                    logger.warning(f"[{self.channel_name}] ⚠️ Durée invalide pour {filename}: {duration}s")
+                    self._move_to_ignored(file_path, f"durée invalide: {duration}s")
                     return False
                     
-                logger.info(f"[{self.name}] ✅ Fichier valide: {file_path.name}, durée: {duration:.2f}s")
+                logger.info(f"[{self.channel_name}] ✅ Fichier valide: {filename}, durée: {duration:.2f}s")
                 return True
             except ValueError:
-                logger.warning(f"[{self.name}] ⚠️ Durée non numérique pour {file_path.name}: {result.stdout}")
+                logger.warning(f"[{self.channel_name}] ⚠️ Durée non numérique pour {filename}: {result.stdout}")
+                self._move_to_ignored(file_path, f"durée non numérique: {result.stdout}")
                 return False
                 
         except subprocess.TimeoutExpired:
-            logger.warning(f"[{self.name}] ⚠️ Timeout ffprobe pour {file_path.name}")
+            logger.warning(f"[{self.channel_name}] ⚠️ Timeout ffprobe pour {filename}")
+            self._move_to_ignored(file_path, "timeout ffprobe")
             return False
         except Exception as e:
-            logger.warning(f"[{self.name}] ⚠️ Erreur vérification {file_path.name}: {e}")
+            logger.warning(f"[{self.channel_name}] ⚠️ Erreur vérification {filename}: {e}")
+            self._move_to_ignored(file_path, f"erreur: {str(e)}")
             return False
-    
+
+    def _move_to_ignored(self, file_path: Path, reason: str):
+        """
+        Déplace un fichier invalide vers le dossier 'ignored'
+        
+        Args:
+            file_path: Chemin du fichier à déplacer
+            reason: Raison de l'invalidité du fichier
+        """
+        try:
+            # S'assurer que le dossier ignored existe
+            ignored_dir = Path(self.video_dir) / "ignored"
+            ignored_dir.mkdir(parents=True, exist_ok=True)
+                
+            # Créer le chemin de destination
+            dest_path = ignored_dir / file_path.name
+            
+            # Si le fichier de destination existe déjà, ajouter un suffixe
+            if dest_path.exists():
+                base_name = dest_path.stem
+                suffix = dest_path.suffix
+                timestamp = time.strftime("%Y%m%d_%H%M%S")
+                dest_path = ignored_dir / f"{base_name}_{timestamp}{suffix}"
+                
+            # Déplacer le fichier
+            if file_path.exists():
+                shutil.move(str(file_path), str(dest_path))
+                
+                # Créer un fichier de log à côté avec la raison
+                log_path = ignored_dir / f"{dest_path.stem}_reason.txt"
+                with open(log_path, "w") as f:
+                    f.write(f"Fichier ignoré le {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    f.write(f"Raison: {reason}\n")
+                    
+                logger.info(f"[{self.channel_name}] 🚫 Fichier {file_path.name} déplacé vers ignored: {reason}")
+                
+        except Exception as e:
+            logger.error(f"[{self.channel_name}] ❌ Erreur déplacement fichier vers ignored: {e}")
+
     def _scan_videos(self) -> bool:
         """Scanne les fichiers vidéos et met à jour processed_videos"""
         try:
@@ -163,7 +210,7 @@ class IPTVChannel:
                 return True
 
             # Si aucun fichier valide dans ready_to_stream, on vérifie s'il y a des fichiers à traiter
-            video_extensions = (".mp4", ".avi", ".mkv", ".mov")
+            video_extensions = (".mp4", ".avi", ".mkv", ".mov", "m4v")
             source_files = []
             for ext in video_extensions:
                 source_files.extend(source_dir.glob(f"*{ext}"))

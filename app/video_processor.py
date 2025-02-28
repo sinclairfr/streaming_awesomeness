@@ -13,10 +13,12 @@ from config import logger
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("video_processor")
-
 class VideoProcessor:
     def __init__(self, channel_dir: str):
         self.channel_dir = Path(channel_dir)
+        
+        # Extraction du nom de la chaîne à partir du chemin du dossier
+        self.channel_name = self.channel_dir.name
         
         # Création des nouveaux dossiers avec des noms plus explicites
         self.ready_to_stream_dir = self.channel_dir / "ready_to_stream"
@@ -24,6 +26,10 @@ class VideoProcessor:
         
         self.processing_dir = self.channel_dir / "processing"
         self.processing_dir.mkdir(exist_ok=True)
+        
+        # Création du dossier pour les fichiers ignorés
+        self.ignored_dir = self.channel_dir / "ignored"
+        self.ignored_dir.mkdir(exist_ok=True)
         
         self._clean_processing_dir()
         
@@ -51,6 +57,9 @@ class VideoProcessor:
         self.processing_thread = threading.Thread(target=self._background_processor, daemon=True)
         self.processing_thread.start()
         
+        # Nom du canal pour les logs
+        self.channel_name = self.channel_dir.name
+
     def _clean_processing_dir(self):
         """Vide le dossier processing au démarrage"""
         try:
@@ -145,7 +154,7 @@ class VideoProcessor:
                         logger.info(f"Fichier stable depuis {stable_count}s: {file_path.name} ({current_size/1024/1024:.1f} MB)")
                     else:
                         stable_count = 0
-                        logger.info(f"Taille en évolution: {current_size/1024/1024:.1f} MB (était {last_size/1024/1024:.1f} MB)")
+                        logger.info(f"{file_path.name} Taille en évolution: {current_size/1024/1024:.1f} MB (était {last_size/1024/1024:.1f} MB)")
                 
                 # Si la taille est stable pendant le temps requis
                 if current_size == last_size and stable_count >= min_stable_seconds:
@@ -295,7 +304,7 @@ class VideoProcessor:
         """
         try:
             count = 0
-            video_extensions = (".mp4", ".avi", ".mkv", ".mov")
+            video_extensions = (".mp4", ".avi", ".mkv", ".mov", ".m4v")
             
             # Liste des fichiers déjà traités ou en cours de traitement pour éviter les doublons
             with self.processing_lock:
@@ -569,130 +578,158 @@ class VideoProcessor:
                 logger.info(f"🧹 Répertoire temporaire nettoyé: {temp_dir}")
         except Exception as e:
             logger.error(f"❌ Erreur nettoyage répertoire temporaire: {e}")
-       
+
     def process_video(self, video_path: Path) -> Optional[Path]:
-        """Traite un fichier vidéo avec gestion spéciale pour HEVC 10-bit"""
+        """Traite un fichier vidéo avec gestion simplifiée et améliorée"""
+        filename = video_path.name  # Extraction du nom du fichier
         try:
             # Sanitize the source filename
-            sanitized_name = self.sanitize_filename(video_path.name)
+            sanitized_name = self.sanitize_filename(filename)
             sanitized_path = video_path.parent / sanitized_name
             
             # Rename the source file if needed
-            if video_path.name != sanitized_name:
-                logger.info(f"Renaming source file: {video_path.name} -> {sanitized_name}")
+            if filename != sanitized_name:
+                logger.info(f"[{self.channel_name}] Renommage: {filename} -> {sanitized_name}")
                 if sanitized_path.exists():
                     sanitized_path.unlink()
                 video_path.rename(sanitized_path)
                 video_path = sanitized_path
+                filename = sanitized_name  # Mise à jour du nom du fichier
             
             # Force l'extension en .mp4 pour le fichier de sortie
             output_name = video_path.stem
             if not output_name.endswith('.mp4'):
                 output_name = f"{output_name}.mp4"
             else:
-                output_name = video_path.name
+                output_name = filename
                 
             # Create sanitized output path dans ready_to_stream
             output_path = self.ready_to_stream_dir / output_name
             
             # Skip if already processed and optimized
             if output_path.exists() and self.is_already_optimized(output_path):
-                logger.info(f"✅ {output_name} déjà optimisé dans ready_to_stream")
+                logger.info(f"[{self.channel_name}] ✅ {output_name} déjà optimisé")
                 # Notifie même si déjà traité
                 self.notify_file_processed(output_path)
                 return output_path
 
-            # Utilisation d'un chemin temporaire pour le fichier de sortie
-            temp_output_path = self.processing_dir / f"tmp_{output_name}"
-            if temp_output_path.exists():
-                temp_output_path.unlink()
+            # On vérifie pourquoi ce fichier nécessite une normalisation
+            cmd_probe = [
+                "ffprobe", "-v", "error",
+                "-show_entries", "stream=codec_name,width,height,r_frame_rate,codec_type",
+                "-of", "json",
+                str(video_path)
+            ]
+            probe_result = subprocess.run(cmd_probe, capture_output=True, text=True)
+            
+            try:
+                video_info = json.loads(probe_result.stdout)
+                streams = video_info.get("streams", [])
+                
+                # Récupération des infos vidéo
+                video_streams = [s for s in streams if s['codec_type'] == 'video']
+                audio_streams = [s for s in streams if s['codec_type'] == 'audio']
+                
+                reasons = []
+                
+                if video_streams:
+                    video = video_streams[0]
+                    codec = video.get("codec_name", "").lower()
+                    width = int(video.get("width", 0))
+                    height = int(video.get("height", 0))
+                    framerate = video.get("r_frame_rate", "0/1").split("/")
+                    fps = round(int(framerate[0]) / int(framerate[1])) if len(framerate) == 2 else 0
+                    
+                    if codec not in ["h264", "hevc", "h265"]:
+                        reasons.append(f"codec vidéo {codec} non supporté")
+                    if width > 1920 or height > 1080:
+                        reasons.append(f"résolution {width}x{height} supérieure à 1080p")
+                    if fps > 60:
+                        reasons.append(f"FPS de {fps} supérieur à 60")
+                else:
+                    reasons.append("pas de flux vidéo détecté")
+                    
+                if not audio_streams:
+                    reasons.append("pas de flux audio détecté")
+                elif audio_streams:
+                    audio = audio_streams[0]
+                    audio_codec = audio.get("codec_name", "").lower()
+                    if audio_codec not in ["aac", "mp3"]:
+                        reasons.append(f"codec audio {audio_codec} non supporté")
+                
+                # Log détaillé des raisons de normalisation
+                if reasons:
+                    reasons_str = ", ".join(reasons)
+                    logger.info(f"[{self.channel_name}] 🔄 Normalisation de {filename} nécessaire: {reasons_str}")
+            except:
+                logger.warning(f"[{self.channel_name}] ⚠️ Impossible d'analyser les raisons de normalisation pour {filename}")
+            
+            # Déterminer la durée totale de la vidéo source
+            total_duration = self._get_video_duration(str(video_path))
+            if total_duration <= 0:
+                total_duration = None
+                logger.warning(f"[{self.channel_name}] ⚠️ Impossible de déterminer la durée de {filename}")
+            else:
+                logger.info(f"[{self.channel_name}] 📊 Durée de {filename}: {self._format_time(total_duration)}")
             
             # Vérifier si le fichier est HEVC 10-bit pour adapter l'approche
             is_hevc_10bit = self._check_hevc_10bit(video_path)
             
-            # Déterminer la durée totale de la vidéo source pour estimer le temps restant
-            total_duration = self._get_video_duration(str(video_path))
-            if total_duration <= 0:
-                total_duration = None
-                logger.warning(f"⚠️ Impossible de déterminer la durée de {video_path.name}, les estimations seront désactivées")
-            else:
-                logger.info(f"📊 Durée totale de la vidéo source: {self._format_time(total_duration)}")
-            
-            # Configuration et préparation des options FFmpeg
-            command_base = [
-                "ffmpeg", "-y",
-                "-i", str(video_path),
-                "-max_muxing_queue_size", "4096",  # Queue plus grande
-                "-flush_packets", "1",            # Force le flush des paquets
-                "-fflags", "+flush_packets",      # Option supplémentaire de flush
-            ]
-            
-            # Options spécifiques selon le type
+            # Utilisation d'un chemin temporaire pour le fichier de sortie
+            temp_output_path = self.processing_dir / f"tmp_{output_name}"
+            if temp_output_path.exists():
+                temp_output_path.unlink()
+                
+            # Construction de la commande FFmpeg - Approche simplifiée sans segmentation
             if is_hevc_10bit:
-                command_opts = [
+                command = [
+                    "ffmpeg", "-y",
+                    "-i", str(video_path),
                     "-c:v", "libx264", "-crf", "22", "-preset", "fast",
                     "-c:a", "aac", "-b:a", "192k", "-ac", "2",
                     "-sn", "-dn", "-map_chapters", "-1",
                     "-map", "0:v:0", "-map", "0:a:0?",
-                    "-segment_time_metadata", "1",  # Force les métadonnées temporelles
-                    "-vsync", "1",                 # Synchronisation vidéo
+                    "-movflags", "+faststart",
+                    "-max_muxing_queue_size", "4096",
                     "-progress", "pipe:1",
-                    "-fs", "4G",                  # Limite taille fichier max
-                    "-t", "7200",                 # Durée max transcodage
+                    str(output_path)
                 ]
             elif self.USE_GPU:
-                command_opts = [
-                    "-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi",
+                command = [
+                    "ffmpeg", "-y",
+                    # Options hwaccel AVANT l'input
+                    "-hwaccel", "vaapi", 
+                    "-hwaccel_output_format", "vaapi",
                     "-vaapi_device", "/dev/dri/renderD128",
+                    "-i", str(video_path),
                     "-c:v", "h264_vaapi", "-profile:v", "main",
                     "-c:a", "aac", "-b:a", "192k", "-ac", "2",
                     "-sn", "-dn", "-map_chapters", "-1",
                     "-map", "0:v:0", "-map", "0:a:0?",
-                    "-segment_time_metadata", "1",  # Force les métadonnées temporelles
-                    "-vsync", "1",                 # Synchronisation vidéo
+                    "-movflags", "+faststart",
+                    "-max_muxing_queue_size", "4096",
                     "-progress", "pipe:1",
-                    "-fs", "4G",                  # Limite taille fichier max
-                    "-t", "7200",                 # Durée max transcodage
+                    str(output_path)
                 ]
             else:
-                command_opts = [
+                command = [
+                    "ffmpeg", "-y",
+                    "-i", str(video_path),
                     "-c:v", "libx264", "-preset", "fast", "-crf", "23",
                     "-c:a", "aac", "-b:a", "192k", "-ac", "2",
                     "-sn", "-dn", "-map_chapters", "-1",
                     "-map", "0:v:0", "-map", "0:a:0?",
-                    "-segment_time_metadata", "1",  # Force les métadonnées temporelles
-                    "-vsync", "1",                 # Synchronisation vidéo
+                    "-movflags", "+faststart",
+                    "-max_muxing_queue_size", "4096",
                     "-progress", "pipe:1",
-                    "-fs", "4G",                  # Limite taille fichier max
-                    "-t", "7200",                 # Durée max transcodage
+                    str(output_path)
                 ]
             
-            # Ajouter les flags de split pour forcer l'écriture au fur et à mesure
-            # Chemin temporaire modifié pour utiliser un format segmenté
-            temp_dir = self.processing_dir / f"tmp_{video_path.stem}"
-            temp_dir.mkdir(exist_ok=True)
-            temp_segment_pattern = temp_dir / f"segment_%03d.mp4"
-            final_output_path = self.ready_to_stream_dir / f"{output_name}"
+            # Log de la commande complète
+            logger.info(f"[{self.channel_name}] 🎬 Commande pour {filename}:")
+            logger.info(f"$ {' '.join(command)}")
             
-            # On ajoute les options de segmentation
-            segment_opts = [
-                "-f", "segment",
-                "-segment_time", "60",  # Segments de 60 secondes
-                "-reset_timestamps", "1",
-                "-segment_format", "mp4",
-                "-segment_list", str(temp_dir / "segments.txt"),
-                str(temp_segment_pattern)
-            ]
-            
-            # Commande complète avec segmentation
-            command = command_base + command_opts + segment_opts
-            
-            # Exécuter la commande avec suivi de progression
-            logger.info(f"🎬 Transcodage segmenté de {video_path.name}")
-            logger.debug(f"Commande: {' '.join(command)}")
-            
-            process = None
-            
+            # Exécution de la commande
             try:
                 process = subprocess.Popen(
                     command,
@@ -702,100 +739,57 @@ class VideoProcessor:
                     bufsize=1
                 )
                 
-                # Suivi de la progression avec timeout
+                # Suivi de la progression
                 start_time = time.time()
                 last_progress_time = start_time
-                last_progress_update = start_time
-                last_write_check = start_time
                 progress_data = {}
                 
-                # Variables pour suivre la progression
-                last_segment_count = 0
-                last_out_time_seconds = 0
-                
                 while process.poll() is None:
-                    # Vérification du timeout global (30 minutes)
+                    # Vérification du timeout global (2 heures)
                     current_time = time.time()
-                    if current_time - start_time > 30 * 60:
-                        logger.error(f"⏰ Timeout global de 30 minutes dépassé pour {video_path.name}")
+                    if current_time - start_time > 2 * 60 * 60:
+                        logger.error(f"[{self.channel_name}] ⏰ Timeout de 2h pour {filename}")
                         process.kill()
-                        self._cleanup_temp_dir(temp_dir)
                         return None
                     
-                    # Vérification du timeout d'inactivité (pas de progression pendant 5 minutes)
-                    if current_time - last_progress_update > 300:
-                        logger.error(f"⏰ Aucune progression depuis 5 minutes pour {video_path.name}")
-                        process.kill()
-                        self._cleanup_temp_dir(temp_dir)
-                        return None
-                    
-                    # Vérification des segments écrits
-                    if current_time - last_write_check > 30:  # Toutes les 30 secondes
-                        segments = list(temp_dir.glob("segment_*.mp4"))
-                        new_count = len(segments)
-                        
-                        if new_count > last_segment_count:
-                            logger.info(f"✅ {new_count - last_segment_count} nouveaux segments écrits (total: {new_count})")
-                            last_segment_count = new_count
-                            last_write_check = current_time
-                        else:
-                            # Aucun nouveau segment depuis 30s
-                            logger.warning(f"⚠️ Aucun nouveau segment depuis 30s (toujours {new_count})")
-                            # Si pas de nouveau segment depuis 2 minutes, on abandonne
-                            if current_time - last_write_check > 120:
-                                logger.error(f"❌ Pas de nouveaux segments depuis 2 minutes, abandon")
-                                process.kill()
-                                self._cleanup_temp_dir(temp_dir)
-                                return None
-                    
-                    # Lecture d'une ligne de sortie avec timeout
+                    # Lecture de la progression
                     try:
-                        # Lecture non bloquante avec select
                         import select
-                        ready_to_read, _, _ = select.select([process.stdout], [], [], 0.5)
+                        ready_to_read, _, _ = select.select([process.stdout], [], [], 1.0)
                         if ready_to_read:
                             stdout_line = process.stdout.readline().strip()
                             if stdout_line and '=' in stdout_line:
                                 key, value = stdout_line.split('=', 1)
                                 progress_data[key] = value
-                                last_progress_update = current_time
                                 
-                                # Extraction du temps de traitement actuel
-                                if key == 'out_time':
-                                    # Convertir out_time en secondes
-                                    time_parts = value.split(':')
-                                    if len(time_parts) == 3:
-                                        hours, minutes, seconds = time_parts
-                                        seconds_parts = seconds.split('.')
-                                        seconds = float(f"{seconds_parts[0]}.{seconds_parts[1]}" if len(seconds_parts) > 1 else seconds_parts[0])
-                                        out_time_seconds = int(hours) * 3600 + int(minutes) * 60 + seconds
-                                        
-                                        # Affichage de la progression toutes les 5 secondes
-                                        if current_time - last_progress_time >= 5 or out_time_seconds - last_out_time_seconds >= 10:
-                                            # Calcul de la vitesse et du temps restant
+                                # Affichage de la progression
+                                if key == 'out_time' and current_time - last_progress_time >= 10:
+                                    if total_duration:
+                                        # Calcul du pourcentage et temps restant
+                                        time_parts = value.split(':')
+                                        if len(time_parts) == 3:
+                                            hours, minutes, seconds = time_parts
+                                            seconds_parts = seconds.split('.')
+                                            seconds = float(f"{seconds_parts[0]}.{seconds_parts[1]}" if len(seconds_parts) > 1 else seconds_parts[0])
+                                            out_time_seconds = int(hours) * 3600 + int(minutes) * 60 + seconds
+                                            
+                                            # Pourcentage et vitesse
                                             elapsed = current_time - start_time
                                             if elapsed > 0:
                                                 speed = out_time_seconds / elapsed
+                                                percent_done = (out_time_seconds / total_duration) * 100
+                                                remaining = (total_duration - out_time_seconds) / max(0.1, speed)
+                                                eta = time.strftime("%H:%M:%S", time.gmtime(remaining))
                                                 
-                                                if total_duration and speed > 0:
-                                                    remaining_seconds = (total_duration - out_time_seconds) / speed
-                                                    percent_done = (out_time_seconds / total_duration) * 100 if total_duration > 0 else 0
-                                                    eta = time.strftime("%H:%M:%S", time.gmtime(remaining_seconds))
-                                                    
-                                                    logger.info(f"🔄 Progression: {value} / {self._format_time(total_duration)} "
-                                                            f"({percent_done:.1f}%) - ETA: {eta} - "
-                                                            f"Vitesse: {speed:.2f}x")
-                                                else:
-                                                    logger.info(f"🔄 Progression: {value} - Vitesse: {speed:.2f}x")
-                                            else:
-                                                logger.info(f"🔄 Progression: {value}")
-                                            
-                                            last_progress_time = current_time
-                                            last_out_time_seconds = out_time_seconds
+                                                logger.info(f"[{self.channel_name}] 🔄 {filename}: {value} / {self._format_time(total_duration)} "
+                                                        f"({percent_done:.1f}%) - ETA: {eta} - Vitesse: {speed:.2f}x")
+                                    else:
+                                        logger.info(f"[{self.channel_name}] 🔄 {filename}: {value}")
+                                    
+                                    last_progress_time = current_time
                     except Exception as e:
-                        logger.warning(f"Erreur lecture progression: {e}")
+                        logger.debug(f"[{self.channel_name}] Erreur lecture progression: {e}")
                     
-                    # Pause courte pour éviter de consommer trop de CPU
                     time.sleep(0.1)
                 
                 # Vérification du résultat
@@ -803,23 +797,26 @@ class VideoProcessor:
                 stderr_output = process.stderr.read()
                 
                 if return_code != 0:
-                    logger.error(f"❌ Erreur FFmpeg: {stderr_output}")
-                    self._cleanup_temp_dir(temp_dir)
+                    logger.error(f"[{self.channel_name}] ❌ Erreur FFmpeg pour {filename}: {stderr_output}")
+                    return None
+                
+                # Vérification que le fichier de sortie existe et est valide
+                if output_path.exists() and output_path.stat().st_size > 0:
+                    logger.info(f"[{self.channel_name}] ✅ Transcodage réussi: {output_name}")
+                    self.notify_file_processed(output_path)
+                    return output_path
+                else:
+                    logger.error(f"[{self.channel_name}] ❌ Fichier de sortie invalide: {output_name}")
                     return None
                     
-                # Concaténation des segments en un seul fichier
-                logger.info(f"🔄 Concaténation des segments en un seul fichier")
-                return self._concatenate_segments(temp_dir, final_output_path)
-                
             except Exception as e:
-                logger.error(f"❌ Exception pendant le transcodage: {e}")
+                logger.error(f"[{self.channel_name}] ❌ Exception transcodage {filename}: {e}")
                 if process and process.poll() is None:
                     process.kill()
-                self._cleanup_temp_dir(temp_dir)
                 return None
         
         except Exception as e:
-            logger.error(f"Error processing video {video_path}: {e}")
+            logger.error(f"[{self.channel_name}] ❌ Erreur processing {filename}: {e}")
             return None
 
     def _check_hevc_10bit(self, video_path: Path) -> bool:
@@ -958,7 +955,7 @@ class VideoProcessor:
     def is_already_optimized(self, video_path: Path) -> bool:
         """
         Vérifie si une vidéo est déjà optimisée pour le streaming.
-        Détecte également les sous-titres et chapitres qui pourraient causer des problèmes.
+        Critères assouplis pour TiviMate.
         """
         logger.info(f"🔍 Vérification du format de {video_path.name}")
 
@@ -979,10 +976,10 @@ class VideoProcessor:
             audio_streams = [s for s in streams if s['codec_type'] == 'audio']
             subtitle_streams = [s for s in streams if s['codec_type'] == 'subtitle']
             
-            # Si on a plus d'un flux vidéo ou plus de sous-titres, normalisation requise
-            if len(video_streams) > 1 or subtitle_streams:
-                logger.warning(f"⚠️ {video_path.name} contient {len(video_streams)} flux vidéo et {len(subtitle_streams)} sous-titres")
-                logger.info(f"🚨 Multiples flux détectés, normalisation nécessaire pour garantir la compatibilité HLS")
+            # Si on a plus d'un flux vidéo, normalisation requise
+            if len(video_streams) > 1:
+                logger.warning(f"⚠️ {video_path.name} contient {len(video_streams)} flux vidéo")
+                logger.info(f"🚨 Multiples flux vidéo détectés, normalisation nécessaire")
                 return False
 
             # On vérifie maintenant les caractéristiques vidéo/audio standard
@@ -1014,30 +1011,42 @@ class VideoProcessor:
             chapters_info = json.loads(chapters_result.stdout)
             has_chapters = 'chapters' in chapters_info and len(chapters_info['chapters']) > 0
             
-            if has_chapters:
-                logger.warning(f"⚠️ {video_path.name} contient {len(chapters_info['chapters'])} chapitres")
-                logger.info(f"🚨 Chapitres détectés, normalisation nécessaire pour garantir la compatibilité HLS")
-                return False
-
+            # Critères de normalisation - Version assouplie pour TiviMate
+            reasons = []
             needs_transcoding = False
-            if codec != "h264":
-                logger.info(f"🚨 Codec vidéo non H.264 ({codec}), conversion nécessaire")
-                needs_transcoding = True
-            if width > 1920 or height > 1080:
-                logger.info(f"🚨 Résolution supérieure à 1080p ({width}x{height}), réduction nécessaire")
-                needs_transcoding = True
-            if fps > 30:
-                logger.info(f"🚨 FPS supérieur à 30 ({fps}), réduction nécessaire")
-                needs_transcoding = True
-            if audio_codec == "none":
-                logger.info(f"🚨 Pas de piste audio détectée, normalisation nécessaire pour garantir la présence d'audio")
-                needs_transcoding = True
-            elif audio_codec != "aac":
-                logger.info(f"🚨 Codec audio non AAC ({audio_codec}), conversion nécessaire")
+
+            # Vérification des codecs vidéo
+            if codec not in ["h264", "hevc", "h265"]:
+                reasons.append(f"codec vidéo {codec} non supporté (besoin de H.264 ou H.265)")
                 needs_transcoding = True
 
+            # Vérification de la résolution (toujours limiter à 1080p)
+            if width > 1920 or height > 1080:
+                reasons.append(f"résolution {width}x{height} supérieure à 1080p")
+                needs_transcoding = True
+
+            # Vérification du FPS (maintenant augmenté à 60)
+            if fps > 60:
+                reasons.append(f"FPS de {fps} supérieur à 60")
+                needs_transcoding = True
+
+            # Vérification de l'audio
+            if audio_codec == "none":
+                reasons.append("pas de piste audio détectée")
+                needs_transcoding = True
+            elif audio_codec not in ["aac", "mp3"]:
+                reasons.append(f"codec audio {audio_codec} non compatible (besoin de AAC ou MP3)")
+                needs_transcoding = True
+
+            if has_chapters and len(chapters_info['chapters']) > 15:
+                # On ne considère problématiques que les fichiers avec beaucoup de chapitres
+                reasons.append(f"contient trop de chapitres ({len(chapters_info['chapters'])})")
+                needs_transcoding = True
+
+            # Sortie des résultats de l'analyse
             if needs_transcoding:
-                logger.info(f"⚠️ Normalisation nécessaire pour {video_path.name}")
+                reasons_str = ", ".join(reasons)
+                logger.info(f"⚠️ Normalisation nécessaire pour {video_path.name}: {reasons_str}")
             else:
                 logger.info(f"✅ Vidéo déjà optimisée, pas besoin de normalisation pour {video_path.name}")
 
@@ -1049,7 +1058,7 @@ class VideoProcessor:
         except Exception as e:
             logger.error(f"❌ Erreur générale vérification optimisation: {str(e)}")
             return False
-
+    
     def stop(self):
         """Arrête proprement le thread de traitement"""
         self.stop_processing.set()
