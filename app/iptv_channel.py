@@ -70,10 +70,10 @@ class IPTVChannel:
         # Scan initial des vidéos
         threading.Thread(target=self._scan_videos_async, daemon=True).start()
     
-
     def _verify_file_ready(self, file_path: Path) -> bool:
         """
         Vérifie qu'un fichier MP4 est complet et utilisable
+        Version améliorée avec détection des atomes MOOV
         
         Args:
             file_path: Chemin du fichier MP4 à vérifier
@@ -94,7 +94,67 @@ class IPTVChannel:
                 self._move_to_ignored(file_path, "fichier vide")
                 return False
                 
-            # Vérification que le fichier est lisible par ffprobe
+            # Vérifications supplémentaires pour les fichiers MP4
+            if file_path.suffix.lower() == '.mp4':
+                # 1. Première tentative avec ffprobe pour les métadonnées
+                cmd1 = [
+                    "ffprobe",
+                    "-v", "error",
+                    "-select_streams", "v:0",
+                    "-show_entries", "format=duration",
+                    "-of", "default=noprint_wrappers=1:nokey=1",
+                    str(file_path)
+                ]
+                
+                result1 = subprocess.run(cmd1, capture_output=True, text=True, timeout=10)
+                
+                # Vérification spécifique pour l'erreur "moov atom not found"
+                if result1.returncode != 0:
+                    if "moov atom not found" in result1.stderr:
+                        logger.warning(f"[{self.channel_name}] ⚠️ Atome MOOV manquant dans {filename}, fichier incomplet")
+                        self._move_to_ignored(file_path, f"fichier MP4 incomplet: atome MOOV manquant")
+                        return False
+                        
+                    # Autres erreurs ffprobe
+                    logger.warning(f"[{self.channel_name}] ⚠️ Erreur ffprobe pour {filename}: {result1.stderr}")
+                    
+                    # Tentative supplémentaire avec un autre type de vérification
+                    cmd2 = [
+                        "ffmpeg", 
+                        "-v", "error",
+                        "-i", str(file_path),
+                        "-f", "null",
+                        "-t", "5",  # On teste juste les 5 premières secondes
+                        "-"
+                    ]
+                    
+                    result2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=15)
+                    
+                    if result2.returncode != 0:
+                        logger.warning(f"[{self.channel_name}] ⚠️ Validation secondaire échouée pour {filename}: {result2.stderr}")
+                        self._move_to_ignored(file_path, f"erreur ffprobe: {result1.stderr}")
+                        return False
+                        
+                    # Si on arrive ici, le fichier est lisible malgré l'erreur ffprobe
+                    logger.info(f"[{self.channel_name}] ✅ {filename} lisible malgré l'erreur ffprobe")
+                    return True
+                    
+                # Vérification que la durée est valide
+                try:
+                    duration = float(result1.stdout.strip())
+                    if duration <= 0:
+                        logger.warning(f"[{self.channel_name}] ⚠️ Durée invalide pour {filename}: {duration}s")
+                        self._move_to_ignored(file_path, f"durée invalide: {duration}s")
+                        return False
+                        
+                    logger.info(f"[{self.channel_name}] ✅ Fichier MP4 valide: {filename}, durée: {duration:.2f}s")
+                    return True
+                except ValueError:
+                    logger.warning(f"[{self.channel_name}] ⚠️ Durée non numérique pour {filename}: {result1.stdout}")
+                    self._move_to_ignored(file_path, f"durée non numérique: {result1.stdout}")
+                    return False
+                    
+            # Pour les fichiers non-MP4, vérification standard
             cmd = [
                 "ffprobe",
                 "-v", "error",
@@ -134,7 +194,7 @@ class IPTVChannel:
             logger.warning(f"[{self.channel_name}] ⚠️ Erreur vérification {filename}: {e}")
             self._move_to_ignored(file_path, f"erreur: {str(e)}")
             return False
-
+    
     def _move_to_ignored(self, file_path: Path, reason: str):
         """
         Déplace un fichier invalide vers le dossier 'ignored'
@@ -754,9 +814,10 @@ class IPTVChannel:
         if self.logger:
             self.logger.log_segment(segment_path, size)
             
+    # Méthode à ajouter à la classe IPTVChannel pour améliorer la gestion des sauts de segments
     def report_segment_jump(self, prev_segment: int, curr_segment: int):
         """
-        Gère les sauts détectés dans les segments HLS
+        Gère les sauts détectés dans les segments HLS avec une meilleure logique
         
         Args:
             prev_segment: Le segment précédent
@@ -765,37 +826,45 @@ class IPTVChannel:
         try:
             jump_size = curr_segment - prev_segment
             
-            # On ne s'inquiète que des sauts importants
+            # On ne s'inquiète que des sauts importants et récurrents
             if jump_size <= 5:
                 return
                 
             logger.warning(f"[{self.name}] 🚨 Saut de segment détecté: {prev_segment} → {curr_segment} (delta: {jump_size})")
             
-            # Si les sauts sont vraiment grands (>= 20), on peut envisager un redémarrage
-            if jump_size >= 20:
-                if self.error_handler and self.error_handler.add_error("segment_jump"):
-                    logger.warning(f"[{self.name}] 🔄 Tentative de redémarrage suite à un saut important")
+            # On stocke l'historique des sauts si pas déjà fait
+            if not hasattr(self, 'jump_history'):
+                self.jump_history = []
+                
+            # Ajout du saut à l'historique avec timestamp
+            self.jump_history.append((time.time(), prev_segment, curr_segment, jump_size))
+            
+            # On ne garde que les 5 derniers sauts
+            if len(self.jump_history) > 5:
+                self.jump_history = self.jump_history[-5:]
+                
+            # On vérifie si on a des sauts fréquents et similaires (signe d'un problème systémique)
+            recent_jumps = [j for j in self.jump_history if time.time() - j[0] < 300]  # Sauts des 5 dernières minutes
+            
+            if len(recent_jumps) >= 3:
+                # Si on a au moins 3 sauts récents avec des tailles similaires, on considère que c'est un problème systémique
+                similar_sizes = any(abs(j[3] - jump_size) < 10 for j in recent_jumps[:-1])  # Tailles de saut similaires
+                
+                if similar_sizes and self.error_handler and self.error_handler.add_error("segment_jump"):
+                    logger.warning(f"[{self.name}] 🔄 Redémarrage après {len(recent_jumps)} sauts similaires récents")
                     
-                    # On sauvegarde la position actuelle
-                    if hasattr(self, 'position_manager'):
-                        self.position_manager.save_position()
-                    
-                    # Vérification des stats de visionnage
+                    # On vérifie si on a encore des spectateurs actifs
                     watchers = getattr(self, 'watchers_count', 0)
                     if watchers > 0:
+                        # Sauvegarde de la position avant le redémarrage
+                        if hasattr(self, 'position_manager'):
+                            self.position_manager.save_position()
                         return self._restart_stream()
                     else:
                         logger.info(f"[{self.name}] ℹ️ Pas de redémarrage: aucun watcher actif")
-                        
-            # Sinon, on log juste le problème
-            else:
-                # On pourrait aussi analyser la fréquence des sauts
-                logger.info(f"[{self.name}] ℹ️ Saut mineur détecté, surveillance continue")
-                
         except Exception as e:
             logger.error(f"[{self.name}] ❌ Erreur gestion saut de segment: {e}")
             return False
-
     def refresh_videos(self):
         """Force un nouveau scan des vidéos"""
         threading.Thread(target=self._scan_videos_async, daemon=True).start()

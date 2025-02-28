@@ -120,6 +120,7 @@ class VideoProcessor:
     def _wait_for_file_stability(self, file_path: Path, timeout=60) -> bool:
         """
         Attend que le fichier soit stable (taille constante) avant de le traiter
+        Version améliorée avec vérification des fichiers MP4
         
         Args:
             file_path: Chemin du fichier à vérifier
@@ -158,6 +159,18 @@ class VideoProcessor:
                 
                 # Si la taille est stable pendant le temps requis
                 if current_size == last_size and stable_count >= min_stable_seconds:
+                    # Vérification supplémentaire pour les MP4 - vérifie que l'atome MOOV est présent
+                    if file_path.suffix.lower() == '.mp4' and stable_count >= 5:
+                        if not self._verify_mp4_completeness(file_path):
+                            # Continuer à attendre pour les MP4 incomplets
+                            if stable_count < 20:  # On attend jusqu'à 20 secondes de stabilité
+                                last_size = current_size
+                                time.sleep(1)
+                                continue
+                            else:
+                                logger.warning(f"❌ MP4 incomplet après {stable_count}s de stabilité: {file_path.name}")
+                                return False
+                    
                     logger.info(f"✅ Fichier {file_path.name} stable depuis {stable_count}s, prêt pour traitement")
                     return True
                     
@@ -169,7 +182,55 @@ class VideoProcessor:
                 time.sleep(1)
                 
         logger.warning(f"⏰ Timeout en attendant la stabilité de {file_path.name}")
-        return False 
+        return False
+
+    def _verify_mp4_completeness(self, file_path: Path) -> bool:
+        """
+        Vérifie qu'un fichier MP4 est complet en recherchant l'atome MOOV
+        
+        Args:
+            file_path: Chemin du fichier MP4
+            
+        Returns:
+            bool: True si le fichier est complet, False sinon
+        """
+        try:
+            # Vérification avec ffprobe
+            cmd = [
+                "ffprobe",
+                "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                str(file_path)
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            
+            # Si retourne une durée valide, le fichier est complet
+            if result.returncode == 0:
+                try:
+                    duration = float(result.stdout.strip())
+                    if duration > 0:
+                        return True
+                except ValueError:
+                    pass
+                    
+            # Vérification spécifique de l'erreur "moov atom not found"
+            if "moov atom not found" in result.stderr:
+                logger.warning(f"⚠️ Atome MOOV manquant dans {file_path.name}, MP4 incomplet")
+                return False
+                
+            # Autres erreurs
+            logger.warning(f"⚠️ Erreur vérification MP4 {file_path.name}: {result.stderr}")
+            return False
+            
+        except subprocess.TimeoutExpired:
+            logger.warning(f"⚠️ Timeout vérification MP4 {file_path.name}")
+            return False
+        except Exception as e:
+            logger.error(f"❌ Erreur inattendue vérification MP4 {file_path.name}: {e}")
+            return False    
     
     def notify_file_processed(self, file_path):
         """Notifie que le fichier a été traité avec succès et met à jour le statut de la chaîne"""
@@ -580,7 +641,7 @@ class VideoProcessor:
             logger.error(f"❌ Erreur nettoyage répertoire temporaire: {e}")
 
     def process_video(self, video_path: Path) -> Optional[Path]:
-        """Traite un fichier vidéo avec gestion simplifiée et améliorée"""
+        """Traite un fichier vidéo avec gestion adaptative des codecs"""
         filename = video_path.name  # Extraction du nom du fichier
         try:
             # Sanitize the source filename
@@ -613,7 +674,11 @@ class VideoProcessor:
                 self.notify_file_processed(output_path)
                 return output_path
 
-            # On vérifie pourquoi ce fichier nécessite une normalisation
+            # Check file size and estimate transcoding time
+            file_size_gb = video_path.stat().st_size / (1024**3)
+            logger.info(f"[{self.channel_name}] 📊 Taille du fichier: {file_size_gb:.2f} GB")
+
+            # On vérifie pourquoi ce fichier nécessite une normalisation et on détecte les codecs incompatibles
             cmd_probe = [
                 "ffprobe", "-v", "error",
                 "-show_entries", "stream=codec_name,width,height,r_frame_rate,codec_type",
@@ -621,6 +686,10 @@ class VideoProcessor:
                 str(video_path)
             ]
             probe_result = subprocess.run(cmd_probe, capture_output=True, text=True)
+            
+            # Variable pour décider si on utilise VAAPI ou pas
+            use_hardware_accel = self.USE_GPU
+            incompatible_codecs = False
             
             try:
                 video_info = json.loads(probe_result.stdout)
@@ -632,6 +701,10 @@ class VideoProcessor:
                 
                 reasons = []
                 
+                # Liste des codecs incompatibles avec VAAPI
+                vaapi_incompatible_video_codecs = ["msmpeg4v3", "msmpeg4", "wmv1", "wmv2", "wmv3", "vc1", "vp6", "svq3"]
+                vaapi_incompatible_audio_codecs = ["wmav1", "wmav2", "wmalossless", "wmapro"]
+                
                 if video_streams:
                     video = video_streams[0]
                     codec = video.get("codec_name", "").lower()
@@ -639,6 +712,12 @@ class VideoProcessor:
                     height = int(video.get("height", 0))
                     framerate = video.get("r_frame_rate", "0/1").split("/")
                     fps = round(int(framerate[0]) / int(framerate[1])) if len(framerate) == 2 else 0
+                    
+                    # Vérifier si le codec vidéo est incompatible avec VAAPI
+                    if codec in vaapi_incompatible_video_codecs:
+                        use_hardware_accel = False
+                        incompatible_codecs = True
+                        logger.warning(f"[{self.channel_name}] ⚠️ Codec vidéo {codec} incompatible avec VAAPI, utilisation du mode CPU")
                     
                     if codec not in ["h264", "hevc", "h265"]:
                         reasons.append(f"codec vidéo {codec} non supporté")
@@ -654,6 +733,13 @@ class VideoProcessor:
                 elif audio_streams:
                     audio = audio_streams[0]
                     audio_codec = audio.get("codec_name", "").lower()
+                    
+                    # Vérifier si le codec audio est incompatible avec VAAPI
+                    if audio_codec in vaapi_incompatible_audio_codecs:
+                        use_hardware_accel = False
+                        incompatible_codecs = True
+                        logger.warning(f"[{self.channel_name}] ⚠️ Codec audio {audio_codec} incompatible avec VAAPI, utilisation du mode CPU")
+                    
                     if audio_codec not in ["aac", "mp3"]:
                         reasons.append(f"codec audio {audio_codec} non supporté")
                 
@@ -661,8 +747,10 @@ class VideoProcessor:
                 if reasons:
                     reasons_str = ", ".join(reasons)
                     logger.info(f"[{self.channel_name}] 🔄 Normalisation de {filename} nécessaire: {reasons_str}")
-            except:
-                logger.warning(f"[{self.channel_name}] ⚠️ Impossible d'analyser les raisons de normalisation pour {filename}")
+            except Exception as e:
+                logger.warning(f"[{self.channel_name}] ⚠️ Impossible d'analyser les raisons de normalisation pour {filename}: {e}")
+                # Par sécurité, on désactive VAAPI si on ne peut pas analyser
+                use_hardware_accel = False
             
             # Déterminer la durée totale de la vidéo source
             total_duration = self._get_video_duration(str(video_path))
@@ -672,6 +760,17 @@ class VideoProcessor:
             else:
                 logger.info(f"[{self.channel_name}] 📊 Durée de {filename}: {self._format_time(total_duration)}")
             
+            # Estimation du temps de transcodage (très approximative)
+            # Augmenté pour les codecs incompatibles qui sont plus lents
+            cpu_factor = 1.5 if incompatible_codecs else 1.0
+            estimated_hours = file_size_gb * (0.5 if use_hardware_accel else cpu_factor)
+            logger.info(f"[{self.channel_name}] ⏱️ Temps estimé: {estimated_hours:.1f} heures")
+            
+            # Augmentons le timeout pour les fichiers volumineux
+            timeout_hours = max(2.5, min(8, estimated_hours * 1.5))  # Entre 2.5h et 8h
+            timeout_seconds = int(timeout_hours * 3600)
+            logger.info(f"[{self.channel_name}] ⏰ Timeout ajusté: {timeout_hours:.1f} heures")
+            
             # Vérifier si le fichier est HEVC 10-bit pour adapter l'approche
             is_hevc_10bit = self._check_hevc_10bit(video_path)
             
@@ -680,12 +779,15 @@ class VideoProcessor:
             if temp_output_path.exists():
                 temp_output_path.unlink()
                 
-            # Construction de la commande FFmpeg - Approche simplifiée sans segmentation
-            if is_hevc_10bit:
+            # Construction de la commande FFmpeg - version adaptée selon compatibilité
+            if is_hevc_10bit or incompatible_codecs:
+                # Mode CPU pour HEVC 10-bit ou codecs incompatibles avec VAAPI
                 command = [
                     "ffmpeg", "-y",
                     "-i", str(video_path),
-                    "-c:v", "libx264", "-crf", "22", "-preset", "fast",
+                    "-c:v", "libx264",
+                    "-crf", "23",
+                    "-preset", "fast",
                     "-c:a", "aac", "-b:a", "192k", "-ac", "2",
                     "-sn", "-dn", "-map_chapters", "-1",
                     "-map", "0:v:0", "-map", "0:a:0?",
@@ -694,7 +796,8 @@ class VideoProcessor:
                     "-progress", "pipe:1",
                     str(output_path)
                 ]
-            elif self.USE_GPU:
+            elif use_hardware_accel:
+                # Mode VAAPI pour accélération matérielle
                 command = [
                     "ffmpeg", "-y",
                     # Options hwaccel AVANT l'input
@@ -712,10 +815,13 @@ class VideoProcessor:
                     str(output_path)
                 ]
             else:
+                # Mode CPU standard
                 command = [
                     "ffmpeg", "-y",
                     "-i", str(video_path),
-                    "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                    "-c:v", "libx264",
+                    "-preset", "fast",
+                    "-crf", "23",
                     "-c:a", "aac", "-b:a", "192k", "-ac", "2",
                     "-sn", "-dn", "-map_chapters", "-1",
                     "-map", "0:v:0", "-map", "0:a:0?",
@@ -745,11 +851,14 @@ class VideoProcessor:
                 progress_data = {}
                 
                 while process.poll() is None:
-                    # Vérification du timeout global (2 heures)
+                    # Vérification du timeout global
                     current_time = time.time()
-                    if current_time - start_time > 2 * 60 * 60:
-                        logger.error(f"[{self.channel_name}] ⏰ Timeout de 2h pour {filename}")
+                    if current_time - start_time > timeout_seconds:
+                        logger.error(f"[{self.channel_name}] ⏰ Timeout de {timeout_hours:.1f}h pour {filename}")
                         process.kill()
+                        
+                        # On déplace le fichier vers ignored avec raison spécifique
+                        self._move_to_ignored(video_path, "timeout du transcodage")
                         return None
                     
                     # Lecture de la progression
@@ -798,13 +907,71 @@ class VideoProcessor:
                 
                 if return_code != 0:
                     logger.error(f"[{self.channel_name}] ❌ Erreur FFmpeg pour {filename}: {stderr_output}")
+                    
+                    # Si l'erreur est liée à VAAPI, on réessaie en mode CPU
+                    if use_hardware_accel and ("vaapi" in stderr_output.lower() or "hwaccel" in stderr_output.lower()):
+                        logger.warning(f"[{self.channel_name}] ⚠️ Échec VAAPI, nouvelle tentative en mode CPU")
+                        
+                        # Nettoyer le fichier de sortie s'il existe
+                        if output_path.exists():
+                            output_path.unlink()
+                        
+                        # Nouvelle commande sans accélération matérielle
+                        cpu_command = [
+                            "ffmpeg", "-y",
+                            "-i", str(video_path),
+                            "-c:v", "libx264",
+                            "-preset", "fast",
+                            "-crf", "23",
+                            "-c:a", "aac", "-b:a", "192k", "-ac", "2",
+                            "-sn", "-dn", "-map_chapters", "-1",
+                            "-map", "0:v:0", "-map", "0:a:0?",
+                            "-movflags", "+faststart",
+                            "-max_muxing_queue_size", "4096",
+                            "-progress", "pipe:1",
+                            str(output_path)
+                        ]
+                        
+                        logger.info(f"[{self.channel_name}] 🎬 Nouvelle commande CPU pour {filename}:")
+                        logger.info(f"$ {' '.join(cpu_command)}")
+                        
+                        # Lancer la nouvelle commande
+                        fallback_result = subprocess.run(cpu_command, capture_output=True, text=True)
+                        
+                        if fallback_result.returncode == 0:
+                            logger.info(f"[{self.channel_name}] ✅ Transcodage CPU réussi: {output_name}")
+                            self.notify_file_processed(output_path)
+                            return output_path
+                        else:
+                            logger.error(f"[{self.channel_name}] ❌ Échec transcodage CPU: {fallback_result.stderr}")
+                            self._move_to_ignored(video_path, f"échec transcodage CPU code {fallback_result.returncode}")
+                            return None
+                    
+                    self._move_to_ignored(video_path, f"erreur FFmpeg code {return_code}")
                     return None
                 
                 # Vérification que le fichier de sortie existe et est valide
                 if output_path.exists() and output_path.stat().st_size > 0:
-                    logger.info(f"[{self.channel_name}] ✅ Transcodage réussi: {output_name}")
-                    self.notify_file_processed(output_path)
-                    return output_path
+                    # Vérification que le MP4 est complet
+                    cmd_check = [
+                        "ffprobe", "-v", "error",
+                        "-show_entries", "format=duration",
+                        "-of", "default=noprint_wrappers=1:nokey=1",
+                        str(output_path)
+                    ]
+                    
+                    check_result = subprocess.run(cmd_check, capture_output=True, text=True)
+                    
+                    if check_result.returncode == 0 and check_result.stdout.strip():
+                        logger.info(f"[{self.channel_name}] ✅ Transcodage réussi: {output_name}")
+                        self.notify_file_processed(output_path)
+                        return output_path
+                    else:
+                        logger.error(f"[{self.channel_name}] ❌ Validation MP4 échouée: {check_result.stderr}")
+                        if output_path.exists():
+                            output_path.unlink()
+                        self._move_to_ignored(video_path, "fichier MP4 final invalide")
+                        return None
                 else:
                     logger.error(f"[{self.channel_name}] ❌ Fichier de sortie invalide: {output_name}")
                     return None
@@ -817,6 +984,85 @@ class VideoProcessor:
         
         except Exception as e:
             logger.error(f"[{self.channel_name}] ❌ Erreur processing {filename}: {e}")
+            return None
+    
+    def _retry_with_cpu(self, video_path: Path, temp_output_path: Path, final_output_path: Path) -> Optional[Path]:
+        """Retente le transcodage en mode CPU (sans VAAPI)"""
+        filename = video_path.name
+        logger.info(f"[{self.channel_name}] 🔄 Tentative de transcodage en mode CPU pour {filename}")
+
+        # Nettoyer le fichier temporaire s'il existe
+        if temp_output_path.exists():
+            temp_output_path.unlink()
+
+        # Commande CPU optimisée
+        command = [
+            "ffmpeg", "-y",
+            "-i", str(video_path),
+            "-c:v", "libx264", 
+            "-preset", "fast", 
+            "-crf", "23",
+            "-c:a", "aac", 
+            "-b:a", "192k", 
+            "-ac", "2",
+            "-sn", "-dn", 
+            "-map_chapters", "-1",
+            "-map", "0:v:0", 
+            "-map", "0:a:0?",
+            "-movflags", "+faststart",
+            "-max_muxing_queue_size", "4096",
+            "-progress", "pipe:1",
+            str(temp_output_path)
+        ]
+
+        logger.info(f"[{self.channel_name}] 🎬 Nouvelle commande CPU: {' '.join(command)}")
+
+        try:
+            # Exécution du processus
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True,
+                bufsize=1
+            )
+
+            # Attente du résultat
+            return_code = process.wait()
+            stderr_output = process.stderr.read()
+
+            if return_code != 0:
+                logger.error(f"[{self.channel_name}] ❌ Échec mode CPU pour {filename}: {stderr_output}")
+                self._move_to_ignored(video_path, f"échec CPU: {stderr_output[:200]}...")
+                return None
+
+            # Vérification du fichier de sortie
+            if not temp_output_path.exists() or temp_output_path.stat().st_size == 0:
+                logger.error(f"[{self.channel_name}] ❌ Fichier de sortie CPU invalide: {temp_output_path}")
+                self._move_to_ignored(video_path, "fichier de sortie CPU invalide")
+                return None
+
+            # Déplacement vers ready_to_stream
+            logger.info(f"[{self.channel_name}] ✅ Déplacement CPU vers ready_to_stream: {final_output_path.name}")
+            
+            # Suppression du fichier final s'il existe déjà
+            if final_output_path.exists():
+                final_output_path.unlink()
+                
+            # Déplacement du fichier temporaire
+            shutil.move(str(temp_output_path), str(final_output_path))
+            
+            logger.info(f"[{self.channel_name}] ✅ Transcodage CPU réussi: {final_output_path.name}")
+            self.notify_file_processed(final_output_path)
+            return final_output_path
+
+        except Exception as e:
+            logger.error(f"[{self.channel_name}] ❌ Exception mode CPU pour {filename}: {e}")
+            if process and process.poll() is None:
+                process.kill()
+            if temp_output_path.exists():
+                temp_output_path.unlink()
+            self._move_to_ignored(video_path, f"exception CPU: {str(e)[:200]}...")
             return None
 
     def _check_hevc_10bit(self, video_path: Path) -> bool:
@@ -1065,3 +1311,78 @@ class VideoProcessor:
         if self.processing_thread and self.processing_thread.is_alive():
             self.processing_thread.join(timeout=5)
             logger.info("Thread de traitement vidéo arrêté")
+
+    def _get_codec_info(self, video_path: Path) -> dict:
+        """Récupère les informations de codec d'un fichier vidéo"""
+        try:
+            cmd = [
+                "ffprobe", 
+                "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=codec_name,codec_type,width,height",
+                "-of", "json",
+                str(video_path)
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            if result.returncode != 0:
+                return {}
+                
+            data = json.loads(result.stdout)
+            if 'streams' in data and data['streams']:
+                return data['streams'][0]
+                
+            return {}
+        except Exception as e:
+            logger.error(f"[{self.channel_name}] ❌ Erreur récupération codec: {e}")
+            return {}
+
+    def _can_use_vaapi(self, codec_info: dict) -> bool:
+        """Détermine si on peut utiliser VAAPI pour un codec donné"""
+        if not self.USE_GPU:
+            return False
+            
+        # Liste des codecs supportés par VAAPI
+        vaapi_supported_codecs = {'h264', 'hevc', 'vp8', 'vp9', 'mpeg2video'}
+        
+        codec = codec_info.get('codec_name', '').lower()
+        if codec in vaapi_supported_codecs:
+            return True
+            
+        return False
+  
+    def _move_to_ignored(self, file_path: Path, reason: str):
+        """
+        Déplace un fichier invalide vers le dossier 'ignored'
+        
+        Args:
+            file_path: Chemin du fichier à déplacer
+            reason: Raison de l'invalidité du fichier
+        """
+        try:
+            # S'assurer que le dossier ignored existe
+            ignored_dir = Path(self.channel_dir) / "ignored"
+            ignored_dir.mkdir(parents=True, exist_ok=True)
+                
+            # Créer le chemin de destination (sans renommage)
+            dest_path = ignored_dir / file_path.name
+            
+            # Si le fichier de destination existe déjà, le supprimer
+            if dest_path.exists():
+                dest_path.unlink()
+                logger.info(f"[{self.channel_name}] 🗑️ Suppression du fichier existant dans ignored: {dest_path.name}")
+            
+            # Déplacer le fichier (pas de copie)
+            if file_path.exists():
+                shutil.move(str(file_path), str(dest_path))
+                
+                # Créer un fichier de log à côté avec la raison
+                log_path = ignored_dir / f"{dest_path.stem}_reason.txt"
+                with open(log_path, "w") as f:
+                    f.write(f"Fichier ignoré le {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    f.write(f"Raison: {reason}\n")
+                    
+                logger.info(f"[{self.channel_name}] 🚫 Fichier {file_path.name} déplacé vers ignored: {reason}")
+                
+        except Exception as e:
+            logger.error(f"[{self.channel_name}] ❌ Erreur déplacement fichier vers ignored: {e}")

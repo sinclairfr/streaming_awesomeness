@@ -291,11 +291,22 @@ class IPTVManager:
         except Exception as e:
             logger.error(f"Erreur nettoyage initial: {e}")
 
+
     def scan_channels(self, force: bool = False, initial: bool = False):
         """
         Scanne le contenu pour détecter les nouveaux dossiers (chaînes).
-        Version améliorée avec initialisation non bloquante
+        Version améliorée avec limitation de fréquence
         """
+        # Limiter la fréquence des scans
+        current_time = time.time()
+        scan_cooldown = 30  # 30s entre scans complets (sauf si force=True)
+        
+        if not force and not initial and hasattr(self, 'last_scan_time') and current_time - self.last_scan_time < scan_cooldown:
+            logger.debug(f"Scan ignoré: dernier scan il y a {current_time - self.last_scan_time:.1f}s")
+            return
+            
+        setattr(self, 'last_scan_time', current_time)
+        
         with self.scan_lock:
             try:
                 content_path = Path(self.content_dir)

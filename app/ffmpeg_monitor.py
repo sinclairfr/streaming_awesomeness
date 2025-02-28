@@ -22,13 +22,21 @@ class FFmpegMonitor(threading.Thread):
         self.stop_event = threading.Event()
         self.ffmpeg_log_dir = Path("/app/logs/ffmpeg")
         self.ffmpeg_log_dir.mkdir(parents=True, exist_ok=True)
-
+    # Méthode à modifier dans FFmpegMonitor pour mieux gérer les sauts de segments
     def _check_all_ffmpeg_processes(self):
         """
         Parcourt tous les processus pour voir lesquels sont liés à FFmpeg,
         groupés par nom de chaîne. Puis gère le nettoyage des processus
-        multiples (zombies).
+        multiples (zombies) avec throttling.
         """
+        # Limiter la fréquence d'exécution
+        current_time = time.time()
+        if hasattr(self, 'last_check_time') and current_time - self.last_check_time < 30:
+            # Au maximum toutes les 30 secondes
+            return
+            
+        setattr(self, 'last_check_time', current_time)
+        
         ffmpeg_processes = {}
         
         # Scanne tous les processus système
@@ -47,8 +55,6 @@ class FFmpegMonitor(threading.Thread):
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
         
-        current_time = time.time()
-        
         # Pour chaque chaîne, on vérifie s'il y a plusieurs PIDs ou s'ils sont inactifs
         for channel_name, pids in ffmpeg_processes.items():
             # On récupère la chaîne et calcule le temps depuis le dernier watcher
@@ -58,11 +64,16 @@ class FFmpegMonitor(threading.Thread):
                 
             time_since_last_watcher = current_time - channel.last_watcher_time
             
-            # On log des infos de monitoring
-            logger.info(
-                f"On inspect la chaîne [{channel_name}], nombre de process : {len(pids)} "
-                f"et temps depuis dernier watcher : {time_since_last_watcher:.1f}s"
-            )
+            # On log des infos de monitoring mais seulement une fois toutes les 5 minutes
+            if not hasattr(self, 'last_inspect_time'):
+                self.last_inspect_time = {}
+            
+            if channel_name not in self.last_inspect_time or current_time - self.last_inspect_time[channel_name] > 300:
+                logger.info(
+                    f"On inspect la chaîne [{channel_name}], nombre de process : {len(pids)} "
+                    f"et temps depuis dernier watcher : {time_since_last_watcher:.1f}s"
+                )
+                self.last_inspect_time[channel_name] = current_time
 
             # Si on a plusieurs processus OU qu'on a dépassé le temps d'inactivité, on nettoie
             if len(pids) > 1 or time_since_last_watcher > TIMEOUT_NO_VIEWERS:
@@ -72,7 +83,7 @@ class FFmpegMonitor(threading.Thread):
                     logger.warning(f"⚠️ {channel_name}: Processus FFmpeg inactif depuis {time_since_last_watcher:.1f}s")
                 
                 self._cleanup_zombie_processes(channel_name, pids)
-    
+     
     def _watchers_loop(self):
         """Surveille l'activité des watchers et arrête les streams inutilisés"""
         while True:
