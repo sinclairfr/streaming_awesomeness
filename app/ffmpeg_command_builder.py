@@ -75,7 +75,10 @@ class FFmpegCommandBuilder:
             logger.error(f"[{self.channel_name}] ❌ Erreur construction commande: {e}")
             # Fallback à une commande minimale en cas d'erreur
             return self.build_fallback_command(input_file, output_dir)
-
+    def build_command_without_offset(self, input_file, output_dir, progress_file=None, has_mkv=False):
+        """Construit une commande sans offset en cas d'échec de la première tentative"""
+        logger.warning(f"[{self.channel_name}] ⚠️ Construction d'une commande sans offset")
+        # Reste de la logique similaire à build_command mais sans le -ss
     def _create_concat_file(self) -> Optional[Path]:
         """Version ultra simplifiée pour débloquer la situation"""
         try:

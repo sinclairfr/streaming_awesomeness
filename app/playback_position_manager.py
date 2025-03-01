@@ -38,16 +38,42 @@ class PlaybackPositionManager:
         
         # Chargement de l'état précédent
         self._load_state()
-    # Ajouter cette méthode à PlaybackPositionManager (playback_position_manager.py)
+  
     def set_playback_offset(self, offset):
         """
         # Définit l'offset de lecture
         """
         with self.lock:
+            # Vérifier que les attributs existent, sinon les initialiser
+            if not hasattr(self, 'playback_offset'):
+                self.playback_offset = 0.0
+            if not hasattr(self, 'last_playback_time'):
+                self.last_playback_time = time.time()
+                
             self.playback_offset = offset
             self.last_playback_time = time.time()
-            self._save_state()    
+            self._save_state()           
+
+    # Ajouter cette méthode dans PlaybackPositionManager
+    def start_periodic_save(self):
+        """Lance un thread pour sauvegarder périodiquement la position"""
+        if hasattr(self, 'save_thread') and self.save_thread.is_alive():
+            return
             
+        self.stop_save_thread = threading.Event()
+        self.save_thread = threading.Thread(target=self._periodic_save_loop, daemon=True)
+        self.save_thread.start()
+        logger.info(f"[{self.channel_name}] 🔄 Démarrage sauvegarde périodique position")
+        
+    def _periodic_save_loop(self):
+        """Boucle de sauvegarde périodique"""
+        while not self.stop_save_thread.is_set():
+            try:
+                self.save_position()
+                time.sleep(10)  # Sauvegarde toutes les 10 secondes
+            except Exception as e:
+                logger.error(f"[{self.channel_name}] ❌ Erreur sauvegarde position périodique: {e}")
+                time.sleep(10)
     def update_from_progress(self, progress_file):
         """
         # Met à jour la position à partir du fichier de progression FFmpeg

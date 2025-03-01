@@ -41,6 +41,7 @@ class IPTVChannel:
         self.error_handler = StreamErrorHandler(self.name)
         self.lock = threading.Lock()
         self.ready_for_streaming = False  # Indique si la chaîne est prête
+        self.total_duration = 0  # Ajouter cette ligne pour initialiser l'attribut
 
         # Initialisation des managers
         self.logger = FFmpegLogger(name)
@@ -329,23 +330,26 @@ class IPTVChannel:
             logger.error(f"[{self.name}] ❌ Erreur scan de mise à jour: {e}")
 
     def _calculate_total_duration(self) -> float:
-        """Calcule la durée totale en utilisant le PositionManager"""
         try:
             # Vérification que la liste processed_videos n'est pas vide
             if not self.processed_videos:
                 logger.warning(f"[{self.name}] ⚠️ Aucune vidéo à analyser pour le calcul de durée")
-                return 120.0  # Valeur par défaut
-                
+                self.total_duration = 120.0  # Valeur par défaut
+                return 120.0
+                    
             total_duration = self.position_manager.calculate_durations(self.processed_videos)
             if total_duration <= 0:
                 logger.warning(f"[{self.name}] ⚠️ Durée totale invalide, fallback à 120s")
+                self.total_duration = 120.0
                 return 120.0
-                
+                    
+            self.total_duration = total_duration  # Ajouter cette ligne
             return total_duration
         except Exception as e:
             logger.error(f"[{self.name}] ❌ Erreur calcul durée: {e}")
+            self.total_duration = 120.0  # Ajouter cette ligne
             return 120.0
-
+        
     def _check_segments(self, hls_dir: str) -> bool:
         """Vérifie la génération des segments HLS"""
         try:
@@ -627,11 +631,18 @@ class IPTVChannel:
 
             # Ici on récupère l'offset de démarrage, soit sauvegardé, soit aléatoire
             start_offset = self.position_manager.get_start_offset()
-            logger.info(f"[{self.name}] ⏱️ Offset de démarrage: {start_offset:.2f}s")
-            
-            # On met à jour le PlaybackPositionManager avec cet offset
-            self.position_manager.set_playback_offset(start_offset)
-            
+            # Ajoute une vérification supplémentaire
+            if self.total_duration > 0 and start_offset > self.total_duration:
+                logger.warning(f"[{self.name}] ⚠️ Offset invalide ({start_offset:.2f}s) > durée totale ({self.total_duration:.2f}s)")
+                start_offset = start_offset % self.total_duration
+                logger.info(f"[{self.name}] ⏱️ Offset corrigé: {start_offset:.2f}s")
+
+            # Synchroniser les deux managers
+            self.position_manager.set_position(start_offset)
+            self.position_manager.set_playing(True)
+            self.process_manager.set_playback_offset(start_offset)
+            self.process_manager.set_total_duration(self.position_manager.total_duration)
+
             logger.info(f"[{self.name}] Optimisation pour le matériel...")
             self.command_builder.optimize_for_hardware()
             
@@ -655,7 +666,11 @@ class IPTVChannel:
             self.position_manager.set_playing(True)
             # On définit aussi l'offset dans le process_manager
             self.process_manager.set_playback_offset(start_offset)
-            
+            # Dans IPTVChannel.py, méthode start_stream(), après set_playing(True)
+            # Lancer la sauvegarde périodique
+            if hasattr(self.position_manager, 'start_periodic_save'):
+                self.position_manager.start_periodic_save()
+                
             logger.info(f"[{self.name}] ✅ Stream démarré avec succès à la position {start_offset:.2f}s")
             return True
 
@@ -695,6 +710,8 @@ class IPTVChannel:
             logger.info(f"[{self.name}] 🛑 Arrêt du stream (dernier watcher: {time.time() - self.last_watcher_time:.1f}s)")
             
             self.position_manager.set_playing(False)
+            if hasattr(self.position_manager, 'stop_save_thread'):
+                self.position_manager.stop_save_thread.set()
             self.position_manager.save_position()
             
             self.process_manager.stop_process(save_position=True)
