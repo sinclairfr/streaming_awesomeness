@@ -99,7 +99,7 @@ class FFmpegCommandBuilder:
             with open(concat_file, "w") as f:
                 for i, video in enumerate(sorted(processed_files)):
                     f.write(f"file '{video}'\n")
-                    logger.info(f"[{self.name}] Ajout de {video.name}")
+                    logger.debug(f"[{self.name}] Ajout de {video.name}")
                     
             return concat_file
         except Exception as e:

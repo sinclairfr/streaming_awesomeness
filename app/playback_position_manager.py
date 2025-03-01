@@ -63,7 +63,7 @@ class PlaybackPositionManager:
         self.stop_save_thread = threading.Event()
         self.save_thread = threading.Thread(target=self._periodic_save_loop, daemon=True)
         self.save_thread.start()
-        logger.info(f"[{self.channel_name}] 🔄 Démarrage sauvegarde périodique position")
+        logger.info(f"[{self.channel_name}]📭 Sauvegarde périodique position")
         
     def _periodic_save_loop(self):
         """Boucle de sauvegarde périodique"""
@@ -74,6 +74,7 @@ class PlaybackPositionManager:
             except Exception as e:
                 logger.error(f"[{self.channel_name}] ❌ Erreur sauvegarde position périodique: {e}")
                 time.sleep(10)
+    
     def update_from_progress(self, progress_file):
         """
         # Met à jour la position à partir du fichier de progression FFmpeg

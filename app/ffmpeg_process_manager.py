@@ -221,7 +221,7 @@ class FFmpegProcessManager:
             daemon=True
         )
         self.monitor_thread.start()
-        logger.info(f"[{self.channel_name}] 👀 Surveillance FFmpeg démarrée")
+        logger.debug(f"[{self.channel_name}] 👀 Surveillance FFmpeg démarrée")
     
     def _monitor_process(self, hls_dir):
         """

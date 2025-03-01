@@ -70,8 +70,7 @@ class FFmpegMonitor(threading.Thread):
             
             if channel_name not in self.last_inspect_time or current_time - self.last_inspect_time[channel_name] > 300:
                 logger.info(
-                    f"On inspect la chaîne [{channel_name}], nombre de process : {len(pids)} "
-                    f"et temps depuis dernier watcher : {time_since_last_watcher:.1f}s"
+                    f"[{channel_name}] - nombre de process : {len(pids)} - temps depuis dernier watcher : {time_since_last_watcher:.1f}s"
                 )
                 self.last_inspect_time[channel_name] = current_time
 

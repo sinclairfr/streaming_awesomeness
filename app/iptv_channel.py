@@ -73,7 +73,6 @@ class IPTVChannel:
         logger.info(f"[{self.name}] 🔄 Préparation initiale de la chaîne")
         self._scan_videos()
         self._create_concat_file()
-        self._verify_playlist()
         
         # Calcul de la durée totale
         total_duration = self._calculate_total_duration()
@@ -83,10 +82,12 @@ class IPTVChannel:
         self.initial_scan_complete = True
         self.ready_for_streaming = len(self.processed_videos) > 0
         
-        logger.info(f"[{self.name}] ✅ Initialisation complète. Chaîne prête: {self.ready_for_streaming}")
+        logger.debug(f"[{self.name}] ✅ Initialisation complète. Chaîne prête: {self.ready_for_streaming}")
         
         # Maintenant que tout est initialisé, on lance le scan asynchrone pour mettre à jour en arrière-plan
         threading.Thread(target=self._scan_videos_async, daemon=True).start() 
+
+        self._verify_playlist()
 
     def _move_to_ignored(self, file_path: Path, reason: str):
         """
@@ -320,13 +321,13 @@ class IPTVChannel:
                 logger.error(f"[{self.name}] ❌ Aucune vidéo dans {ready_to_stream_dir}")
                 return None
 
-            logger.info(f"[{self.name}] 📝 Écriture de _playlist.txt")
+            logger.debug(f"[{self.name}] 📝 Écriture de _playlist.txt")
 
             with open(concat_file, "w", encoding="utf-8") as f:
                 for video in ready_files:
                     escaped_path = str(video.absolute()).replace("'", "'\\''")
                     f.write(f"file '{escaped_path}'\n")
-                    logger.info(f"[{self.name}] ✅ Ajout de {video.name}")
+                    logger.debug(f"[{self.name}] ✅ Ajout de {video.name}")
 
             logger.info(f"[{self.name}] 🎥 Playlist créée avec {len(ready_files)} fichiers")
             return concat_file
@@ -393,7 +394,7 @@ class IPTVChannel:
             logger.info(f"[{self.name}] 🚀 Démarrage du stream...")
 
             hls_dir = Path(f"/app/hls/{self.name}")
-            logger.info(f"[{self.name}] Création du répertoire HLS: {hls_dir}")
+            logger.debug(f"[{self.name}] Création du répertoire HLS: {hls_dir}")
             hls_dir.mkdir(parents=True, exist_ok=True)
             
             # Utilisation du fichier playlist déjà créé
@@ -422,13 +423,12 @@ class IPTVChannel:
             self.process_manager.set_playback_offset(start_offset)
             self.process_manager.set_total_duration(self.position_manager.total_duration)
 
-            logger.info(f"[{self.name}] Optimisation pour le matériel...")
             self.command_builder.optimize_for_hardware()
             
             logger.info(f"[{self.name}] Vérification mkv...")
             has_mkv = self.command_builder.detect_mkv_in_playlist(concat_file)
 
-            logger.info(f"[{self.name}] Construction de la commande FFmpeg...")
+            
             command = self.command_builder.build_command(
                 input_file=concat_file,
                 output_dir=hls_dir,
@@ -577,7 +577,7 @@ class IPTVChannel:
                 logger.error(f"[{self.name}] ❌ Impossible de créer {ready_to_stream_dir}: {e}")
                 return False
                 
-            logger.info(f"[{self.name}] ✅ VideoProcessor correctement initialisé")
+            logger.debug(f"[{self.name}] ✅ VideoProcessor correctement initialisé")
             return True
             
         except Exception as e:

@@ -392,7 +392,7 @@ class IPTVManager:
     def _update_master_playlist(self):
         """Effectue la mise à jour de la playlist principale"""
         playlist_path = os.path.abspath("/app/hls/playlist.m3u")
-        logger.info(f"On génère la master playlist: {playlist_path}")
+        logger.info(f"🔄 Master playlist maj.: {playlist_path}")
 
         with open(playlist_path, "w", encoding="utf-8") as f:
             f.write("#EXTM3U\n")

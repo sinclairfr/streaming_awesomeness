@@ -24,7 +24,6 @@ services:
       - apparmor:unconfined  # May be needed for full GPU access
     environment:
       - NVIDIA_VISIBLE_DEVICES=
-      - FFMPEG_HARDWARE_ACCELERATION=vaapi
       - PUID=1000
       - PGID=1000
     restart: unless-stopped

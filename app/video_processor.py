@@ -108,10 +108,10 @@ class VideoProcessor:
         self.processing_lock = threading.Lock()
         
         # Configuration GPU
-        self.USE_GPU = os.getenv('FFMPEG_HARDWARE_ACCELERATION', '').lower() == 'vaapi'
+        self.USE_GPU_FOR_ENCODING  = os.getenv('USE_GPU_FOR_ENCODING', '').lower() == 'vaapi'
         
         # Vérification du support GPU au démarrage
-        if self.USE_GPU:
+        if self.USE_GPU_FOR_ENCODING:
             self.check_gpu_support()
             
         # Démarrage du thread de traitement en arrière-plan
@@ -169,15 +169,15 @@ class VideoProcessor:
         try:
             result = subprocess.run(['vainfo'], capture_output=True, text=True)
             if result.returncode == 0 and 'VAEntrypointVLD' in result.stdout:
-                logger.info("✅ Support VAAPI détecté et activé")
+                logger.debug("✅ Support VAAPI détecté et activé")
                 return True
             else:
                 logger.warning("⚠️ VAAPI configuré mais non fonctionnel, retour au mode CPU")
-                self.USE_GPU = False
+                self.USE_GPU_FOR_ENCODING = False
                 return False
         except Exception as e:
             logger.error(f"❌ Erreur vérification VAAPI: {str(e)}")
-            self.USE_GPU = False
+            self.USE_GPU_FOR_ENCODING = False
             return False
 
     def _wait_for_file_stability(self, file_path: Path, timeout=60) -> bool:
@@ -462,7 +462,7 @@ class VideoProcessor:
 
     def get_encoding_args(self, is_streaming: bool = False) -> list:
         """Génère les arguments d'encodage selon le mode GPU/CPU"""
-        if self.USE_GPU:
+        if self.USE_GPU_FOR_ENCODING:
             args = [
                 "-c:v", "h264_vaapi",
                 "-profile:v", "main",
@@ -742,7 +742,7 @@ class VideoProcessor:
             probe_result = subprocess.run(cmd_probe, capture_output=True, text=True)
             
             # Variable pour décider si on utilise VAAPI ou pas
-            use_hardware_accel = self.USE_GPU
+            use_hardware_accel = self.USE_GPU_FOR_ENCODING
             incompatible_codecs = False
             
             try:
@@ -1420,7 +1420,7 @@ class VideoProcessor:
 
     def _can_use_vaapi(self, codec_info: dict) -> bool:
         """Détermine si on peut utiliser VAAPI pour un codec donné"""
-        if not self.USE_GPU:
+        if not self.USE_GPU_FOR_ENCODING:
             return False
             
         # Liste des codecs supportés par VAAPI

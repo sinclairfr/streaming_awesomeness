@@ -68,7 +68,7 @@ class ClientMonitor(threading.Thread):
             # Mise à jour des watchers pour les chaînes affectées
             for channel in affected_channels:
                 count = len([1 for (ch, _), _ in self.watchers.items() if ch == channel])
-                logger.warning(f"⚠️ Mise à jour {channel} : {count} watchers restants")
+                logger.warning(f"[{channel}] ⚠️ Mise à jour  : {count} watchers restants")
                 self.update_watchers(channel, count, "/hls/")
 
     def _monitor_segment_jumps(self):
