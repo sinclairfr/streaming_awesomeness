@@ -27,8 +27,8 @@ class ClientMonitor(threading.Thread):
         self.cleanup_thread.start()
         
         # Nouveau thread pour surveiller les sauts de segments
-        self.segment_monitor_thread = threading.Thread(target=self._monitor_segment_jumps, daemon=True)
-        self.segment_monitor_thread.start()
+        #self.segment_monitor_thread = threading.Thread(target=self._monitor_segment_jumps, daemon=True)
+        #self.segment_monitor_thread.start()
 
     def _cleanup_loop(self):
         """Nettoie les watchers inactifs"""
