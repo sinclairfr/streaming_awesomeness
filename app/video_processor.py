@@ -154,15 +154,6 @@ class VideoProcessor:
                 except Exception as e:
                     logger.error(f"Erreur migration {video.name}: {e}")
         
-        # On déplace les .mkv vers already_processed (ils ne devraient pas être dans ready_to_stream)
-        for video in old_processed.glob("*.mkv"):
-            dest = self.already_processed_dir / video.name
-            if not dest.exists():
-                try:
-                    shutil.move(str(video), str(dest))
-                    logger.info(f"Fichier MKV migré vers already_processed: {video.name}")
-                except Exception as e:
-                    logger.error(f"Erreur migration MKV {video.name}: {e}")
 
     def check_gpu_support(self):
         """Vérifie si le support GPU est disponible"""

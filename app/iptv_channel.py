@@ -10,7 +10,6 @@ from video_processor import VideoProcessor
 from hls_cleaner import HLSCleaner
 from ffmpeg_logger import FFmpegLogger
 from stream_error_handler import StreamErrorHandler
-from mkv_handler import MKVHandler
 from ffmpeg_command_builder import FFmpegCommandBuilder
 from ffmpeg_process_manager import FFmpegProcessManager
 from playback_position_manager import PlaybackPositionManager
@@ -57,7 +56,6 @@ class IPTVChannel:
 
         # Autres composants
         self.processor = VideoProcessor(self.video_dir)
-        self.mkv_handler = MKVHandler(self.name, logger)
         
         # Variables de surveillance
         self.processed_videos = []
@@ -315,8 +313,7 @@ class IPTVChannel:
                 
             concat_file = Path(self.video_dir) / "_playlist.txt"
 
-            # Ne prendre que les fichiers .mp4 (pas de .mkv)
-            ready_files = sorted(ready_to_stream_dir.glob("*.mp4"))
+            ready_files = sorted(ready_to_stream_dir.glob("*.*"))
             if not ready_files:
                 logger.error(f"[{self.name}] ❌ Aucune vidéo dans {ready_to_stream_dir}")
                 return None
