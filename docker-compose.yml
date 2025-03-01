@@ -23,6 +23,7 @@ services:
     security_opt:
       - apparmor:unconfined  # May be needed for full GPU access
     environment:
+      - TZ=Europe/Paris
       - NVIDIA_VISIBLE_DEVICES=
       - PUID=1000
       - PGID=1000

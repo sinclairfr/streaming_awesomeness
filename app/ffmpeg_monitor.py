@@ -11,7 +11,6 @@ from config import (
     FFMPEG_LOG_LEVEL,
     logger
 )
-
 class FFmpegMonitor(threading.Thread):
     """
     # On centralise toute la surveillance des processus FFmpeg ici
@@ -22,6 +21,7 @@ class FFmpegMonitor(threading.Thread):
         self.stop_event = threading.Event()
         self.ffmpeg_log_dir = Path("/app/logs/ffmpeg")
         self.ffmpeg_log_dir.mkdir(parents=True, exist_ok=True)
+
     # Méthode à modifier dans FFmpegMonitor pour mieux gérer les sauts de segments
     def _check_all_ffmpeg_processes(self):
         """
@@ -81,7 +81,8 @@ class FFmpegMonitor(threading.Thread):
                 elif time_since_last_watcher > TIMEOUT_NO_VIEWERS:
                     logger.warning(f"⚠️ {channel_name}: Processus FFmpeg inactif depuis {time_since_last_watcher:.1f}s")
                 
-                self.process_manager._clean_orphan_processes(force_cleanup=True)
+                #TODO fix 
+                #self.process_manager._clean_orphan_processes(force_cleanup=True)
      
     def _watchers_loop(self):
         """Surveille l'activité des watchers et arrête les streams inutilisés"""
