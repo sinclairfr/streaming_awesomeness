@@ -11,8 +11,70 @@ import time
 from typing import List, Dict, Optional, Set
 from config import logger
 
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("video_processor")
+ 
+def verify_file_ready(file_path: Path) -> bool:
+    """
+    Vérifie si un fichier vidéo est prêt et valide pour le traitement.
+    """
+    try:
+        if not file_path.exists():
+            logger.warning(f"⚠️ Fichier introuvable: {file_path}")
+            return False
+        
+        file_size = file_path.stat().st_size
+        if file_size == 0:
+            logger.warning(f"⚠️ Fichier vide: {file_path}")
+            return False
+
+        cmd = [
+            "ffprobe",
+            "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            str(file_path)
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+
+        if result.returncode != 0:
+            logger.warning(f"⚠️ Erreur ffprobe pour {file_path}: {result.stderr}")
+            return False
+
+        duration = float(result.stdout.strip())
+        if duration <= 0:
+            logger.warning(f"⚠️ Durée invalide pour {file_path}: {duration}s")
+            return False
+
+        return True
+    except Exception as e:
+        logger.error(f"❌ Erreur vérification fichier {file_path}: {e}")
+        return False
+
+def get_accurate_duration(file_path: Path) -> float:
+    """
+    Obtient la durée précise d'un fichier vidéo.
+    """
+    try:
+        cmd = [
+            "ffprobe",
+            "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            str(file_path)
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        
+        if result.returncode == 0:
+            return float(result.stdout.strip())
+        else:
+            logger.warning(f"⚠️ Erreur ffprobe durée {file_path}: {result.stderr}")
+            return 0.0
+    except Exception as e:
+        logger.error(f"❌ Erreur récupération durée {file_path}: {e}")
+        return 0.0
+
 class VideoProcessor:
     def __init__(self, channel_dir: str):
         self.channel_dir = Path(channel_dir)
@@ -745,7 +807,7 @@ class VideoProcessor:
                 use_hardware_accel = False
             
             # Déterminer la durée totale de la vidéo source
-            total_duration = self._get_video_duration(str(video_path))
+            total_duration = self.total_duration = get_accurate_duration(video_path)
             if total_duration <= 0:
                 total_duration = None
                 logger.warning(f"[{self.channel_name}] ⚠️ Impossible de déterminer la durée de {sanitized_name}")
@@ -1369,7 +1431,7 @@ class VideoProcessor:
             return True
             
         return False
-  
+
     def _move_to_ignored(self, file_path: Path, reason: str):
         """
         Déplace un fichier invalide vers le dossier 'ignored' et nettoie les fichiers temporaires

@@ -22,6 +22,7 @@ from config import (
     CONTENT_DIR,
     USE_GPU,
 )
+from video_processor import verify_file_ready, get_accurate_duration
 
 class IPTVChannel:
     """Gère une chaîne IPTV, son streaming et sa surveillance"""
@@ -86,131 +87,7 @@ class IPTVChannel:
         
         # Maintenant que tout est initialisé, on lance le scan asynchrone pour mettre à jour en arrière-plan
         threading.Thread(target=self._scan_videos_async, daemon=True).start() 
-    def _verify_file_ready(self, file_path: Path) -> bool:
-        """
-        Vérifie qu'un fichier MP4 est complet et utilisable
-        Version améliorée avec détection des atomes MOOV
-        
-        Args:
-            file_path: Chemin du fichier MP4 à vérifier
-            
-        Returns:
-            bool: True si le fichier est valide, False sinon
-        """
-        filename = file_path.name  # Extraction du nom du fichier
-        try:
-            # Vérification que le fichier existe et est de taille non nulle
-            if not file_path.exists():
-                logger.warning(f"[{self.channel_name}] ⚠️ Fichier introuvable: {filename}")
-                return False
-                
-            file_size = file_path.stat().st_size
-            if file_size == 0:
-                logger.warning(f"[{self.channel_name}] ⚠️ Fichier vide: {filename}")
-                self._move_to_ignored(file_path, "fichier vide")
-                return False
-                
-            # Vérifications supplémentaires pour les fichiers MP4
-            if file_path.suffix.lower() == '.mp4':
-                # 1. Première tentative avec ffprobe pour les métadonnées
-                cmd1 = [
-                    "ffprobe",
-                    "-v", "error",
-                    "-select_streams", "v:0",
-                    "-show_entries", "format=duration",
-                    "-of", "default=noprint_wrappers=1:nokey=1",
-                    str(file_path)
-                ]
-                
-                result1 = subprocess.run(cmd1, capture_output=True, text=True, timeout=10)
-                
-                # Vérification spécifique pour l'erreur "moov atom not found"
-                if result1.returncode != 0:
-                    if "moov atom not found" in result1.stderr:
-                        logger.warning(f"[{self.channel_name}] ⚠️ Atome MOOV manquant dans {filename}, fichier incomplet")
-                        self._move_to_ignored(file_path, f"fichier MP4 incomplet: atome MOOV manquant")
-                        return False
-                        
-                    # Autres erreurs ffprobe
-                    logger.warning(f"[{self.channel_name}] ⚠️ Erreur ffprobe pour {filename}: {result1.stderr}")
-                    
-                    # Tentative supplémentaire avec un autre type de vérification
-                    cmd2 = [
-                        "ffmpeg", 
-                        "-v", "error",
-                        "-i", str(file_path),
-                        "-f", "null",
-                        "-t", "5",  # On teste juste les 5 premières secondes
-                        "-"
-                    ]
-                    
-                    result2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=15)
-                    
-                    if result2.returncode != 0:
-                        logger.warning(f"[{self.channel_name}] ⚠️ Validation secondaire échouée pour {filename}: {result2.stderr}")
-                        self._move_to_ignored(file_path, f"erreur ffprobe: {result1.stderr}")
-                        return False
-                        
-                    # Si on arrive ici, le fichier est lisible malgré l'erreur ffprobe
-                    logger.info(f"[{self.channel_name}] ✅ {filename} lisible malgré l'erreur ffprobe")
-                    return True
-                    
-                # Vérification que la durée est valide
-                try:
-                    duration = float(result1.stdout.strip())
-                    if duration <= 0:
-                        logger.warning(f"[{self.channel_name}] ⚠️ Durée invalide pour {filename}: {duration}s")
-                        self._move_to_ignored(file_path, f"durée invalide: {duration}s")
-                        return False
-                        
-                    logger.info(f"[{self.channel_name}] ✅ Fichier MP4 valide: {filename}, durée: {duration:.2f}s")
-                    return True
-                except ValueError:
-                    logger.warning(f"[{self.channel_name}] ⚠️ Durée non numérique pour {filename}: {result1.stdout}")
-                    self._move_to_ignored(file_path, f"durée non numérique: {result1.stdout}")
-                    return False
-                    
-            # Pour les fichiers non-MP4, vérification standard
-            cmd = [
-                "ffprobe",
-                "-v", "error",
-                "-select_streams", "v:0",
-                "-show_entries", "format=duration",
-                "-of", "default=noprint_wrappers=1:nokey=1",
-                str(file_path)
-            ]
-            
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-            
-            if result.returncode != 0:
-                logger.warning(f"[{self.channel_name}] ⚠️ Erreur ffprobe pour {filename}: {result.stderr}")
-                self._move_to_ignored(file_path, f"erreur ffprobe: {result.stderr}")
-                return False
-                
-            # Vérification que la durée est valide
-            try:
-                duration = float(result.stdout.strip())
-                if duration <= 0:
-                    logger.warning(f"[{self.channel_name}] ⚠️ Durée invalide pour {filename}: {duration}s")
-                    self._move_to_ignored(file_path, f"durée invalide: {duration}s")
-                    return False
-                    
-                logger.info(f"[{self.channel_name}] ✅ Fichier valide: {filename}, durée: {duration:.2f}s")
-                return True
-            except ValueError:
-                logger.warning(f"[{self.channel_name}] ⚠️ Durée non numérique pour {filename}: {result.stdout}")
-                self._move_to_ignored(file_path, f"durée non numérique: {result.stdout}")
-                return False
-                
-        except subprocess.TimeoutExpired:
-            logger.warning(f"[{self.channel_name}] ⚠️ Timeout ffprobe pour {filename}")
-            self._move_to_ignored(file_path, "timeout ffprobe")
-            return False
-        except Exception as e:
-            logger.warning(f"[{self.channel_name}] ⚠️ Erreur vérification {filename}: {e}")
-            self._move_to_ignored(file_path, f"erreur: {str(e)}")
-            return False
-    
+
     def _move_to_ignored(self, file_path: Path, reason: str):
         """
         Déplace un fichier invalide vers le dossier 'ignored'
@@ -287,7 +164,7 @@ class IPTVChannel:
             # Vérification que les fichiers sont valides
             valid_files = []
             for video_file in mp4_files:
-                if self._verify_file_ready(video_file):
+                if verify_file_ready(video_file):
                     valid_files.append(video_file)
                 else:
                     logger.warning(f"[{self.name}] ⚠️ Fichier {video_file.name} ignoré car non valide")
@@ -423,105 +300,7 @@ class IPTVChannel:
             logger.info(f"[{self.name}] 🧹 Nettoyage des processus terminé")
         except Exception as e:
             logger.error(f"[{self.name}] ❌ Erreur nettoyage processus: {e}")              
-    
-    def _get_accurate_duration(self, video_path: Path) -> float:
-        """
-        Obtient la durée précise d'un fichier vidéo avec plusieurs tentatives
-        et cache des résultats pour performance
-        """
-        # Utilisation d'un cache interne
-        if not hasattr(self, '_duration_cache'):
-            self._duration_cache = {}
-            
-        video_str = str(video_path)
-        if video_str in self._duration_cache:
-            return self._duration_cache[video_str]
-        
-        # Vérification que le fichier est stable avant de lire la durée
-        if hasattr(self, 'processor') and hasattr(self.processor, '_wait_for_file_stability'):
-            is_stable = self.processor._wait_for_file_stability(video_path, timeout=15)
-            if not is_stable:
-                logger.warning(f"[{self.name}] ⚠️ Fichier instable pour mesure de durée: {video_path.name}")
-                time.sleep(2)  # Pause supplémentaire
-                
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                # Paramètres plus robustes pour ffprobe
-                cmd = [
-                    "ffprobe",
-                    "-v", "error",
-                    "-analyzeduration", "20M",  # Réduit le temps d'analyse pour un équilibre entre performance et précision
-                    "-probesize", "50M",        # Réduit la taille analysée pour un équilibre similaire
-                    "-i", str(video_path),      # Explicite le fichier d'entrée
-                    "-show_entries", "format=duration",
-                    "-of", "default=noprint_wrappers=1:nokey=1"
-                ]
-            
-                logger.warning(f"[{self.name}] ⚠️ Tentative {attempt+1}/{max_retries} pour {video_path}")
-                
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-                
-                if result.returncode == 0 and result.stdout.strip():
-                    try:
-                        duration = float(result.stdout.strip())
-                        if duration > 0:
-                            # Arrondir à 3 décimales pour éviter erreurs d'imprécision
-                            duration = round(duration, 3)
-                            self._duration_cache[video_str] = duration
-                            return duration
-                    except ValueError:
-                        logger.error(f"[{self.name}] ❌ Valeur non numérique: {result.stdout}")
-                else:
-                    # Log plus verbeux de l'erreur
-                    if result.stderr:
-                        logger.error(f"[{self.name}] ❌ Erreur ffprobe: {result.stderr}")
-                    else:
-                        logger.error(f"[{self.name}] ❌ Échec sans message d'erreur, code: {result.returncode}")
-                
-                # Alternative avec approche différente si échoue
-                if attempt == max_retries - 2:  # Avant-dernière tentative
-                    try:
-                        alternate_cmd = [
-                            "ffmpeg", "-i", str(video_path), 
-                            "-f", "null", "-"
-                        ]
-                        
-                        # Exécute ffmpeg pour lire le fichier entier
-                        alt_result = subprocess.run(
-                            alternate_cmd,
-                            capture_output=True,
-                            text=True,
-                            timeout=20
-                        )
-                        
-                        # Cherche la durée dans la sortie d'erreur
-                        if alt_result.stderr:
-                            duration_match = re.search(r'Duration: (\d{2}):(\d{2}):(\d{2})\.(\d{2})', alt_result.stderr)
-                            if duration_match:
-                                h, m, s, ms = map(int, duration_match.groups())
-                                duration = h * 3600 + m * 60 + s + ms / 100
-                                self._duration_cache[video_str] = duration
-                                return duration
-                    except Exception as e:
-                        logger.error(f"[{self.name}] ❌ Erreur méthode alternative: {e}")
-                
-                # Pause entre les tentatives
-                time.sleep(2)
-                
-            except subprocess.TimeoutExpired:
-                logger.error(f"[{self.name}] ❌ Timeout ffprobe pour {video_path.name}")
-                time.sleep(2)
-            except Exception as e:
-                logger.error(f"[{self.name}] ❌ Erreur ffprobe durée {video_path.name}: {e}")
-                time.sleep(2)
-        
-        # Valeur par défaut si impossible de déterminer la durée
-        logger.error(f"[{self.name}] ❌ Impossible d'obtenir la durée pour {video_path.name}, utilisation valeur par défaut")
-        default_duration = 3600.0  # 1 heure par défaut
-        self._duration_cache[video_str] = default_duration
-        return default_duration
-    
+
     def _create_concat_file(self) -> Optional[Path]:
         """Crée le fichier de concaténation avec les bons chemins"""
         try:

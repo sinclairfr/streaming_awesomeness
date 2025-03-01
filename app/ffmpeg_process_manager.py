@@ -167,60 +167,43 @@ class FFmpegProcessManager:
         # On nettoie tous les autres processus qui pourraient traîner
         self._clean_orphan_processes()
     
-    def _clean_orphan_processes(self):
+    def _clean_orphan_processes(self, force_cleanup=False):
         """
-        # Nettoie les processus FFmpeg orphelins pour cette chaîne
+        Nettoie les processus FFmpeg orphelins pour cette chaîne.
+        Si force_cleanup est True, on applique une suppression plus agressive.
         """
         try:
-            # On récupère tous les processus FFmpeg actifs
             ffmpeg_processes = []
-            
             for proc in psutil.process_iter(attrs=["pid", "name", "cmdline"]):
                 try:
-                    # Si c'est un processus FFmpeg
                     if "ffmpeg" in proc.info["name"].lower():
-                        # Et s'il contient le nom de notre chaîne dans sa ligne de commande
                         cmd_args = proc.info["cmdline"] or []
                         cmd_str = " ".join(str(arg) for arg in cmd_args)
-                        
                         if f"/hls/{self.channel_name}/" in cmd_str:
                             ffmpeg_processes.append(proc.info["pid"])
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     continue
-            
-            # On différencie le processus actuel (si on en a un)
+
             current_pid = self.process.pid if self.process and self.process.poll() is None else None
-            
-            # Pour chaque PID, on vérifie s'il faut le tuer
+
             for pid in ffmpeg_processes:
                 if pid == current_pid:
-                    continue  # On ne tue pas notre processus actif
+                    continue  # On ne tue pas le processus en cours d'utilisation
                 
                 try:
-                    # On essaie de tuer proprement avec SIGTERM
                     logger.info(f"[{self.channel_name}] 🔪 Nettoyage du processus orphelin {pid}")
                     os.kill(pid, signal.SIGTERM)
-                    
-                    # On donne 2 secondes pour mourir
                     time.sleep(2)
-                    
-                    # Si toujours en vie, on force avec SIGKILL
-                    if psutil.pid_exists(pid):
+                    if psutil.pid_exists(pid) and force_cleanup:
                         logger.warning(f"[{self.channel_name}] ⚠️ Processus {pid} résistant, envoi de SIGKILL")
                         os.kill(pid, signal.SIGKILL)
-                        
-                    # On retire ce PID des actifs
-                    self.active_pids.discard(pid)
-                    
                 except ProcessLookupError:
-                    # Le processus n'existe plus
-                    self.active_pids.discard(pid)
+                    pass
                 except Exception as e:
                     logger.error(f"[{self.channel_name}] ❌ Erreur nettoyage processus {pid}: {e}")
-        
         except Exception as e:
             logger.error(f"[{self.channel_name}] ❌ Erreur nettoyage global: {e}")
-    
+  
     def _start_monitoring(self, hls_dir):
         """
         # Démarre le thread de surveillance du processus FFmpeg
