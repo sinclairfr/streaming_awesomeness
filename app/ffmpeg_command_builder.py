@@ -45,6 +45,19 @@ class FFmpegCommandBuilder:
         try:
             logger.info(f"[{self.channel_name}] 🛠️ Construction de la commande FFmpeg...")
             
+            if playback_offset > 0:
+                # Créer un filtre complexe pour le seek
+                input_params = [
+                    "ffmpeg", "-hide_banner", "-loglevel", FFMPEG_LOG_LEVEL, "-y",
+                    "-thread_queue_size", "8192", "-analyzeduration", "20M", "-probesize", "20M",
+                    "-f", "concat", "-safe", "0", "-i", str(input_file),
+                    "-ss", f"{playback_offset:.2f}",  # Le -ss après l'input pour meilleure précision
+                    "-fflags", "+genpts+igndts+discardcorrupt",
+                    "-re", "-stream_loop", "-1"
+                ]
+            else:
+                input_params = self.build_input_params(input_file, 0, progress_file)
+            
             # Construction des parties de la commande
             input_params = self.build_input_params(input_file, playback_offset, progress_file)
             encoding_params = self.build_encoding_params(has_mkv)
@@ -123,103 +136,51 @@ class FFmpegCommandBuilder:
                         
         except Exception as e:
             logger.error(f"[{self.name}] Erreur renommage global: {e}")    
-    
+   
     def build_input_params(self, input_file, playback_offset=0, progress_file=None):
-        """
-        # Construit les paramètres d'entrée
-        """
+        """Construit les paramètres d'entrée avec meilleure gestion du buffer"""
         params = [
             "ffmpeg",
             "-hide_banner",
             "-loglevel", FFMPEG_LOG_LEVEL,
-            "-y",                      # Écrase les fichiers existants
-            "-thread_queue_size", "8192",  # Buffer d'entrée plus grand
-            "-analyzeduration", "20M",  # Plus de temps pour analyser
-            "-probesize", "20M",       # Plus de données pour l'analyse
-            "-re",                     # Lecture en temps réel
-            "-stream_loop", "-1",      # Boucle infinie sur l'entrée
-            "-fflags", "+genpts+igndts+discardcorrupt+fastseek",  # Options de robustesse
-            "-threads", "4",           # Limite le nombre de threads
-            "-avoid_negative_ts", "make_zero"  # Évite les timestamps négatifs
+            "-y"
         ]
         
-        # Ajout du fichier de progression si fourni
-        if progress_file:
-            params.extend(["-progress", str(progress_file)])
+        # Paramètres de buffer augmentés
+        params.extend([
+            "-thread_queue_size", "8192",
+            "-analyzeduration", "20M", 
+            "-probesize", "20M"
+        ])
         
-        # Ajout de l'offset si spécifié
+        # Ajout de l'offset AVANT l'input
         if playback_offset > 0:
             params.extend([
-                "-ss", f"{playback_offset:.2f}",
-                "-noaccurate_seek"  # Seek plus rapide
+                "-ss", f"{playback_offset:.2f}"
             ])
+        
+        # Suite des paramètres
+        params.extend([
+            "-re",
+            "-stream_loop", "-1",
+            "-fflags", "+genpts+igndts+discardcorrupt+fastseek",
+            "-threads", "4",
+            "-avoid_negative_ts", "make_zero"
+        ])
+        
+        # Ajout du fichier de progression
+        if progress_file:
+            params.extend(["-progress", str(progress_file)])
         
         # Ajout du fichier d'entrée
         params.extend([
             "-f", "concat",
             "-safe", "0",
-            "-segment_time_metadata", "1",  # Pour une meilleure segmentation
+            "-segment_time_metadata", "1",
             "-i", str(input_file)
         ])
         
-        return params
-    
-    def build_encoding_params(self, has_mkv=False):
-        """
-        # Construit les paramètres d'encodage adaptés
-        """
-        # Si on a des MKV, on utilise des paramètres optimisés
-        if has_mkv:
-            logger.info(f"[{self.channel_name}] 📼 Paramètres optimisés pour MKV")
-            
-            # Paramètres de base
-            params = [
-                "-c:v", "h264_vaapi" if self.use_gpu else "libx264",
-                "-profile:v", "main",
-                "-preset", "fast",
-                "-level", "4.1",
-                "-b:v", self.video_bitrate,
-                "-maxrate", self.max_bitrate,
-                "-bufsize", self.buffer_size,
-                "-g", str(self.gop_size),
-                "-keyint_min", str(self.keyint_min),
-                "-sc_threshold", "0",  # Désactive la détection de changement de scène
-                "-force_key_frames", "expr:gte(t,n_forced*2)"  # Force des keyframes toutes les 2s
-            ]
-            
-            # Paramètres GPU si activé
-            if self.use_gpu:
-                params.extend([
-                    "-vf", "format=nv12|vaapi,hwupload",
-                    "-low_power", "1"  # Mode basse consommation
-                ])
-            
-            # Paramètres audio
-            params.extend([
-                "-c:a", "aac",
-                "-b:a", "192k",
-                "-ar", "48000",
-                "-ac", "2"
-            ])
-            
-            # Désactivation des sous-titres et pistes de données
-            params.extend([
-                "-sn",  # Pas de sous-titres
-                "-dn"   # Pas de flux de données
-            ])
-            
-        # Mode copie pour fichiers déjà normalisés
-        else:
-            logger.info(f"[{self.channel_name}] 📄 Mode copie simple")
-            params = [
-                "-c:v", "copy",  # Copie du flux vidéo
-                "-c:a", "copy",  # Copie du flux audio
-                "-sn",          # Pas de sous-titres
-                "-dn",          # Pas de flux de données
-                "-max_muxing_queue_size", "1024"  # Évite les erreurs de muxing
-            ]
-        
-        return params
+        return params 
     
     # Mise à jour de la méthode build_hls_params dans ffmpeg_command_builder.py
     def build_hls_params(self, output_dir):
@@ -300,10 +261,10 @@ class FFmpegCommandBuilder:
                 "-dn",               # Pas de flux de données
                 "-map", "0:v:0",     # Map uniquement le premier flux vidéo
                 "-map", "0:a:0?",    # Map uniquement le premier flux audio s'il existe
-                "-max_muxing_queue_size", "2048"  # Évite les erreurs de muxing
+                "-max_muxing_queue_size", "4096"  # Augmenté de 2048 à 4096
             ]
         
-        return params  
+        return params
         
     def build_fallback_command(self, input_file, output_dir):
         """

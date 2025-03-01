@@ -38,7 +38,16 @@ class PlaybackPositionManager:
         
         # Chargement de l'état précédent
         self._load_state()
-    
+    # Ajouter cette méthode à PlaybackPositionManager (playback_position_manager.py)
+    def set_playback_offset(self, offset):
+        """
+        # Définit l'offset de lecture
+        """
+        with self.lock:
+            self.playback_offset = offset
+            self.last_playback_time = time.time()
+            self._save_state()    
+            
     def update_from_progress(self, progress_file):
         """
         # Met à jour la position à partir du fichier de progression FFmpeg

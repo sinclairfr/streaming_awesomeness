@@ -1261,7 +1261,7 @@ class VideoProcessor:
             framerate = video_stream.get("r_frame_rate", "0/1").split("/")
             fps = round(int(framerate[0]) / int(framerate[1])) if len(framerate) == 2 else 0
 
-            audio_codec = audio_stream.get("codec_name").lower() if audio_stream else "none"
+            audio_codec = audio_stream.get("codec_name", "").lower() if audio_stream else "none"
 
             logger.info(f"🎥 Codec: {codec}, Résolution: {width}x{height}, FPS: {fps}, Audio: {audio_codec}")
 
@@ -1323,7 +1323,7 @@ class VideoProcessor:
         except Exception as e:
             logger.error(f"❌ Erreur générale vérification optimisation: {str(e)}")
             return False
-    
+
     def stop(self):
         """Arrête proprement le thread de traitement"""
         self.stop_processing.set()

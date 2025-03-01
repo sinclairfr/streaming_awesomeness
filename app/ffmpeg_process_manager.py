@@ -48,8 +48,10 @@ class FFmpegProcessManager:
                 # Préparation du log si disponible
                 log_file = None
                 if self.logger_instance:
-                    log_file = open(self.logger_instance.get_main_log_file(), "a", buffering=1)
-                    logger.info(f"[{self.channel_name}] 📝 Logs FFmpeg -> {self.logger_instance.get_main_log_file()}")
+                    log_path = self.logger_instance.get_main_log_file()
+                    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+                    log_file = open(log_path, "a", buffering=1)
+                    logger.info(f"[{self.channel_name}] 📝 Logs FFmpeg -> {log_path}")
                 
                 # Lancement du processus
                 logger.info(f"[{self.channel_name}] 🚀 Lancement FFmpeg: {' '.join(command)}")

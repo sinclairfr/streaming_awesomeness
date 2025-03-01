@@ -602,15 +602,7 @@ class IPTVChannel:
     def start_stream(self) -> bool:
         """Démarre le stream avec FFmpeg en utilisant les nouvelles classes"""
         try:
-            # Si le scan initial n'est pas terminé ou si la chaîne n'est pas prête, on attend
-            if not self.initial_scan_complete:
-                logger.info(f"[{self.name}] ⏳ Attente de la fin du scan initial...")
-                # On attend au maximum 10 secondes
-                for _ in range(10):
-                    time.sleep(1)
-                    if self.initial_scan_complete:
-                        break
-                        
+            # Vérification rapide que la chaîne est prête
             if not self.ready_for_streaming:
                 logger.warning(f"[{self.name}] ⚠️ Chaîne non prête pour le streaming (pas de vidéos)")
                 return False
@@ -620,17 +612,25 @@ class IPTVChannel:
             hls_dir = Path(f"/app/hls/{self.name}")
             logger.info(f"[{self.name}] Création du répertoire HLS: {hls_dir}")
             hls_dir.mkdir(parents=True, exist_ok=True)
-        
-            concat_file = self._create_concat_file()
+            
+            # Utilisation du fichier playlist déjà créé
+            concat_file = Path(self.video_dir) / "_playlist.txt"
+            if not concat_file.exists():
+                # Recréation en cas d'absence
+                concat_file = self._create_concat_file()
+                
             if not concat_file or not concat_file.exists():
                 logger.error(f"[{self.name}] ❌ _playlist.txt introuvable")
                 return False
             else:
                 logger.info(f"[{self.name}] ✅ _playlist.txt trouvé")
-            
 
+            # Ici on récupère l'offset de démarrage, soit sauvegardé, soit aléatoire
             start_offset = self.position_manager.get_start_offset()
-            logger.info(f"[{self.name}] Décalage de démarrage: {start_offset}")
+            logger.info(f"[{self.name}] ⏱️ Offset de démarrage: {start_offset:.2f}s")
+            
+            # On met à jour le PlaybackPositionManager avec cet offset
+            self.position_manager.set_playback_offset(start_offset)
             
             logger.info(f"[{self.name}] Optimisation pour le matériel...")
             self.command_builder.optimize_for_hardware()
@@ -642,7 +642,7 @@ class IPTVChannel:
             command = self.command_builder.build_command(
                 input_file=concat_file,
                 output_dir=hls_dir,
-                playback_offset=start_offset,
+                playback_offset=start_offset,  # On passe bien l'offset ici
                 progress_file=self.logger.get_progress_file(),
                 has_mkv=has_mkv
             )
@@ -651,9 +651,12 @@ class IPTVChannel:
                 logger.error(f"[{self.name}] ❌ Échec démarrage FFmpeg")
                 return False
                 
+            # On indique au position_manager que la lecture est en cours
             self.position_manager.set_playing(True)
+            # On définit aussi l'offset dans le process_manager
+            self.process_manager.set_playback_offset(start_offset)
             
-            logger.info(f"[{self.name}] ✅ Stream démarré avec succès")
+            logger.info(f"[{self.name}] ✅ Stream démarré avec succès à la position {start_offset:.2f}s")
             return True
 
         except Exception as e:
@@ -682,64 +685,7 @@ class IPTVChannel:
         except Exception as e:
             logger.error(f"Erreur lors du redémarrage de {self.name}: {e}")
             return False    
-    
-    def start_stream(self) -> bool:
-        """Démarre le stream avec FFmpeg en utilisant les nouvelles classes"""
-        try:
-            # Vérification rapide que la chaîne est prête
-            if not self.ready_for_streaming:
-                logger.warning(f"[{self.name}] ⚠️ Chaîne non prête pour le streaming (pas de vidéos)")
-                return False
-
-            logger.info(f"[{self.name}] 🚀 Démarrage du stream...")
-
-            hls_dir = Path(f"/app/hls/{self.name}")
-            logger.info(f"[{self.name}] Création du répertoire HLS: {hls_dir}")
-            hls_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Utilisation du fichier playlist déjà créé
-            concat_file = Path(self.video_dir) / "_playlist.txt"
-            if not concat_file.exists():
-                # Recréation en cas d'absence
-                concat_file = self._create_concat_file()
-                
-            if not concat_file or not concat_file.exists():
-                logger.error(f"[{self.name}] ❌ _playlist.txt introuvable")
-                return False
-            else:
-                logger.info(f"[{self.name}] ✅ _playlist.txt trouvé")
-
-            start_offset = self.position_manager.get_start_offset()
-            logger.info(f"[{self.name}] Décalage de démarrage: {start_offset}")
-            
-            logger.info(f"[{self.name}] Optimisation pour le matériel...")
-            self.command_builder.optimize_for_hardware()
-            
-            logger.info(f"[{self.name}] Vérification mkv...")
-            has_mkv = self.command_builder.detect_mkv_in_playlist(concat_file)
-
-            logger.info(f"[{self.name}] Construction de la commande FFmpeg...")
-            command = self.command_builder.build_command(
-                input_file=concat_file,
-                output_dir=hls_dir,
-                playback_offset=start_offset,
-                progress_file=self.logger.get_progress_file(),
-                has_mkv=has_mkv
-            )
-            
-            if not self.process_manager.start_process(command, hls_dir):
-                logger.error(f"[{self.name}] ❌ Échec démarrage FFmpeg")
-                return False
-                
-            self.position_manager.set_playing(True)
-            
-            logger.info(f"[{self.name}] ✅ Stream démarré avec succès")
-            return True
-
-        except Exception as e:
-            logger.error(f"Erreur démarrage stream {self.name}: {e}")
-            return False
-        
+       
     def stop_stream_if_needed(self):
         """Arrête proprement le stream en utilisant les managers"""
         try:
