@@ -291,7 +291,6 @@ class IPTVManager:
         except Exception as e:
             logger.error(f"Erreur nettoyage initial: {e}")
 
-
     def scan_channels(self, force: bool = False, initial: bool = False):
         """
         Scanne le contenu pour détecter les nouveaux dossiers (chaînes).

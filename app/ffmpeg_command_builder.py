@@ -207,65 +207,48 @@ class FFmpegCommandBuilder:
         """
         # Construit les paramètres d'encodage adaptés
         """
-        # Si on a des MKV, on utilise des paramètres optimisés
-        if has_mkv:
-            logger.info(f"[{self.channel_name}] 📼 Paramètres optimisés pour MKV")
-            
-            # Paramètres de base
-            params = [
-                "-c:v", "h264_vaapi" if self.use_gpu else "libx264",
-                "-profile:v", "main",
-                "-preset", "fast",
-                "-level", "4.1",
-                "-b:v", self.video_bitrate,
-                "-maxrate", self.max_bitrate,
-                "-bufsize", self.buffer_size,
-                "-g", str(self.gop_size),
-                "-keyint_min", str(self.keyint_min),
-                "-sc_threshold", "0",  # Désactive la détection de changement de scène
-                "-force_key_frames", "expr:gte(t,n_forced*2)"  # Force des keyframes toutes les 2s
-            ]
-            
-            # Paramètres GPU si activé
-            if self.use_gpu:
-                params.extend([
-                    "-vf", "format=nv12|vaapi,hwupload",
-                    "-low_power", "1"  # Mode basse consommation
-                ])
-            
-            # Paramètres audio
+        logger.info(f"[{self.channel_name}] 📼 Paramètres d'encodage normalisés")
+        
+        # Paramètres de base
+        params = [
+            "-c:v", "h264_vaapi" if self.use_gpu else "libx264",
+            "-profile:v", "main",
+            "-preset", "fast",
+            "-level", "4.1",
+            "-b:v", self.video_bitrate,
+            "-maxrate", self.max_bitrate,
+            "-bufsize", self.buffer_size,
+            "-g", str(self.gop_size),
+            "-keyint_min", str(self.keyint_min),
+            "-sc_threshold", "0",  # Désactive la détection de changement de scène
+            "-force_key_frames", "expr:gte(t,n_forced*2)"  # Force des keyframes toutes les 2s
+        ]
+        
+        # Paramètres GPU si activé
+        if self.use_gpu:
             params.extend([
-                "-c:a", "aac",
-                "-b:a", "192k",
-                "-ar", "48000",
-                "-ac", "2"  # Force stereo
+                "-vf", "format=nv12|vaapi,hwupload",
+                "-low_power", "1"  # Mode basse consommation
             ])
-            
-            # Désactivation explicite des sous-titres et pistes de données
-            params.extend([
-                "-sn",  # Pas de sous-titres
-                "-dn",  # Pas de flux de données
-                "-map", "0:v:0",  # Map uniquement le premier flux vidéo
-                "-map", "0:a:0"   # Map uniquement le premier flux audio
-            ])
-            
-        # Mode copie pour fichiers déjà normalisés
-        else:
-            logger.info(f"[{self.channel_name}] 📄 Mode copie optimisé")
-            params = [
-                "-c:v", "copy",      # Copie du flux vidéo
-                "-c:a", "aac",       # Force conversion audio en AAC
-                "-b:a", "192k",      # Bitrate audio constant
-                "-ac", "2",          # Force stereo
-                "-sn",               # Pas de sous-titres
-                "-dn",               # Pas de flux de données
-                "-map", "0:v:0",     # Map uniquement le premier flux vidéo
-                "-map", "0:a:0?",    # Map uniquement le premier flux audio s'il existe
-                "-max_muxing_queue_size", "4096"  # Augmenté de 2048 à 4096
-            ]
+        
+        # Paramètres audio
+        params.extend([
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-ar", "48000",
+            "-ac", "2"  # Force stereo
+        ])
+        
+        # Désactivation explicite des sous-titres et pistes de données
+        params.extend([
+            "-sn",  # Pas de sous-titres
+            "-dn",  # Pas de flux de données
+            "-map", "0:v:0",  # Map uniquement le premier flux vidéo
+            "-map", "0:a:0"   # Map uniquement le premier flux audio
+        ])
         
         return params
-        
+
     def build_fallback_command(self, input_file, output_dir):
         """
         # Construit une commande minimale en cas d'erreur
@@ -331,29 +314,3 @@ class FFmpegCommandBuilder:
         except Exception as e:
             logger.error(f"[{self.channel_name}] ❌ Erreur optimisation hardware: {e}")
             return False
-    
-    def set_hls_params(self, hls_time=None, hls_list_size=None, hls_delete_threshold=None):
-        """
-        # Personnalise les paramètres HLS
-        """
-        if hls_time is not None:
-            self.hls_time = hls_time
-        if hls_list_size is not None:
-            self.hls_list_size = hls_list_size
-        if hls_delete_threshold is not None:
-            self.hls_delete_threshold = hls_delete_threshold
-    
-    def set_video_params(self, video_bitrate=None, max_bitrate=None, buffer_size=None, gop_size=None, keyint_min=None):
-        """
-        # Personnalise les paramètres vidéo
-        """
-        if video_bitrate is not None:
-            self.video_bitrate = video_bitrate
-        if max_bitrate is not None:
-            self.max_bitrate = max_bitrate
-        if buffer_size is not None:
-            self.buffer_size = buffer_size
-        if gop_size is not None:
-            self.gop_size = gop_size
-        if keyint_min is not None:
-            self.keyint_min = keyint_min

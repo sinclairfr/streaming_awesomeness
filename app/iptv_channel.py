@@ -87,44 +87,6 @@ class IPTVChannel:
 
         self._verify_playlist()
 
-    def _move_to_ignored(self, file_path: Path, reason: str):
-        """
-        Déplace un fichier invalide vers le dossier 'ignored'
-        
-        Args:
-            file_path: Chemin du fichier à déplacer
-            reason: Raison de l'invalidité du fichier
-        """
-        try:
-            # S'assurer que le dossier ignored existe
-            ignored_dir = Path(self.video_dir) / "ignored"
-            ignored_dir.mkdir(parents=True, exist_ok=True)
-                
-            # Créer le chemin de destination
-            dest_path = ignored_dir / file_path.name
-            
-            # Si le fichier de destination existe déjà, ajouter un suffixe
-            if dest_path.exists():
-                base_name = dest_path.stem
-                suffix = dest_path.suffix
-                timestamp = time.strftime("%Y%m%d_%H%M%S")
-                dest_path = ignored_dir / f"{base_name}_{timestamp}{suffix}"
-                
-            # Déplacer le fichier
-            if file_path.exists():
-                shutil.move(str(file_path), str(dest_path))
-                
-                # Créer un fichier de log à côté avec la raison
-                log_path = ignored_dir / f"{dest_path.stem}_reason.txt"
-                with open(log_path, "w") as f:
-                    f.write(f"Fichier ignoré le {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-                    f.write(f"Raison: {reason}\n")
-                    
-                logger.info(f"[{self.channel_name}] 🚫 Fichier {file_path.name} déplacé vers ignored: {reason}")
-                
-        except Exception as e:
-            logger.error(f"[{self.channel_name}] ❌ Erreur déplacement fichier vers ignored: {e}")
-
     def _scan_videos(self) -> bool:
         """Scanne les fichiers vidéos et met à jour processed_videos"""
         try:
@@ -313,7 +275,7 @@ class IPTVChannel:
                 
             concat_file = Path(self.video_dir) / "_playlist.txt"
 
-            ready_files = sorted(ready_to_stream_dir.glob("*.*"))
+            ready_files = sorted(ready_to_stream_dir.glob("*.mp4"))
             if not ready_files:
                 logger.error(f"[{self.name}] ❌ Aucune vidéo dans {ready_to_stream_dir}")
                 return None
@@ -597,7 +559,6 @@ class IPTVChannel:
         if self.logger:
             self.logger.log_segment(segment_path, size)
             
-    # Méthode à ajouter à la classe IPTVChannel pour améliorer la gestion des sauts de segments
     def report_segment_jump(self, prev_segment: int, curr_segment: int):
         """
         Gère les sauts détectés dans les segments HLS avec une meilleure logique
@@ -653,3 +614,42 @@ class IPTVChannel:
         """Force un nouveau scan des vidéos"""
         threading.Thread(target=self._scan_videos_async, daemon=True).start()
         return True
+    
+    def _move_to_ignored(self, file_path: Path, reason: str):
+        """
+        Déplace un fichier invalide vers le dossier 'ignored'
+        
+        Args:
+            file_path: Chemin du fichier à déplacer
+            reason: Raison de l'invalidité du fichier
+        """
+        try:
+            # S'assurer que le dossier ignored existe
+            ignored_dir = Path(self.video_dir) / "ignored"
+            ignored_dir.mkdir(parents=True, exist_ok=True)
+                
+            # Créer le chemin de destination
+            dest_path = ignored_dir / file_path.name
+            
+            # Si le fichier de destination existe déjà, ajouter un suffixe
+            if dest_path.exists():
+                base_name = dest_path.stem
+                suffix = dest_path.suffix
+                timestamp = time.strftime("%Y%m%d_%H%M%S")
+                dest_path = ignored_dir / f"{base_name}_{timestamp}{suffix}"
+                
+            # Déplacer le fichier
+            if file_path.exists():
+                shutil.move(str(file_path), str(dest_path))
+                
+                # Créer un fichier de log à côté avec la raison
+                log_path = ignored_dir / f"{dest_path.stem}_reason.txt"
+                with open(log_path, "w") as f:
+                    f.write(f"Fichier ignoré le {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    f.write(f"Raison: {reason}\n")
+                    
+                logger.info(f"[{self.channel_name}] 🚫 Fichier {file_path.name} déplacé vers ignored: {reason}")
+                
+        except Exception as e:
+            logger.error(f"[{self.channel_name}] ❌ Erreur déplacement fichier vers ignored: {e}")
+
