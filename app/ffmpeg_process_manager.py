@@ -7,7 +7,7 @@ import threading
 import subprocess
 from pathlib import Path
 from config import logger
-
+import traceback
 
 class FFmpegProcessManager:
     """
@@ -166,52 +166,55 @@ class FFmpegProcessManager:
         
         # On nettoie tous les autres processus qui pourraient traîner
         self._clean_orphan_processes()
-    
-    def _clean_orphan_processes(self, force_cleanup=False):
-        """
-        Nettoie les processus FFmpeg orphelins pour cette chaîne.
-        Si force_cleanup est True, on applique une suppression plus agressive.
-        """
+  
+    def _clean_orphan_processes(self, force_cleanup=True):
+        """Nettoie brutalement les processus FFmpeg orphelins"""
         try:
-            ffmpeg_processes = []
-            for proc in psutil.process_iter(attrs=["pid", "name", "cmdline"]):
-                try:
-                    if "ffmpeg" in proc.info["name"].lower():
-                        cmd_args = proc.info["cmdline"] or []
-                        cmd_str = " ".join(str(arg) for arg in cmd_args)
-                        if f"/hls/{self.channel_name}/" in cmd_str:
-                            ffmpeg_processes.append(proc.info["pid"])
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    continue
-
-            current_pid = self.process.pid if self.process and self.process.poll() is None else None
-
-            for pid in ffmpeg_processes:
-                if pid == current_pid:
-                    continue  # On ne tue pas le processus en cours d'utilisation
+            # Recherche tous les processus FFmpeg liés à cette chaîne
+            pattern = f"/hls/{self.channel_name}/"
+            
+            # Utilise directement ps et grep pour trouver les PID, puis kill -9
+            try:
+                cmd = f"ps aux | grep ffmpeg | grep '{pattern}' | grep -v grep | awk '{{print $2}}'"
+                pids = subprocess.check_output(cmd, shell=True).decode().strip().split('\n')
                 
+                for pid in pids:
+                    if pid.strip():
+                        try:
+                            # Kill -9 direct, sans états d'âme
+                            kill_cmd = f"kill -9 {pid}"
+                            subprocess.run(kill_cmd, shell=True)
+                            logger.info(f"[{self.channel_name}] 🔪 Processus {pid} tué avec kill -9")
+                        except Exception as e:
+                            logger.error(f"[{self.channel_name}] Erreur kill -9 {pid}: {e}")
+            except Exception as e:
+                logger.error(f"[{self.channel_name}] Erreur recherche processus: {e}")
+                
+            # Approche alternative avec psutil comme backup
+            for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
                 try:
-                    logger.info(f"[{self.channel_name}] 🔪 Nettoyage du processus orphelin {pid}")
-                    os.kill(pid, signal.SIGTERM)
-                    time.sleep(2)
-                    if psutil.pid_exists(pid) and force_cleanup:
-                        logger.warning(f"[{self.channel_name}] ⚠️ Processus {pid} résistant, envoi de SIGKILL")
-                        os.kill(pid, signal.SIGKILL)
-                except ProcessLookupError:
+                    if 'ffmpeg' in proc.info['name']:
+                        cmdline = ' '.join(proc.info['cmdline'] or [])
+                        if pattern in cmdline:
+                            proc.kill()  # SIGKILL directement
+                            logger.info(f"[{self.channel_name}] 🔪 Processus {proc.info['pid']} tué via psutil")
+                except Exception:
                     pass
-                except Exception as e:
-                    logger.error(f"[{self.channel_name}] ❌ Erreur nettoyage processus {pid}: {e}")
+                    
         except Exception as e:
             logger.error(f"[{self.channel_name}] ❌ Erreur nettoyage global: {e}")
   
     def _start_monitoring(self, hls_dir):
-        """
-        # Démarre le thread de surveillance du processus FFmpeg
-        """
+        """Démarre le thread de surveillance du processus FFmpeg"""
         if self.monitor_thread and self.monitor_thread.is_alive():
             # On arrête d'abord le thread existant
             self.stop_monitoring.set()
-            self.monitor_thread.join(timeout=3)
+            # Évite le join sur le thread courant
+            if self.monitor_thread != threading.current_thread():
+                try:
+                    self.monitor_thread.join(timeout=3)
+                except RuntimeError:
+                    logger.warning(f"[{self.channel_name}] Impossible de joindre le thread (thread courant)")
             self.stop_monitoring.clear()
         
         # On crée et démarre le nouveau thread

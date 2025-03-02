@@ -322,17 +322,20 @@ class VideoProcessor:
                     
                     # Met à jour le statut dans le manager
                     with manager.scan_lock:
+                        old_status = manager.channel_ready_status.get(channel_name, False)
                         manager.channel_ready_status[channel_name] = True
+                        
+                        # Si le statut a changé, on force la mise à jour de la playlist maître
+                        if not old_status:
+                            logger.info(f"[{channel_name}] ✅ Chaîne nouvellement prête, mise à jour de la playlist maître")
+                            if hasattr(manager, '_manage_master_playlist'):
+                                threading.Thread(target=manager._manage_master_playlist, daemon=True).start()
                     
                     logger.info(f"[{channel_name}] ✅ Chaîne marquée comme prête après traitement de {Path(file_path).name}")
-                    
-                    # Force un rafraîchissement de la playlist maître
-                    if hasattr(manager, '_manage_master_playlist'):
-                        threading.Thread(target=manager._manage_master_playlist, daemon=True).start()
         
         except Exception as e:
             logger.error(f"❌ Erreur notification traitement: {e}")
-    
+            
     def _background_processor(self):
         """Thread d'arrière-plan qui traite les vidéos en file d'attente"""
         while not self.stop_processing.is_set():

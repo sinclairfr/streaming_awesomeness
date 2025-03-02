@@ -31,6 +31,10 @@ from config import (
     CPU_THRESHOLD,
     SEGMENT_AGE_THRESHOLD
 )
+#TODO mkv stream quand meme et sans gpu si condition ok, offset bien géré en premier pour éviter annulation avec lancement stream, 
+# maj watcher et playlist périodique ok mais à la demande en cas d'update chaine
+# verifier kill process
+# statistiques par user dans un json
 
 class IPTVManager:
     """
@@ -39,8 +43,16 @@ class IPTVManager:
     - Lancement non bloquant des chaînes
     - Meilleure détection et gestion des fichiers
     """
-    
     def __init__(self, content_dir: str, use_gpu: bool = False):
+        # Assurons-nous que la valeur de USE_GPU est bien prise de l'environnement
+        use_gpu_env = os.getenv('USE_GPU', 'false').lower() == 'true'
+        if use_gpu != use_gpu_env:
+            logger.warning(f"⚠️ Valeur USE_GPU en paramètre ({use_gpu}) différente de l'environnement ({use_gpu_env}), on utilise celle de l'environnement")
+            use_gpu = use_gpu_env
+        
+        self.use_gpu = use_gpu
+        logger.info(f"✅ Accélération GPU: {'ACTIVÉE' if self.use_gpu else 'DÉSACTIVÉE'}")
+        
         self.ensure_hls_directory()  # Sans argument pour le dossier principal
 
         self.content_dir = content_dir
@@ -144,7 +156,7 @@ class IPTVManager:
             channel_name = channel_data["name"]
             channel_dir = channel_data["dir"]
             
-            logger.info(f"Initialisation asynchrone de la chaîne: {channel_name}")
+            logger.info(f"[{channel_name}] - Initialisation asynchrone de la chaîne: ")
             
             # Crée l'objet chaîne
             channel = IPTVChannel(

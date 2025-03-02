@@ -202,35 +202,53 @@ class FFmpegCommandBuilder:
             "-hls_segment_filename", f"{output_dir}/segment_%d.ts",
             f"{output_dir}/playlist.m3u8"
         ]
-
     def build_encoding_params(self, has_mkv=False):
-        """
-        # Construit les paramètres d'encodage adaptés
-        """
-        logger.info(f"[{self.channel_name}] 📼 Paramètres d'encodage normalisés")
+        """Construit les paramètres d'encodage optimisés pour la rapidité"""
+        logger.info(f"[{self.channel_name}] 📼 Paramètres d'encodage optimisés")
         
-        # Paramètres de base
+        # Vérifier si on peut utiliser copy directement via une variable d'environnement
+        use_copy = os.getenv('SKIP_NORMALIZATION', '0') == '1'
+        
+        if use_copy:
+            logger.info(f"[{self.channel_name}] 🚀 Mode copie directe activé (plus rapide)")
+            return [
+                "-c:v", "copy",
+                "-c:a", "copy",
+                "-sn", "-dn",
+                "-map", "0:v:0", 
+                "-map", "0:a:0?",
+                "-max_muxing_queue_size", "4096"
+            ]
+        
+        # Sinon, paramètres d'encodage normaux
+        use_gpu_actual = self.use_gpu and os.getenv('USE_GPU', 'false').lower() == 'true'
+        
         params = [
-            "-c:v", "h264_vaapi" if self.use_gpu else "libx264",
+            "-c:v", "h264_vaapi" if use_gpu_actual else "libx264",
             "-profile:v", "main",
-            "-preset", "fast",
+            "-preset", "ultrafast",  # Changé de "fast" à "ultrafast" pour plus de vitesse
             "-level", "4.1",
             "-b:v", self.video_bitrate,
             "-maxrate", self.max_bitrate,
             "-bufsize", self.buffer_size,
             "-g", str(self.gop_size),
             "-keyint_min", str(self.keyint_min),
-            "-sc_threshold", "0",  # Désactive la détection de changement de scène
-            "-force_key_frames", "expr:gte(t,n_forced*2)"  # Force des keyframes toutes les 2s
+            "-sc_threshold", "0",
+            "-force_key_frames", "expr:gte(t,n_forced*2)",
+            "-max_muxing_queue_size", "4096"  # Ajouté pour éviter les blocages
         ]
         
+
         # Paramètres GPU si activé
-        if self.use_gpu:
+        if use_gpu_actual:
+            logger.info(f"[{self.channel_name}] 🖥️ Utilisation de l'accélération GPU (VAAPI)")
             params.extend([
                 "-vf", "format=nv12|vaapi,hwupload",
                 "-low_power", "1"  # Mode basse consommation
             ])
-        
+        else:
+            logger.info(f"[{self.channel_name}] 💻 Utilisation du CPU pour l'encodage")
+   
         # Paramètres audio
         params.extend([
             "-c:a", "aac",
@@ -283,23 +301,34 @@ class FFmpegCommandBuilder:
             logger.error(f"[{self.channel_name}] ❌ Erreur détection MKV: {e}")
             return False
     
+    # Dans FFmpegCommandBuilder.optimize_for_hardware()
     def optimize_for_hardware(self):
         """
-        # Optimise les paramètres pour le hardware disponible
+        # Optimise les paramètres pour le hardware disponible avec meilleure détection
         """
         try:
-            # Détection des capacités GPU si activé
+            # Détection VAAPI plus robuste
             if self.use_gpu:
-                # Vérification VAAPI
-                result = subprocess.run(['vainfo'], capture_output=True, text=True)
-                if result.returncode == 0 and 'VAEntrypointVLD' in result.stdout:
-                    logger.info(f"[{self.channel_name}] ✅ Support VAAPI détecté")
-                    # On peut ajuster les paramètres pour VAAPI
-                    self.hls_time = 2  # Segments plus courts pour le hardware
+                # Essai direct de VAAPI
+                test_cmd = [
+                    'ffmpeg', '-hide_banner', '-loglevel', 'error',
+                    '-hwaccel', 'vaapi', '-hwaccel_output_format', 'vaapi',
+                    '-vaapi_device', '/dev/dri/renderD128',
+                    '-f', 'lavfi', '-i', 'color=black:s=1280x720', 
+                    '-vf', 'format=nv12|vaapi,hwupload', 
+                    '-c:v', 'h264_vaapi', '-t', '0.1',
+                    '-f', 'null', '-'
+                ]
+                result = subprocess.run(test_cmd, capture_output=True, text=True)
+                
+                if result.returncode == 0:
+                    logger.info(f"[{self.channel_name}] ✅ Support VAAPI vérifié")
+                    # On peut utiliser VAAPI
                     return True
                 else:
-                    logger.warning(f"[{self.channel_name}] ⚠️ VAAPI configuré mais non fonctionnel")
+                    logger.warning(f"[{self.channel_name}] ⚠️ Test VAAPI échoué: {result.stderr}")
                     self.use_gpu = False
+                    logger.info(f"[{self.channel_name}] 🔄 Basculement en mode CPU")
             
             # Détection des capacités CPU
             cpu_count = os.cpu_count() or 4
@@ -313,4 +342,6 @@ class FFmpegCommandBuilder:
             
         except Exception as e:
             logger.error(f"[{self.channel_name}] ❌ Erreur optimisation hardware: {e}")
+            # En cas d'erreur, on désactive VAAPI
+            self.use_gpu = False
             return False
