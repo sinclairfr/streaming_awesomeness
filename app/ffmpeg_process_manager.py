@@ -118,7 +118,9 @@ class FFmpegProcessManager:
                 # On arrête la surveillance
                 if self.monitor_thread and self.monitor_thread.is_alive():
                     self.stop_monitoring.set()
-                    self.monitor_thread.join(timeout=3)
+                    # Évite le join() si c'est le thread courant
+                    if self.monitor_thread != threading.current_thread():
+                        self.monitor_thread.join(timeout=3)
                 
                 pid = self.process.pid
                 logger.info(f"[{self.channel_name}] 🛑 Arrêt du processus FFmpeg {pid}")
@@ -154,8 +156,7 @@ class FFmpegProcessManager:
             except Exception as e:
                 logger.error(f"[{self.channel_name}] ❌ Erreur arrêt FFmpeg: {e}")
                 self.process = None
-                return False
-    
+                return False  
     def _clean_existing_processes(self):
         """
         # Nettoie tous les processus FFmpeg existants pour cette chaîne
@@ -166,12 +167,13 @@ class FFmpegProcessManager:
         
         # On nettoie tous les autres processus qui pourraient traîner
         self._clean_orphan_processes()
-  
+
     def _clean_orphan_processes(self, force_cleanup=True):
         """Nettoie brutalement les processus FFmpeg orphelins"""
         try:
             # Recherche tous les processus FFmpeg liés à cette chaîne
             pattern = f"/hls/{self.channel_name}/"
+            processes_killed = 0
             
             # Utilise directement ps et grep pour trouver les PID, puis kill -9
             try:
@@ -185,8 +187,18 @@ class FFmpegProcessManager:
                             kill_cmd = f"kill -9 {pid}"
                             subprocess.run(kill_cmd, shell=True)
                             logger.info(f"[{self.channel_name}] 🔪 Processus {pid} tué avec kill -9")
+                            processes_killed += 1
+                            
+                            # Petit délai entre les kills pour éviter les cascades
+                            if processes_killed > 0:
+                                time.sleep(0.5)
                         except Exception as e:
                             logger.error(f"[{self.channel_name}] Erreur kill -9 {pid}: {e}")
+                
+                # Si on a tué des processus, attendre un peu avant de continuer
+                if processes_killed > 0:
+                    time.sleep(1)
+                    
             except Exception as e:
                 logger.error(f"[{self.channel_name}] Erreur recherche processus: {e}")
                 
@@ -198,12 +210,14 @@ class FFmpegProcessManager:
                         if pattern in cmdline:
                             proc.kill()  # SIGKILL directement
                             logger.info(f"[{self.channel_name}] 🔪 Processus {proc.info['pid']} tué via psutil")
+                            processes_killed += 1
+                            time.sleep(0.5)  # Petit délai
                 except Exception:
                     pass
                     
         except Exception as e:
             logger.error(f"[{self.channel_name}] ❌ Erreur nettoyage global: {e}")
-  
+    
     def _start_monitoring(self, hls_dir):
         """Démarre le thread de surveillance du processus FFmpeg"""
         if self.monitor_thread and self.monitor_thread.is_alive():

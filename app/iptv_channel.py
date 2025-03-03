@@ -557,12 +557,22 @@ class IPTVChannel:
         """Gère la mort du processus FFmpeg"""
         logger.error(f"[{self.name}] ❌ Processus FFmpeg terminé avec code: {return_code}")
         
-        # Vérifie si le process a été tué volontairement (code -9 = SIGKILL)
+        # Éviter les redémarrages en cascade avec une vérification des délais d'inactivité
+        # Si le processus a été tué intentionnellement (code -9 = SIGKILL)
         if return_code == -9:
-            # Vérifie s'il n'y a pas de spectateurs actifs
-            if getattr(self, 'watchers_count', 0) == 0:
-                logger.info(f"[{self.name}] ✅ Processus FFmpeg tué proprement (pas de viewers)")
+            # Calculer le temps d'inactivité
+            inactivity_duration = time.time() - getattr(self, 'last_watcher_time', 0)
+            
+            # Si l'inactivité est supérieure au seuil, considérer que c'était un arrêt intentionnel
+            if inactivity_duration > TIMEOUT_NO_VIEWERS:
+                logger.info(f"[{self.name}] ✅ Processus FFmpeg tué proprement après {inactivity_duration:.1f}s d'inactivité")
                 return False  # Ne pas redémarrer
+        
+        # Vérifier aussi le cooldown global avant d'ajouter une erreur
+        elapsed = time.time() - getattr(self, "last_restart_time", 0)
+        if elapsed < getattr(self.error_handler, "restart_cooldown", 60):
+            logger.info(f"[{self.name}] ⏱️ Cooldown actif, pas de redémarrage immédiat ({elapsed:.1f}s < {getattr(self.error_handler, 'restart_cooldown', 60)}s)")
+            return False
         
         # Sinon, comportement normal
         self.error_handler.add_error("PROCESS_DIED")

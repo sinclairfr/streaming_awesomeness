@@ -11,6 +11,7 @@ from config import (
     FFMPEG_LOG_LEVEL,
     logger
 )
+import random
 
 class FFmpegMonitor(threading.Thread):
     """
@@ -81,8 +82,15 @@ class FFmpegMonitor(threading.Thread):
                 elif time_since_last_watcher > TIMEOUT_NO_VIEWERS:
                     logger.warning(f"⚠️ {channel_name}: Processus FFmpeg inactif depuis {time_since_last_watcher:.1f}s")
                 
-                # TODO vérifier
+                # Ajouter un délai aléatoire avant le nettoyage pour éviter les cascades
+                jitter = random.uniform(0.5, 3.0)
+                time.sleep(jitter)
+                
+                # Nettoyer les processus
                 channel.process_manager._clean_orphan_processes(force_cleanup=True)
+                
+                # Attendre un peu après le nettoyage
+                time.sleep(1)
      
     def _watchers_loop(self):
         """Surveille l'activité des watchers et arrête les streams inutilisés"""

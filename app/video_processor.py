@@ -421,7 +421,25 @@ class VideoProcessor:
                         source.name in currently_processing_names):
                         continue
                     
-                    # Ajout à la queue de traitement
+                    # MODIFICATION: Vérifier d'abord si le fichier est déjà optimisé
+                    if source.suffix.lower() == '.mp4' and self.is_already_optimized(source):
+                        # Si le fichier est déjà optimisé, le déplacer directement vers ready_to_stream
+                        dest_path = self.ready_to_stream_dir / source.name
+                        if not dest_path.exists():
+                            shutil.copy2(str(source), str(dest_path))
+                            # On déplace le fichier source vers already_processed
+                            already_path = self.already_processed_dir / source.name
+                            if not already_path.exists():
+                                shutil.move(str(source), str(already_path))
+                            else:
+                                # Si déjà présent dans already_processed, on supprime le doublon
+                                source.unlink()
+                            logger.info(f"[{self.channel_name}] ✅ Fichier déjà optimisé copié directement: {source.name}")
+                            self.notify_file_processed(dest_path)
+                            count += 1
+                            continue
+                    
+                    # Si on arrive ici, le fichier doit être traité
                     self.processing_queue.put(source)
                     count += 1
                     logger.info(f"Nouveau fichier détecté pour traitement: {source.name}")
@@ -431,7 +449,7 @@ class VideoProcessor:
         except Exception as e:
             logger.error(f"❌ Erreur scan nouveaux fichiers: {e}")
             return 0
-
+    
     def get_gpu_filters(self, video_path: Path = None, is_streaming: bool = False) -> list:
         """Génère les filtres vidéo pour le GPU"""
         filters = []
