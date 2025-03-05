@@ -364,3 +364,103 @@ class ChannelEventHandler(FileSystemEventHandler):
         else:
             # Scan complet en dernier recours
             self.manager.scan_channels()
+            
+class ReadyContentHandler(FileSystemEventHandler):
+    """Surveille les modifications dans les dossiers ready_to_stream"""
+
+    def __init__(self, manager):
+        self.manager = manager
+        self.lock = threading.Lock()
+        self.last_update_time = {}  # Pour éviter les mises à jour trop fréquentes
+        self.update_cooldown = 5  # 5 secondes entre mises à jour
+        super().__init__()
+
+    def on_created(self, event):
+        self._handle_event(event)
+
+    def on_deleted(self, event):
+        self._handle_event(event)
+
+    def on_moved(self, event):
+        self._handle_event(event)
+
+    def on_modified(self, event):
+        self._handle_event(event)
+
+    def _handle_event(self, event):
+        """Gère tous les événements détectés dans ready_to_stream"""
+        try:
+            # Vérifie que c'est un fichier MP4
+            path = Path(event.src_path)
+            if event.is_directory or path.suffix.lower() != '.mp4':
+                return
+            
+            # Extrait le nom de la chaîne du chemin
+            # Le format attendu est */content/{channel_name}/ready_to_stream/*.mp4
+            path_parts = path.parts
+            
+            # Trouve l'index du dossier ready_to_stream
+            ready_index = -1
+            for i, part in enumerate(path_parts):
+                if part == "ready_to_stream":
+                    ready_index = i
+                    break
+            
+            if ready_index > 0 and ready_index < len(path_parts):
+                # Le nom de la chaîne est juste avant "ready_to_stream"
+                channel_name = path_parts[ready_index-1]
+                
+                # Vérifie le cooldown pour éviter les mises à jour trop fréquentes
+                current_time = time.time()
+                with self.lock:
+                    last_time = self.last_update_time.get(channel_name, 0)
+                    if current_time - last_time < self.update_cooldown:
+                        return
+                    
+                    # Met à jour le timestamp
+                    self.last_update_time[channel_name] = current_time
+                
+                # Log l'événement
+                logger.info(f"🔔 Modification détectée dans ready_to_stream pour {channel_name}: {path.name}")
+                
+                # Effectue les mises à jour nécessaires
+                self._update_channel(channel_name)
+        
+        except Exception as e:
+            logger.error(f"❌ Erreur traitement événement ready_to_stream: {e}")
+    
+    def _update_channel(self, channel_name):
+        """Met à jour les playlists et l'état de la chaîne"""
+        try:
+            # Vérifie que la chaîne existe
+            if channel_name not in self.manager.channels:
+                logger.warning(f"⚠️ Chaîne {channel_name} non trouvée dans le manager")
+                return
+            
+            channel = self.manager.channels[channel_name]
+            
+            # Vérifie que la chaîne possède les méthodes nécessaires
+            if not hasattr(channel, '_create_concat_file') or not hasattr(channel, 'refresh_videos'):
+                logger.warning(f"⚠️ Chaîne {channel_name} ne possède pas les méthodes requises")
+                return
+            
+            # 1. Demande à la chaîne de rafraîchir ses vidéos
+            threading.Thread(
+                target=channel.refresh_videos,
+                daemon=True
+            ).start()
+            
+            # 2. Met à jour le statut de la chaîne dans le manager
+            with self.manager.scan_lock:
+                self.manager.channel_ready_status[channel_name] = True
+            
+            # 3. Met à jour la playlist maître
+            threading.Thread(
+                target=self.manager._update_master_playlist,
+                daemon=True
+            ).start()
+            
+            logger.info(f"✅ Mises à jour initiées pour {channel_name} suite à changement dans ready_to_stream")
+        
+        except Exception as e:
+            logger.error(f"❌ Erreur mise à jour chaîne {channel_name}: {e}")

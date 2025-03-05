@@ -14,7 +14,10 @@ from pathlib import Path
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 import threading
-from event_handler import ChannelEventHandler
+from event_handler import (
+    ChannelEventHandler, 
+    ReadyContentHandler
+)
 from hls_cleaner import HLSCleaner
 from client_monitor import ClientMonitor
 from resource_monitor import ResourceMonitor
@@ -80,11 +83,15 @@ class IPTVManager:
 
         logger.info("Initialisation du gestionnaire IPTV amélioré")
         self._clean_startup()
-
+        
         # Observer
         self.observer = Observer()
         event_handler = ChannelEventHandler(self)
         self.observer.schedule(event_handler, self.content_dir, recursive=True)
+
+        # NOUVEAU: Observer pour les dossiers ready_to_stream
+        self.ready_observer = Observer()
+        self.ready_event_handler = ReadyContentHandler(self)
 
         # Démarrage du thread d'initialisation des chaînes
         self.stop_init_thread = threading.Event()
@@ -452,12 +459,38 @@ class IPTVManager:
         if hasattr(self, "observer"):
             self.observer.stop()
             self.observer.join()
+        
+        if hasattr(self, "ready_observer"):
+            self.ready_observer.stop()
+            self.ready_observer.join()
 
         for name, channel in self.channels.items():
             channel._clean_processes()
 
         logger.info("Nettoyage terminé")
-
+    
+    def _setup_ready_observer(self):
+        """Configure l'observateur pour les dossiers ready_to_stream de chaque chaîne"""
+        try:
+            # Pour chaque chaîne existante
+            for name, channel in self.channels.items():
+                ready_dir = Path(channel.video_dir) / "ready_to_stream"
+                if ready_dir.exists():
+                    self.ready_observer.schedule(
+                        self.ready_event_handler, 
+                        str(ready_dir), 
+                        recursive=False
+                    )
+                    logger.info(f"👁️ Surveillance ready_to_stream configurée pour {name}")
+            
+            # Démarrage de l'observateur s'il n'est pas déjà en cours
+            if not self.ready_observer.is_alive():
+                self.ready_observer.start()
+                logger.info("🚀 Démarrage de l'observateur ready_to_stream")
+        
+        except Exception as e:
+            logger.error(f"❌ Erreur configuration surveillance ready_to_stream: {e}")
+    
     def run(self):
         try:
             # Démarrer la boucle de surveillance des watchers
@@ -470,7 +503,10 @@ class IPTVManager:
             
             logger.debug("🕵️ Démarrage de l'observer...")
             self.observer.start()
-
+            
+            # NOUVEAU: Configurer et démarrer l'observateur pour ready_to_stream
+            self._setup_ready_observer()
+            
             # Debug du client_monitor
             logger.debug("🚀 Démarrage du client_monitor...")
             if not hasattr(self, 'client_monitor') or not self.client_monitor.is_alive():

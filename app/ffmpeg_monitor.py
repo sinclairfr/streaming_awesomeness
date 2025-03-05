@@ -91,7 +91,7 @@ class FFmpegMonitor(threading.Thread):
                 
                 # Attendre un peu après le nettoyage
                 time.sleep(1)
-     
+
     def _watchers_loop(self):
         """Surveille l'activité des watchers et arrête les streams inutilisés"""
         while True:
@@ -142,8 +142,8 @@ class FFmpegMonitor(threading.Thread):
 
             except Exception as e:
                 logger.error(f"❌ Erreur watchers_loop: {e}")
-                time.sleep(10)
-                            
+                time.sleep(10)                              
+    
     def _is_process_active(self, channel_name: str, pid: int) -> bool   :
         """
         Vérifie si un processus est actif en fonction des watchers et du temps d'inactivité

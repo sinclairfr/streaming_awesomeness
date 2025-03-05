@@ -146,72 +146,65 @@ class FFmpegCommandBuilder:
             "-y"
         ]
         
-        # Paramètres de buffer augmentés
+        # Paramètres de buffer réduits pour diminuer la latence
         params.extend([
-            "-thread_queue_size", "8192",
-            "-analyzeduration", "20M", 
-            "-probesize", "20M"
+            "-thread_queue_size", "1024",  # Réduit de 8192
+            "-analyzeduration", "5M",      # Réduit de 20M
+            "-probesize", "5M"             # Réduit de 20M
         ])
         
-        # Ajout de l'offset AVANT l'input
         if playback_offset > 0:
             params.extend([
                 "-ss", f"{playback_offset:.2f}"
             ])
         
-        # Suite des paramètres
         params.extend([
             "-re",
             "-stream_loop", "-1",
-            "-fflags", "+genpts+igndts+discardcorrupt+fastseek",
-            "-threads", "4",
+            "-fflags", "+genpts+igndts+discardcorrupt+nobuffer",  # Ajouté nobuffer pour réduire la latence
+            "-threads", "2",  # Réduit pour moins de charge CPU
             "-avoid_negative_ts", "make_zero"
         ])
         
-        # Ajout du fichier de progression
         if progress_file:
             params.extend(["-progress", str(progress_file)])
         
-        # Ajout du fichier d'entrée
         params.extend([
             "-f", "concat",
             "-safe", "0",
-            "-segment_time_metadata", "1",
             "-i", str(input_file)
         ])
         
-        return params 
-    
+        return params
+        
     def build_hls_params(self, output_dir):
         """
         # Construit les paramètres HLS optimisés pour éviter les sauts de segments
         """
         return [
             "-f", "hls",
-            "hls_version", "6"
-            "-hls_time", str(self.hls_time),  # Durée des segments
-            "-hls_list_size", str(max(15, self.hls_list_size)),  # Plus de segments dans la playlist
-            "-hls_delete_threshold", str(max(5, self.hls_delete_threshold)),  # Attendre plus longtemps avant suppression
-            "-hls_flags", "delete_segments+append_list+program_date_time+independent_segments+split_by_time+round_durations+omit_endlist",
-            "-hls_allow_cache", "1",  # Autorise mise en cache des segments
+            "-hls_time", "1",  # Réduit de 2 à 1 seconde pour un démarrage plus rapide
+            "-hls_list_size", "8",  # Playlist plus courte pour moins de mémoire
+            "-hls_delete_threshold", "2",  # Suppression plus rapide des segments obsolètes
+            "-hls_flags", "delete_segments+append_list+program_date_time+independent_segments+split_by_time",  # Retiré round_durations+omit_endlist qui peuvent causer des problèmes
+            "-hls_allow_cache", "1",
             "-start_number", "0",
-            "-var_stream_map","v:0,a:0 name=1080p",
             "-hls_segment_type", "mpegts",
-            "-max_delay", "2000000",  # Délai max réduit
-            "-avoid_negative_ts", "make_zero",
-            "-hls_init_time", "2",  # Durée initiale
+            "-max_delay", "500000",  # Réduit pour une latence plus faible (de 2000000 à 500000)
+            "-hls_init_time", "0.5",  # Réduit pour démarrage plus rapide (de 2 à 0.5)
             "-hls_segment_filename", f"{output_dir}/segment_%d.ts",
             f"{output_dir}/playlist.m3u8"
         ]
+    
     def build_encoding_params(self, has_mkv=False):
         """Construit les paramètres d'encodage optimisés pour la rapidité"""
         logger.info(f"[{self.channel_name}] 📼 Paramètres d'encodage optimisés")
         
-        # Vérifier si on peut utiliser copy directement via une variable d'environnement
+        # Mode copie directe si possible (bien plus rapide)
         use_copy = os.getenv('SKIP_NORMALIZATION', '0') == '1'
         
         if use_copy:
-            logger.info(f"[{self.channel_name}] 🚀 Mode copie directe activé (plus rapide)")
+            logger.info(f"[{self.channel_name}] 🚀 Mode copie directe activé")
             return [
                 "-c:v", "copy",
                 "-c:a", "copy",
@@ -221,22 +214,19 @@ class FFmpegCommandBuilder:
                 "-max_muxing_queue_size", "4096"
             ]
         
-        # Sinon, paramètres d'encodage normaux
-        use_gpu_actual = self.use_gpu and os.getenv('USE_GPU', 'false').lower() == 'true'
-        
+        # Paramètres CPU optimisés pour la rapidité
         params = [
-            "-c:v", "h264_vaapi" if use_gpu_actual else "libx264",
-            "-profile:v", "main",
-            "-preset", "ultrafast",  # Changé de "fast" à "ultrafast" pour plus de vitesse
-            "-level", "4.1",
-            "-b:v", self.video_bitrate,
-            "-maxrate", self.max_bitrate,
-            "-bufsize", self.buffer_size,
-            "-g", str(self.gop_size),
-            "-keyint_min", str(self.keyint_min),
-            "-sc_threshold", "0",
-            "-force_key_frames", "expr:gte(t,n_forced*2)",
-            "-max_muxing_queue_size", "4096"  # Ajouté pour éviter les blocages
+            "-c:v", "libx264",
+            "-profile:v", "baseline",  # Plus simple/rapide que "main"
+            "-preset", "ultrafast",
+            "-tune", "zerolatency",  # Crucial pour le streaming en direct
+            "-x264opts", "no-scenecut", # Évite les sauts de keyframes
+            "-b:v", "3M",  # Bitrate plus faible mais suffisant
+            "-maxrate", "4M",
+            "-bufsize", "4M",  # Buffer plus petit pour moins de latence
+            "-g", "30",  # GOP plus court pour meilleure réactivité
+            "-force_key_frames", "expr:gte(t,n_forced*1)",  # Force keyframe chaque seconde
+            "-max_muxing_queue_size", "1024"  # Plus petit pour moins de mise en cache
         ]
         
 
@@ -302,7 +292,6 @@ class FFmpegCommandBuilder:
             logger.error(f"[{self.channel_name}] ❌ Erreur détection MKV: {e}")
             return False
     
-    # Dans FFmpegCommandBuilder.optimize_for_hardware()
     def optimize_for_hardware(self):
         """
         # Optimise les paramètres pour le hardware disponible avec meilleure détection
