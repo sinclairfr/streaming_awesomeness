@@ -92,19 +92,24 @@ class IPTVChannel:
         threading.Thread(target=self._scan_videos_async, daemon=True).start() 
 
         self._verify_playlist()
-        
+
     def _handle_position_update(self, position):
         """Reçoit les mises à jour de position du ProcessManager"""
         # Vérifications pour détecter des problèmes au démarrage
-        if position < 10 and hasattr(self.position_manager, 'start_offset'):
-            if self.position_manager.start_offset > 20:
+        if position < 20 and hasattr(self.position_manager, 'start_offset'):
+            if self.position_manager.start_offset > 50:
                 current_time = time.time()
                 if hasattr(self.position_manager, 'stream_start_time'):
                     elapsed = current_time - self.position_manager.stream_start_time
-                    if elapsed < 20:  # Premières secondes
+                    if elapsed < 60:  # Premières minutes
                         logger.warning(f"[{self.name}] ⚠️ Position suspecte: {position:.2f}s vs {self.position_manager.start_offset:.2f}s attendu")
-                        # On n'ignore pas complètement, mais on ne met pas à jour le fichier d'état
-                        return
+                        # Si l'écart est vraiment important, on redémarre le stream
+                        if abs(position - self.position_manager.start_offset) > 40 and elapsed > 5:
+                            logger.error(f"[{self.name}] 🔄 Redémarrage du stream pour corriger l'offset")
+                            self.stop_stream_if_needed()
+                            time.sleep(2)
+                            self.start_stream()
+                            return
         
         # Passage du fichier de progression et non de la position numérique
         self.position_manager.update_from_progress(self.logger.get_progress_file())
@@ -401,11 +406,6 @@ class IPTVChannel:
                 logger.warning(f"[{self.name}] ⚠️ Chaîne non prête pour le streaming (pas de vidéos)")
                 return False
 
-            logger.info(f"[{self.name}] 🚀 Démarrage du stream...")
-
-            hls_dir = Path(f"/app/hls/{self.name}")
-            hls_dir.mkdir(parents=True, exist_ok=True)
-            
             # Utilisation du fichier playlist déjà créé
             concat_file = Path(self.video_dir) / "_playlist.txt"
             if not concat_file.exists():
@@ -423,7 +423,7 @@ class IPTVChannel:
                 start_offset = start_offset % self.total_duration
                 logger.info(f"[{self.name}] ⏱️ Offset corrigé: {start_offset:.2f}s")
 
-            # AJOUT: Mémorisation du moment de démarrage et de l'offset demandé
+            # IMPORTANT: Mémorisation du moment de démarrage et de l'offset demandé
             self.position_manager.stream_start_time = time.time()
             self.position_manager.start_offset = start_offset
             self.position_manager.channel_name = self.name  # Pour les logs
@@ -434,16 +434,6 @@ class IPTVChannel:
             self.process_manager.set_playback_offset(start_offset)
             self.process_manager.set_total_duration(self.position_manager.total_duration)
 
-            # À ajouter après la récupération de l'offset
-            start_offset = self.position_manager.get_start_offset()
-            if self.total_duration > 0 and start_offset > self.total_duration:
-                start_offset = start_offset % self.total_duration
-                logger.info(f"[{self.name}] ⏱️ Offset corrigé: {start_offset:.2f}s")
-
-            # AJOUT: Mémorisation du moment de démarrage et de l'offset demandé
-            self.position_manager.stream_start_time = time.time()
-            self.position_manager.start_offset = start_offset
-            
             # PREMIÈRE TENTATIVE AVEC HARDWARE ACCÉLÉRATION
             self.command_builder.optimize_for_hardware()
             logger.info(f"[{self.name}] Vérification mkv...")
@@ -456,6 +446,23 @@ class IPTVChannel:
                 progress_file=self.logger.get_progress_file(),
                 has_mkv=has_mkv
             )
+            
+            # NOUVELLE VÉRIFICATION: S'assurer que l'offset est bien au début du processus
+            # Cela force FFmpeg à appliquer l'offset correctement
+            # Recherche de '-ss' dans la commande
+            ss_index = -1
+            for i, arg in enumerate(command):
+                if arg == "-ss" and i + 1 < len(command):
+                    ss_index = i
+                    break
+            
+            # Si -ss existe déjà, on le remplace, sinon on l'ajoute au début
+            if ss_index >= 0:
+                command[ss_index + 1] = f"{start_offset:.2f}"
+            else:
+                # Ajout juste après ffmpeg et avant les options principales
+                command.insert(1, "-ss")
+                command.insert(2, f"{start_offset:.2f}")
             
             # Lancement du process
             if not self.process_manager.start_process(command, hls_dir):
@@ -474,6 +481,19 @@ class IPTVChannel:
                     has_mkv=has_mkv
                 )
                 
+                # Même vérification pour l'option -ss
+                ss_index = -1
+                for i, arg in enumerate(cpu_command):
+                    if arg == "-ss" and i + 1 < len(cpu_command):
+                        ss_index = i
+                        break
+                
+                if ss_index >= 0:
+                    cpu_command[ss_index + 1] = f"{start_offset:.2f}"
+                else:
+                    cpu_command.insert(1, "-ss")
+                    cpu_command.insert(2, f"{start_offset:.2f}")
+                
                 # Lancement du process en mode CPU
                 if not self.process_manager.start_process(cpu_command, hls_dir):
                     logger.error(f"[{self.name}] ❌ Échec démarrage FFmpeg en mode CPU")
@@ -490,8 +510,8 @@ class IPTVChannel:
 
         except Exception as e:
             logger.error(f"Erreur démarrage stream {self.name}: {e}")
-            return False 
-    
+            return False
+
     def _restart_stream(self) -> bool:
         """Redémarre le stream en cas de problème"""
         try:
