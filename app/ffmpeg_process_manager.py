@@ -359,11 +359,17 @@ class FFmpegProcessManager:
     
     def set_playback_offset(self, offset):
         """
-        # Définit l'offset de lecture
+        # Définit l'offset de lecture avec validation
         """
-        self.playback_offset = offset
-        self.last_playback_time = time.time()
-        
+        # S'assurer que l'offset est valide et dans les limites
+        if self.total_duration > 0:
+            # Appliquer le modulo pour rester dans les limites
+            self.playback_offset = offset % self.total_duration
+            logger.debug(f"[{self.channel_name}] 🔄 Process manager: offset ajusté à {self.playback_offset:.2f}s (modulo {self.total_duration:.2f}s)")
+        else:
+            self.playback_offset = offset
+            
+        self.last_playback_time = time.time()        
     def get_playback_offset(self):
         """
         # Renvoie l'offset de lecture actuel

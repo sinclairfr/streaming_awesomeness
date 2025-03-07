@@ -41,7 +41,7 @@ class PlaybackPositionManager:
   
     def set_playback_offset(self, offset):
         """
-        # Définit l'offset de lecture
+        # Définit l'offset de lecture avec validation
         """
         with self.lock:
             # Vérifier que les attributs existent, sinon les initialiser
@@ -49,10 +49,17 @@ class PlaybackPositionManager:
                 self.playback_offset = 0.0
             if not hasattr(self, 'last_playback_time'):
                 self.last_playback_time = time.time()
+            
+            # S'assurer que l'offset est valide et dans les limites
+            if self.total_duration > 0:
+                # Appliquer le modulo pour rester dans les limites
+                self.playback_offset = offset % self.total_duration
+                logger.debug(f"[{self.channel_name}] 🔄 Offset ajusté à {self.playback_offset:.2f}s (modulo {self.total_duration:.2f}s)")
+            else:
+                self.playback_offset = offset
                 
-            self.playback_offset = offset
             self.last_playback_time = time.time()
-            self._save_state()           
+            self._save_state()         
 
     # Ajouter cette méthode dans PlaybackPositionManager
     def start_periodic_save(self):
@@ -207,7 +214,7 @@ class PlaybackPositionManager:
             logger.info(f"[{self.channel_name}] 🎲 Offset aléatoire généré: {self.start_offset:.2f}s")
             
             return self.start_offset
-    
+
     def get_start_offset(self):
         """
         # Renvoie l'offset de démarrage sécurisé
@@ -215,9 +222,15 @@ class PlaybackPositionManager:
         try:
             # Vérifier si on a une position connue valide
             if hasattr(self, 'last_known_position') and self.last_known_position > 0:
-                logger.info(f"[{self.channel_name}] ⏱️ Reprise à la dernière position: {self.last_known_position:.2f}s")
-                return self.last_known_position
-                
+                # S'assurer que la position est dans les limites
+                if self.total_duration > 0:
+                    position = self.last_known_position % self.total_duration
+                    logger.info(f"[{self.channel_name}] ⏱️ Reprise à la dernière position: {position:.2f}s (modulo {self.total_duration:.2f}s)")
+                    return position
+                else:
+                    logger.info(f"[{self.channel_name}] ⏱️ Reprise à la dernière position: {self.last_known_position:.2f}s")
+                    return self.last_known_position
+                    
             # Sinon on génère un offset aléatoire si possible
             if hasattr(self, 'total_duration') and self.total_duration > 0:
                 max_offset = self.total_duration * 0.8
@@ -231,8 +244,8 @@ class PlaybackPositionManager:
             
         except Exception as e:
             logger.error(f"[{self.channel_name}] ❌ Erreur calcul offset: {e}")
-            return 0.0
-        
+            return 0.0    
+           
     def calculate_durations(self, video_files):
         """
         # Calcule la durée totale à partir d'une liste de fichiers vidéo
@@ -319,6 +332,60 @@ class PlaybackPositionManager:
             logger.error(f"[{self.channel_name}] ❌ Erreur sauvegarde état: {e}")
     
     def _load_state(self):
+        """
+        # Charge l'état depuis un fichier JSON et avance la position en fonction du temps écoulé
+        """
+        try:
+            state_file = self.state_dir / f"{self.channel_name}_position.json"
+            
+            if not state_file.exists():
+                return
+                
+            with open(state_file, 'r') as f:
+                state = json.load(f)
+                
+            # On ne charge que si c'est le même channel
+            if state.get("channel_name") != self.channel_name:
+                return
+                
+            # On restaure l'état
+            self.current_position = state.get("current_position", 0)
+            self.last_known_position = state.get("last_known_position", 0)
+            self.start_offset = state.get("start_offset", 0)
+            self.total_duration = state.get("total_duration", 0)
+            
+            # On récupère le timestamp de la dernière mise à jour
+            last_update = state.get("last_update", 0)
+            current_time = time.time()
+            
+            # Calcul du temps écoulé depuis la dernière mise à jour
+            elapsed_time = current_time - last_update
+            
+            # On vérifie si l'état n'est pas trop vieux (max 24h)
+            if elapsed_time > 86400:  # 24h en secondes
+                logger.warning(f"[{self.channel_name}] ⚠️ État trop ancien, on réinitialise")
+                self.current_position = 0
+                self.last_known_position = 0
+                self.start_offset = 0
+                return
+                
+            # Mise à jour de la position en fonction du temps écoulé (mode direct TV)
+            if self.total_duration > 0 and elapsed_time > 0:
+                # CORRECTION: On vérifie que le temps écoulé reste raisonnable
+                # Si le temps écoulé est supérieur à 3x la durée totale, on limite
+                if elapsed_time > self.total_duration * 3:
+                    logger.warning(f"[{self.channel_name}] ⚠️ Temps écoulé excessif ({elapsed_time:.2f}s), limitation appliquée")
+                    elapsed_time = self.total_duration * 0.5  # On limite à 50% de la durée
+                
+                # On avance la position en fonction du temps écoulé, mais on s'assure de faire un modulo
+                self.current_position = (self.current_position + elapsed_time) % self.total_duration
+                self.last_known_position = self.current_position
+                logger.info(f"[{self.channel_name}] ⏱️ Position avancée de {elapsed_time:.2f}s → {self.current_position:.2f}s (durée totale: {self.total_duration:.2f}s)")
+            
+            logger.info(f"[{self.channel_name}] ✅ État chargé, position ajustée: {self.last_known_position:.2f}s")
+                
+        except Exception as e:
+            logger.error(f"[{self.channel_name}] ❌ Erreur chargement état: {e}")
         """
         # Charge l'état depuis un fichier JSON et avance la position en fonction du temps écoulé
         """

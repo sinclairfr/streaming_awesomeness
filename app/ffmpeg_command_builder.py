@@ -154,9 +154,9 @@ class FFmpegCommandBuilder:
         
         # Paramètres de buffer pour stabilité
         params.extend([
-            "-thread_queue_size", "8192",
-            "-analyzeduration", "10M",
-            "-probesize", "10M"
+            "-thread_queue_size", "16384",
+            "-analyzeduration", "20M",
+            "-probesize", "20M"
         ])
         
         # Après le seek, on applique les autres options
