@@ -199,6 +199,9 @@ class IPTVManager:
     
     def _watchers_loop(self):
         """Surveille l'activité des watchers et arrête les streams inutilisés"""
+        last_log_time = 0
+        log_cycle = int(os.getenv('WATCHERS_LOG_CYCLE', '10'))
+        
         while True:
             try:
                 current_time = time.time()
@@ -221,6 +224,19 @@ class IPTVManager:
                             channel.stop_stream_if_needed()
 
                     channels_checked.add(channel_name)
+                
+                # Log périodique de tous les watchers actifs
+                if current_time - last_log_time > log_cycle:
+                    active_watchers = []
+                    for name, channel in sorted(self.channels.items()):
+                        if hasattr(channel, 'watchers_count'):
+                            count = channel.watchers_count
+                            watcher_text = f"{count} watcher{'' if count == 1 else 's'}"
+                            active_watchers.append(f"{name}: {watcher_text}")
+                    
+                    if active_watchers:
+                        logger.info(f"👥 Watchers actifs: {', '.join(active_watchers)}")
+                    last_log_time = current_time
 
                 # On vérifie les processus FFmpeg orphelins
                 for proc in psutil.process_iter(attrs=["pid", "name", "cmdline"]):
@@ -245,8 +261,8 @@ class IPTVManager:
 
             except Exception as e:
                 logger.error(f"❌ Erreur watchers_loop: {e}")
-                time.sleep(10)
-                
+                time.sleep(10)   
+                   
     def update_watchers(self, channel_name: str, count: int, request_path: str):
         """Met à jour les watchers en fonction des requêtes m3u8 et ts"""
         try:

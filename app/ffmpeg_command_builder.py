@@ -27,36 +27,13 @@ class FFmpegCommandBuilder:
         self.video_bitrate = "5M"
         self.max_bitrate = "5M"
         self.buffer_size = "10M"
-        
+            
     def build_command(self, input_file, output_dir, playback_offset=0, progress_file=None, has_mkv=False):
         """
         # Construit la commande FFmpeg complète
-        
-        Args:
-            input_file (str): Chemin du fichier d'entrée (concat ou direct)
-            output_dir (str): Dossier de sortie pour les segments HLS
-            playback_offset (float): Offset de lecture en secondes
-            progress_file (str): Fichier pour stocker la progression
-            has_mkv (bool): Si la playlist contient des fichiers MKV
-            
-        Returns:
-            list: La commande FFmpeg complète sous forme de liste
         """
         try:
             logger.info(f"[{self.channel_name}] 🛠️ Construction de la commande FFmpeg...")
-            
-            if playback_offset > 0:
-                # Créer un filtre complexe pour le seek
-                input_params = [
-                    "ffmpeg", "-hide_banner", "-loglevel", FFMPEG_LOG_LEVEL, "-y",
-                    "-thread_queue_size", "8192", "-analyzeduration", "20M", "-probesize", "20M",
-                    "-f", "concat", "-safe", "0", "-i", str(input_file),
-                    "-ss", f"{playback_offset:.2f}",  # Le -ss après l'input pour meilleure précision
-                    "-fflags", "+genpts+igndts+discardcorrupt",
-                    "-re", "-stream_loop", "-1"
-                ]
-            else:
-                input_params = self.build_input_params(input_file, 0, progress_file)
             
             # Construction des parties de la commande
             input_params = self.build_input_params(input_file, playback_offset, progress_file)
@@ -66,11 +43,18 @@ class FFmpegCommandBuilder:
             # Assemblage de la commande complète
             command = input_params + encoding_params + hls_params
             
+            # Vérification du chemin de sortie (correction du bug)
+            output_path_index = command.index(f"{output_dir}/playlist.m3u8")
+            if output_path_index > 0:
+                output_path = command[output_path_index]
+                # Vérification que le chemin est correct
+                if not output_path.startswith("/app/hls/"):
+                    command[output_path_index] = f"/app/hls/{self.channel_name}/playlist.m3u8"
+            
             # Log pour debug
-            logger.debug(f"[{self.channel_name}] 📝 Commande: {' '.join(command)}")
+            logger.info(f"[{self.channel_name}] 📝 Commande: {' '.join(command)}")
             
-            return command
-            
+            return command  
         except Exception as e:
             logger.error(f"[{self.channel_name}] ❌ Erreur construction commande: {e}")
             # Fallback à une commande minimale en cas d'erreur
@@ -188,14 +172,14 @@ class FFmpegCommandBuilder:
             "-hls_delete_threshold", "5",
             "-hls_flags", "delete_segments+append_list+program_date_time+independent_segments+split_by_time",
             "-hls_allow_cache", "1",
-            "-start_number", "0",
+            "-start_number", "0",  # Force le début des segments à 0
             "-hls_segment_type", "mpegts",
             "-max_delay", "2000000",
             "-hls_init_time", "4",
             "-force_key_frames", "expr:gte(t,n_forced*4)",  # Force une keyframe tous les 4 secondes
             "-hls_segment_filename", f"{output_dir}/segment_%d.ts",
             f"{output_dir}/playlist.m3u8"
-        ] 
+        ]
         
     def build_encoding_params(self, has_mkv=False):
         """Construit les paramètres d'encodage optimisés pour la copie directe"""

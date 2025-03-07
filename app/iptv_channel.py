@@ -377,9 +377,7 @@ class IPTVChannel:
             
             # Création du dossier si nécessaire
             hls_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Le reste de la méthode reste inchangé...
-    
+                
             # Vérification rapide que la chaîne est prête
             if not self.ready_for_streaming:
                 logger.warning(f"[{self.name}] ⚠️ Chaîne non prête pour le streaming (pas de vidéos)")
