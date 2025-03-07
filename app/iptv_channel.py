@@ -271,7 +271,6 @@ class IPTVChannel:
     def _clean_processes(self):
         """Nettoie les processus en utilisant le ProcessManager"""
         try:
-            self.position_manager.save_position()
             self.process_manager.stop_process()
             logger.info(f"[{self.name}] 🧹 Nettoyage des processus terminé")
         except Exception as e:
@@ -405,21 +404,11 @@ class IPTVChannel:
             else:
                 logger.info(f"[{self.name}] ✅ _playlist.txt trouvé")
 
-            # Récupération de l'offset de démarrage
+            # Récupération de l'offset basé sur le temps écoulé depuis 01/01/2025
             start_offset = self.position_manager.get_start_offset()
-            if self.total_duration > 0 and start_offset > self.total_duration:
-                start_offset = start_offset % self.total_duration
-                logger.info(f"[{self.name}] ⏱️ Offset corrigé: {start_offset:.2f}s")
+            logger.info(f"[{self.name}] ⏱️ Démarrage à l'offset: {start_offset:.2f}s")
 
-            # IMPORTANT: Mémorisation du moment de démarrage et de l'offset demandé
-            self.position_manager.stream_start_time = time.time()
-            self.position_manager.start_offset = start_offset
-            self.position_manager.channel_name = self.name  # Pour les logs
-            
-            # Synchronisation des managers
-            self.position_manager.set_position(start_offset)
-            self.position_manager.set_playing(True)
-            self.process_manager.set_playback_offset(start_offset)
+            # On passe l'information au process_manager pour la commande ffmpeg
             self.process_manager.set_total_duration(self.position_manager.total_duration)
 
             # PREMIÈRE TENTATIVE AVEC HARDWARE ACCÉLÉRATION
@@ -488,10 +477,7 @@ class IPTVChannel:
                     return False
                 
             # Configuration du position_manager
-            self.position_manager.set_playing(True)
             self.process_manager.set_playback_offset(start_offset)
-            if hasattr(self.position_manager, 'start_periodic_save'):
-                self.position_manager.start_periodic_save()
                 
             logger.info(f"[{self.name}] ✅ Stream démarré avec succès à la position {start_offset:.2f}s")
             return True
@@ -531,12 +517,10 @@ class IPTVChannel:
                 
             logger.info(f"[{self.name}] 🛑 Arrêt du stream (dernier watcher: {time.time() - self.last_watcher_time:.1f}s)")
             
-            self.position_manager.set_playing(False)
             if hasattr(self.position_manager, 'stop_save_thread'):
                 self.position_manager.stop_save_thread.set()
-            self.position_manager.save_position()
             
-            self.process_manager.stop_process(save_position=True)
+            self.process_manager.stop_process()
             
             if self.hls_cleaner:
                 self.hls_cleaner.cleanup_channel(self.name)
@@ -663,43 +647,6 @@ class IPTVChannel:
         if hasattr(self, 'error_handler'):
             self.error_handler.add_error("PROCESS_DIED")
         return parent_channel._restart_stream() if hasattr(parent_channel, '_restart_stream') else False    
-    
-    def save_position(self):
-        """
-        # Sauvegarde la position actuelle avec vérification de cohérence
-        """
-        with self.lock:
-            # Si la lecture est en cours, on calcule la position actuelle
-            if self.is_playing:
-                elapsed = time.time() - self.last_update_time
-                new_position = self.current_position + elapsed
-                
-                # AJOUT: Vérification de cohérence avec l'offset de départ
-                if hasattr(self, 'stream_start_time') and hasattr(self, 'start_offset'):
-                    stream_elapsed = time.time() - self.stream_start_time
-                    # Si on est encore dans les premières secondes du stream
-                    if stream_elapsed < 30:
-                        # Si la nouvelle position est proche de zéro alors qu'on avait un offset important
-                        if new_position < 10 and self.start_offset > 30:
-                            logger.warning(f"[{self.channel_name}] 🛑 Position incohérente détectée lors de la sauvegarde: {new_position:.2f}s vs {self.start_offset:.2f}s demandé")
-                            # On utilise l'offset de départ plutôt que la position calculée
-                            new_position = self.start_offset + stream_elapsed
-                
-                # On gère le bouclage automatique
-                if self.total_duration > 0:
-                    new_position %= self.total_duration
-                    
-                self.current_position = new_position
-                
-            # On sauvegarde la position
-            self.last_known_position = self.current_position
-            self.last_update_time = time.time()
-            
-            # On écrit l'état dans un fichier
-            self._save_state()
-            
-            logger.info(f"[{self.channel_name}] 💾 Position sauvegardée: {self.current_position:.2f}s")
-            return True    
         
     def _handle_segment_created(self, segment_path, size):  
         """Notifié quand un nouveau segment est créé"""
@@ -748,9 +695,6 @@ class IPTVChannel:
                     # On vérifie si on a encore des spectateurs actifs
                     watchers = getattr(self, 'watchers_count', 0)
                     if watchers > 0:
-                        # Sauvegarde de la position avant le redémarrage
-                        if hasattr(self, 'position_manager'):
-                            self.position_manager.save_position()
                         return self._restart_stream()
                     else:
                         logger.info(f"[{self.name}] ℹ️ Pas de redémarrage: aucun watcher actif")

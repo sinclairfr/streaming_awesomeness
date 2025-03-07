@@ -101,24 +101,13 @@ class FFmpegProcessManager:
                     log_file.close()
                 return False
     
-    def stop_process(self, save_position=True):
-        """
-        # Arrête proprement le processus FFmpeg en cours
-        # Si save_position=True, sauvegarde la position de lecture
-        """
+    def stop_process(self):
+        """Arrête proprement le processus FFmpeg en cours, sans sauvegarder la position"""
         with self.lock:
             if not self.process:
                 return
             
             try:
-                # Sauvegarde de la position si demandé
-                if save_position and hasattr(self, 'playback_offset') and self.total_duration > 0:
-                    current_time = time.time()
-                    elapsed = current_time - self.last_playback_time
-                    self.playback_offset = (self.playback_offset + elapsed) % self.total_duration
-                    self.last_playback_time = current_time
-                    logger.info(f"[{self.channel_name}] 💾 Position sauvegardée: {self.playback_offset:.1f}s")
-                
                 # On arrête la surveillance
                 if self.monitor_thread and self.monitor_thread.is_alive():
                     self.stop_monitoring.set()
@@ -156,11 +145,12 @@ class FFmpegProcessManager:
                 
                 logger.info(f"[{self.channel_name}] 🧹 Processus FFmpeg nettoyé")
                 return True
-                
+                    
             except Exception as e:
                 logger.error(f"[{self.channel_name}] ❌ Erreur arrêt FFmpeg: {e}")
                 self.process = None
-                return False  
+                return False
+            
     def _clean_existing_processes(self):
         """
         # Nettoie tous les processus FFmpeg existants pour cette chaîne
@@ -262,12 +252,7 @@ class FFmpegProcessManager:
                     # Callback en cas de mort du processus
                     if self.on_process_died:
                         self.on_process_died(self.process.returncode if self.process else None)
-                    
                     break
-                
-                # Mise à jour de la position de lecture (si on a un fichier de progression)
-                if self.logger_instance and self.on_position_update:
-                    self._update_playback_position(self.logger_instance.get_progress_file())
                 
                 # Vérification périodique des segments (toutes les 2 secondes)
                 current_time = time.time()
@@ -392,27 +377,6 @@ class FFmpegProcessManager:
         """
         return self.process is not None and self.process.poll() is None
 
-    def save_position(self):
-        """
-        # Sauvegarde la position de lecture actuelle
-        """
-        try:
-            # Calcul de l'offset actuel
-            current_time = time.time()
-            if hasattr(self, 'last_playback_time') and hasattr(self, 'playback_offset') and hasattr(self, 'total_duration'):
-                elapsed = current_time - self.last_playback_time
-                self.playback_offset = (self.playback_offset + elapsed) % self.total_duration
-                self.last_playback_time = current_time
-                
-                logger.info(f"[{self.channel_name}] 💾 Position sauvegardée: {self.playback_offset:.1f}s")
-                return True
-            else:
-                logger.warning(f"[{self.channel_name}] ⚠️ Impossible de sauvegarder la position (attributs manquants)")
-                return False
-        except Exception as e:
-            logger.error(f"[{self.channel_name}] ❌ Erreur sauvegarde position: {e}")
-            return False
-        
     def _detect_frozen_stream(self):
         """
         # Détecte si le stream est gelé/bloqué en surveillant les fichiers de progression FFmpeg

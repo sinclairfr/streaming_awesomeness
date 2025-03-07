@@ -60,109 +60,6 @@ class PlaybackPositionManager:
                 
             self.last_playback_time = time.time()
             self._save_state()         
-
-    # Ajouter cette méthode dans PlaybackPositionManager
-    def start_periodic_save(self):
-        """Lance un thread pour sauvegarder périodiquement la position"""
-        if hasattr(self, 'save_thread') and self.save_thread.is_alive():
-            return
-            
-        self.stop_save_thread = threading.Event()
-        self.save_thread = threading.Thread(target=self._periodic_save_loop, daemon=True)
-        self.save_thread.start()
-        logger.info(f"[{self.channel_name}]📭 Sauvegarde périodique position")
-        
-    def _periodic_save_loop(self):
-        """Boucle de sauvegarde périodique"""
-        while not self.stop_save_thread.is_set():
-            try:
-                self.save_position()
-                time.sleep(10)  # Sauvegarde toutes les 10 secondes
-            except Exception as e:
-                logger.error(f"[{self.channel_name}] ❌ Erreur sauvegarde position périodique: {e}")
-                time.sleep(10)
-    
-    def update_from_progress(self, progress_file):
-        """
-        # Met à jour la position à partir du fichier de progression FFmpeg
-        # Avec détection des anomalies de saut au démarrage
-        """
-        if not progress_file or not Path(progress_file).exists():
-            return False
-            
-        try:
-            self.last_progress_file = progress_file
-            
-            with open(progress_file, 'r') as f:
-                content = f.read()
-                
-                # On cherche la position dans le fichier de progression
-                if 'out_time_ms=' in content:
-                    position_lines = [l for l in content.split('\n') if 'out_time_ms=' in l]
-                    if position_lines:
-                        # On prend la dernière ligne
-                        time_part = position_lines[-1].split('=')[1]
-                        
-                        if time_part.isdigit():
-                            # Conversion en secondes
-                            ms_value = int(time_part)
-                            new_position = ms_value / 1_000_000
-                            
-                            # AJOUT: Détection des sauts anormaux (régression d'offset importante)
-                            if hasattr(self, 'start_offset') and self.start_offset > 10:
-                                # Si on est dans les premières secondes après le démarrage
-                                now = time.time()
-                                if hasattr(self, 'stream_start_time') and now - self.stream_start_time < 30:
-                                    # Si le nouveau temps est proche de zéro alors qu'on avait demandé un offset important
-                                    if new_position < 10 and abs(new_position - self.start_offset) > 30:
-                                        logger.warning(f"[{self.channel_name}] ⚠️ Détection d'une régression anormale d'offset: {new_position}s vs {self.start_offset}s demandé, on ignore cette mise à jour")
-                                        return False
-                            
-                            # Correction pour valeurs négatives (parfois FFmpeg donne des valeurs négatives)
-                            if ms_value < 0 and self.total_duration > 0:
-                                ms_value = (self.total_duration * 1_000_000) + ms_value
-                                new_position = ms_value / 1_000_000
-                            
-                            # Mise à jour de la position
-                            with self.lock:
-                                # AJOUT: Log pour débug
-                                if abs(self.current_position - new_position) > 30:
-                                    logger.info(f"[{self.channel_name}] 📊 Saut détecté: {self.current_position:.2f}s → {new_position:.2f}s")
-                                    
-                                self.current_position = new_position
-                                self.last_update_time = time.time()
-                                
-                            return True
-            
-            return False
-                                
-        except Exception as e:
-            logger.error(f"[{self.channel_name}] ❌ Erreur lecture position: {e}")
-            return False   
-
-    def save_position(self):
-        """
-        # Sauvegarde la position actuelle
-        """
-        with self.lock:
-            # Si la lecture est en cours, on calcule la position actuelle
-            if self.is_playing:
-                elapsed = time.time() - self.last_update_time
-                self.current_position += elapsed
-                
-                # On gère le bouclage automatique
-                if self.total_duration > 0:
-                    self.current_position %= self.total_duration
-            
-            # On sauvegarde la position
-            self.last_known_position = self.current_position
-            self.last_update_time = time.time()
-            
-            # On écrit l'état dans un fichier
-            self._save_state()
-            
-            logger.info(f"[{self.channel_name}] 💾 Position sauvegardée: {self.current_position:.2f}s")
-            return True
     
     def get_position(self):
         """
@@ -193,21 +90,6 @@ class PlaybackPositionManager:
             self.last_update_time = time.time()
             self._save_state()
     
-    def set_playing(self, is_playing):
-        """
-        # Met à jour l'état de lecture
-        """
-        with self.lock:
-            # Si on passe de playing à stopped, on sauvegarde la position
-            if self.is_playing and not is_playing:
-                self.save_position()
-            
-            # Si on passe de stopped à playing, on met à jour le timestamp
-            if not self.is_playing and is_playing:
-                self.last_update_time = time.time()
-            
-            self.is_playing = is_playing
-    
     def set_total_duration(self, duration):
         """
         # Définit la durée totale de la playlist
@@ -234,31 +116,27 @@ class PlaybackPositionManager:
 
     def get_start_offset(self):
         """
-        # Renvoie l'offset de démarrage sécurisé
+        Calcule l'offset basé sur le temps écoulé depuis le 01/01/2025
+        avec bouclage sur la durée totale
         """
         try:
-            # Vérifier si on a une position connue valide
-            if hasattr(self, 'last_known_position') and self.last_known_position > 0:
-                # S'assurer que la position est dans les limites
-                if self.total_duration > 0:
-                    position = self.last_known_position % self.total_duration
-                    logger.info(f"[{self.channel_name}] ⏱️ Reprise à la dernière position: {position:.2f}s (modulo {self.total_duration:.2f}s)")
-                    return position
-                else:
-                    logger.info(f"[{self.channel_name}] ⏱️ Reprise à la dernière position: {self.last_known_position:.2f}s")
-                    return self.last_known_position
-                    
-            # Sinon on génère un offset aléatoire si possible
-            if hasattr(self, 'total_duration') and self.total_duration > 0:
-                max_offset = self.total_duration * 0.8
-                random_offset = random.uniform(0, max_offset)
-                logger.info(f"[{self.channel_name}] 🎲 Offset aléatoire généré: {random_offset:.2f}s")
-                return random_offset
-                
-            # Fallback sécurisé
-            logger.warning(f"[{self.channel_name}] ⚠️ Utilisation d'un offset de démarrage de secours (0)")
-            return 0.0
+            # Date de référence: 01/01/2025 00:00:00
+            reference_date = time.mktime((2025, 1, 1, 0, 0, 0, 0, 0, 0))
+            current_time = time.time()
             
+            # Temps écoulé depuis la référence en secondes
+            elapsed = current_time - reference_date
+            
+            # Si la durée totale est valide, on applique le modulo
+            if self.total_duration > 0:
+                offset = elapsed % self.total_duration
+                logger.info(f"[{self.channel_name}] ⏱️ Offset calculé: {offset:.2f}s (modulo {self.total_duration:.2f}s)")
+                return offset
+            else:
+                # Fallback sécurisé
+                logger.warning(f"[{self.channel_name}] ⚠️ Durée totale invalide, offset à 0")
+                return 0.0
+                
         except Exception as e:
             logger.error(f"[{self.channel_name}] ❌ Erreur calcul offset: {e}")
             return 0.0    
@@ -327,17 +205,12 @@ class PlaybackPositionManager:
         return 0
     
     def _save_state(self):
-        """
-        # Sauvegarde l'état dans un fichier JSON
-        """
+        """Sauvegarde uniquement les informations essentielles"""
         try:
             state_file = self.state_dir / f"{self.channel_name}_position.json"
             
             state = {
                 "channel_name": self.channel_name,
-                "current_position": self.current_position,
-                "last_known_position": self.last_known_position,
-                "start_offset": self.start_offset,
                 "total_duration": self.total_duration,
                 "last_update": time.time()
             }
@@ -347,11 +220,9 @@ class PlaybackPositionManager:
                 
         except Exception as e:
             logger.error(f"[{self.channel_name}] ❌ Erreur sauvegarde état: {e}")
-
+    
     def _load_state(self):
-        """
-        # Charge l'état depuis un fichier JSON et calcule une position de lecture cohérente
-        """
+        """Charge seulement la durée totale de la playlist"""
         try:
             state_file = self.state_dir / f"{self.channel_name}_position.json"
             
@@ -365,39 +236,12 @@ class PlaybackPositionManager:
             if state.get("channel_name") != self.channel_name:
                 return
                 
-            # On restaure l'état
-            self.current_position = state.get("current_position", 0)
-            self.last_known_position = state.get("last_known_position", 0)
-            self.start_offset = state.get("start_offset", 0)
+            # On récupère uniquement la durée totale
             self.total_duration = state.get("total_duration", 0)
             
-            # On récupère le timestamp de la dernière mise à jour
-            last_update = state.get("last_update", 0)
-            current_time = time.time()
-            
-            # Calcul du temps écoulé depuis la dernière mise à jour
-            elapsed_time = current_time - last_update
-            
-            # On vérifie si l'état n'est pas trop vieux (max 24h)
-            if elapsed_time > 86400:  # 24h en secondes
-                logger.warning(f"[{self.channel_name}] ⚠️ État trop ancien, on réinitialise")
-                self.current_position = 0
-                self.last_known_position = 0
-                self.start_offset = 0
-                return
-                
-            # Mise à jour plus conservatrice de la position
-            # Au lieu d'avancer selon le temps réel écoulé, on avance selon un facteur plus raisonnable
-            if self.total_duration > 0 and elapsed_time > 0:
-                # On limite à un maximum de 10% de la durée totale pour éviter les sauts trop grands
-                max_advancement = min(elapsed_time, self.total_duration * 0.1)
-                self.current_position = (self.last_known_position + max_advancement) % self.total_duration
-                logger.info(f"[{self.channel_name}] ⏱️ Position avancée de manière mesurée: {self.last_known_position:.2f}s → {self.current_position:.2f}s")
-                self.last_known_position = self.current_position
-        
         except Exception as e:
-            logger.error(f"[{self.channel_name}] ❌ Erreur lors du chargement de la position: {e}")
-    
+            logger.error(f"[{self.channel_name}] ❌ Erreur lors du chargement: {e}")
+            
     def update_from_progress(self, progress_file):
         """
         # Met à jour la position à partir du fichier de progression FFmpeg
