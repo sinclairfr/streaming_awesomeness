@@ -31,6 +31,10 @@ class FFmpegProcessManager:
         self.on_position_update = None     # Callback quand la position est mise à jour
         self.on_segment_created = None     # Callback quand un segment est créé
         
+        # Registre global des channels pour retrouver le parent depuis n'importe où
+        if not hasattr(FFmpegProcessManager, 'all_channels'):
+            FFmpegProcessManager.all_channels = {}
+            
     def start_process(self, command, hls_dir):
         """
         # Démarre un processus FFmpeg avec la commande fournie
@@ -247,6 +251,7 @@ class FFmpegProcessManager:
         last_segment_check = 0
         segment_count = 0
         hls_path = Path(hls_dir)
+        last_frozen_check = 0
         
         while not self.stop_monitoring.is_set():
             try:
@@ -289,6 +294,24 @@ class FFmpegProcessManager:
                     
                     last_segment_check = current_time
                 
+                # Vérification périodique du gel du flux (toutes les 30 secondes)
+                if current_time - last_frozen_check >= 30:
+                    # On ne vérifie que s'il y a des spectateurs
+                    from_channel = None
+                    for name, channel in FFmpegProcessManager.all_channels.items() if hasattr(FFmpegProcessManager, 'all_channels') else {}:
+                        if hasattr(channel, 'process_manager') and channel.process_manager == self:
+                            from_channel = channel
+                            break
+                    
+                    if from_channel and hasattr(from_channel, 'watchers_count') and from_channel.watchers_count > 0:
+                        if self._detect_frozen_stream():
+                            # Si le flux est bloqué et qu'il y a des spectateurs, on redémarre
+                            logger.warning(f"[{self.channel_name}] 🔄 Redémarrage du flux bloqué (spectateurs: {from_channel.watchers_count})")
+                            if hasattr(from_channel, '_restart_stream'):
+                                from_channel._restart_stream()
+                    
+                    last_frozen_check = current_time
+                
                 # On attend un peu avant la prochaine vérification
                 time.sleep(0.5)
                 
@@ -296,8 +319,7 @@ class FFmpegProcessManager:
                 logger.error(f"[{self.channel_name}] ❌ Erreur surveillance: {e}")
                 time.sleep(1)
         
-        logger.info(f"[{self.channel_name}] 👋 Fin de la surveillance FFmpeg")
-    
+        logger.info(f"[{self.channel_name}] 👋 Fin de la surveillance FFmpeg") 
     def _update_playback_position(self, progress_file):
         """
         # Met à jour la position de lecture en lisant le fichier de progression
@@ -381,4 +403,57 @@ class FFmpegProcessManager:
                 return False
         except Exception as e:
             logger.error(f"[{self.channel_name}] ❌ Erreur sauvegarde position: {e}")
+            return False
+        
+    def _detect_frozen_stream(self):
+        """
+        # Détecte si le stream est gelé/bloqué en surveillant les fichiers de progression FFmpeg
+        # Retourne True si le stream semble bloqué
+        """
+        if not self.process or not self.logger_instance:
+            return False
+            
+        try:
+            progress_file = self.logger_instance.get_progress_file()
+            if not progress_file or not Path(progress_file).exists():
+                return False
+                
+            # Vérifier la dernière modification du fichier de progression
+            mod_time = Path(progress_file).stat().st_mtime
+            current_time = time.time()
+            time_since_update = current_time - mod_time
+            
+            # Si le fichier de progression n'a pas été mis à jour depuis 30s, c'est suspect
+            if time_since_update > 30:
+                logger.warning(f"[{self.channel_name}] ⚠️ Fichier progression non mis à jour depuis {time_since_update:.1f}s")
+                
+                # On lit le contenu pour voir si la sortie est bloquée
+                with open(progress_file, 'r') as f:
+                    content = f.read()
+                    last_position = 0
+                    
+                    # Chercher la dernière position
+                    if 'out_time_ms=' in content:
+                        position_lines = [l for l in content.split('\n') if 'out_time_ms=' in l]
+                        if position_lines:
+                            time_part = position_lines[-1].split('=')[1]
+                            if time_part.isdigit():
+                                last_position = int(time_part) / 1_000_000  # En secondes
+                    
+                    # Si on n'a pas de position ou une position statique, c'est bloqué
+                    if last_position == 0 or (hasattr(self, 'last_checked_position') and 
+                                            self.last_checked_position == last_position and 
+                                            time_since_update > 60):  # 60s sans progression
+                        # On stocke la position pour comparer la prochaine fois
+                        self.last_checked_position = last_position
+                        logger.error(f"[{self.channel_name}] 🚨 FLUX BLOQUÉ détecté! Position: {last_position:.2f}s, Inactivité: {time_since_update:.1f}s")
+                        return True
+                        
+                    # Mise à jour de la position pour la prochaine vérification
+                    self.last_checked_position = last_position
+                
+            return False
+            
+        except Exception as e:
+            logger.error(f"[{self.channel_name}] ❌ Erreur détection flux bloqué: {e}")
             return False

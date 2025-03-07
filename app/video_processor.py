@@ -154,7 +154,6 @@ class VideoProcessor:
                 except Exception as e:
                     logger.error(f"Erreur migration {video.name}: {e}")
         
-
     def check_gpu_support(self):
         """Vérifie si le support GPU est disponible"""
         try:

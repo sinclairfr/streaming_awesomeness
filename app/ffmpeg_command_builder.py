@@ -138,7 +138,7 @@ class FFmpegCommandBuilder:
             logger.error(f"[{self.name}] Erreur renommage global: {e}")    
    
     def build_input_params(self, input_file, playback_offset=0, progress_file=None):
-        """Construit les paramètres d'entrée avec meilleure gestion du buffer"""
+        """Construit les paramètres d'entrée avec meilleur positionnement initial"""
         params = [
             "ffmpeg",
             "-hide_banner",
@@ -146,23 +146,25 @@ class FFmpegCommandBuilder:
             "-y"
         ]
         
-        # Paramètres de buffer réduits pour diminuer la latence
-        params.extend([
-            "-thread_queue_size", "1024",  # Réduit de 8192
-            "-analyzeduration", "5M",      # Réduit de 20M
-            "-probesize", "5M"             # Réduit de 20M
-        ])
-        
+        # IMPORTANT: Le placement du -ss AVANT l'input permet un positionnement précis
         if playback_offset > 0:
             params.extend([
                 "-ss", f"{playback_offset:.2f}"
             ])
         
+        # Paramètres de buffer pour stabilité
+        params.extend([
+            "-thread_queue_size", "8192",
+            "-analyzeduration", "10M",
+            "-probesize", "10M"
+        ])
+        
+        # Après le seek, on applique les autres options
         params.extend([
             "-re",
             "-stream_loop", "-1",
-            "-fflags", "+genpts+igndts+discardcorrupt+nobuffer",  # Ajouté nobuffer pour réduire la latence
-            "-threads", "2",  # Réduit pour moins de charge CPU
+            "-fflags", "+genpts+igndts+discardcorrupt",
+            "-threads", "4",
             "-avoid_negative_ts", "make_zero"
         ])
         
@@ -175,89 +177,56 @@ class FFmpegCommandBuilder:
             "-i", str(input_file)
         ])
         
-        return params
-        
+        return params 
+    
     def build_hls_params(self, output_dir):
-        """
-        # Construit les paramètres HLS optimisés pour éviter les sauts de segments
-        """
+        """Construit les paramètres HLS optimisés pour la stabilité et les changements d'offset"""
         return [
             "-f", "hls",
-            "-hls_time", "1",  # Réduit de 2 à 1 seconde pour un démarrage plus rapide
-            "-hls_list_size", "8",  # Playlist plus courte pour moins de mémoire
-            "-hls_delete_threshold", "2",  # Suppression plus rapide des segments obsolètes
-            "-hls_flags", "delete_segments+append_list+program_date_time+independent_segments+split_by_time",  # Retiré round_durations+omit_endlist qui peuvent causer des problèmes
+            "-hls_time", "4",
+            "-hls_list_size", "20",
+            "-hls_delete_threshold", "5",
+            "-hls_flags", "delete_segments+append_list+program_date_time+independent_segments+split_by_time",
             "-hls_allow_cache", "1",
             "-start_number", "0",
             "-hls_segment_type", "mpegts",
-            "-max_delay", "500000",  # Réduit pour une latence plus faible (de 2000000 à 500000)
-            "-hls_init_time", "0.5",  # Réduit pour démarrage plus rapide (de 2 à 0.5)
+            "-max_delay", "2000000",
+            "-hls_init_time", "4",
+            "-force_key_frames", "expr:gte(t,n_forced*4)",  # Force une keyframe tous les 4 secondes
             "-hls_segment_filename", f"{output_dir}/segment_%d.ts",
             f"{output_dir}/playlist.m3u8"
-        ]
-    
+        ] 
+        
     def build_encoding_params(self, has_mkv=False):
-        """Construit les paramètres d'encodage optimisés pour la rapidité"""
-        logger.info(f"[{self.channel_name}] 📼 Paramètres d'encodage optimisés")
+        """Construit les paramètres d'encodage optimisés pour la copie directe"""
+        logger.info(f"[{self.channel_name}] 📼 Paramètres optimisés pour la copie directe")
         
-        # Mode copie directe si possible (bien plus rapide)
-        use_copy = os.getenv('SKIP_NORMALIZATION', '0') == '1'
+        # Par défaut, on privilégie la copie directe
+        params = [
+            "-c:v", "copy",                # Copie directe du flux vidéo
+            "-c:a", "copy",                # Copie directe du flux audio
+            "-sn", "-dn",                  # Pas de sous-titres/données
+            "-map", "0:v:0",               # Premier flux vidéo uniquement
+            "-map", "0:a:0?",              # Premier flux audio s'il existe
+            "-max_muxing_queue_size", "4096"  # Buffer augmenté
+        ]
         
-        if use_copy:
-            logger.info(f"[{self.channel_name}] 🚀 Mode copie directe activé")
-            return [
+        # Ajustements pour MKV si nécessaire
+        if has_mkv:
+            logger.info(f"[{self.channel_name}] ⚠️ Fichier MKV détecté, ajustement des paramètres")
+            # Pour les MKV on peut avoir besoin de spécifier explicitement certains paramètres
+            params = [
                 "-c:v", "copy",
-                "-c:a", "copy",
+                "-c:a", "aac",             # Conversion audio en AAC pour compatibilité
+                "-b:a", "192k",
                 "-sn", "-dn",
-                "-map", "0:v:0", 
+                "-map", "0:v:0",
                 "-map", "0:a:0?",
-                "-max_muxing_queue_size", "4096"
+                "-max_muxing_queue_size", "8192"  # Buffer encore plus grand pour MKV
             ]
         
-        # Paramètres CPU optimisés pour la rapidité
-        params = [
-            "-c:v", "libx264",
-            "-profile:v", "baseline",  # Plus simple/rapide que "main"
-            "-preset", "ultrafast",
-            "-tune", "zerolatency",  # Crucial pour le streaming en direct
-            "-x264opts", "no-scenecut", # Évite les sauts de keyframes
-            "-b:v", "3M",  # Bitrate plus faible mais suffisant
-            "-maxrate", "4M",
-            "-bufsize", "4M",  # Buffer plus petit pour moins de latence
-            "-g", "30",  # GOP plus court pour meilleure réactivité
-            "-force_key_frames", "expr:gte(t,n_forced*1)",  # Force keyframe chaque seconde
-            "-max_muxing_queue_size", "1024"  # Plus petit pour moins de mise en cache
-        ]
-        
-
-        # Paramètres GPU si activé
-        if use_gpu_actual:
-            logger.info(f"[{self.channel_name}] 🖥️ Utilisation de l'accélération GPU (VAAPI)")
-            params.extend([
-                "-vf", "format=nv12|vaapi,hwupload",
-                "-low_power", "1"  # Mode basse consommation
-            ])
-        else:
-            logger.info(f"[{self.channel_name}] 💻 Utilisation du CPU pour l'encodage")
-   
-        # Paramètres audio
-        params.extend([
-            "-c:a", "aac",
-            "-b:a", "192k",
-            "-ar", "48000",
-            "-ac", "2"  # Force stereo
-        ])
-        
-        # Désactivation explicite des sous-titres et pistes de données
-        params.extend([
-            "-sn",  # Pas de sous-titres
-            "-dn",  # Pas de flux de données
-            "-map", "0:v:0",  # Map uniquement le premier flux vidéo
-            "-map", "0:a:0"   # Map uniquement le premier flux audio
-        ])
-        
         return params
-
+    
     def build_fallback_command(self, input_file, output_dir):
         """
         # Construit une commande minimale en cas d'erreur

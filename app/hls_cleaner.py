@@ -17,9 +17,9 @@ class HLSCleaner:
     def __init__(self, hls_dir: str = "/app/hls/"):
         # On permet de personnaliser le dossier HLS
         self.hls_dir = Path(hls_dir)
-        self.max_hls_age = 3600  # 1 heure
-        self.min_free_space_gb = 10.0
-        self.cleanup_interval = 600  # 10 minutes
+        self.max_hls_age = 7200  # 2 heures au lieu de 1 heure
+        self.min_free_space_gb = 5.0  # Abaissé pour conserver plus de segments
+        self.cleanup_interval = 1200  # 20 minutes au lieu de 10
         
         # On crée le dossier HLS s'il n'existe pas
         self.hls_dir.mkdir(parents=True, exist_ok=True)

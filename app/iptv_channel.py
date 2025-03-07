@@ -50,6 +50,10 @@ class IPTVChannel:
         self.command_builder = FFmpegCommandBuilder(name, use_gpu=use_gpu) 
         self.process_manager = FFmpegProcessManager(name, self.logger)
         
+        # Ajouter cette chaîne au registre global
+        if hasattr(FFmpegProcessManager, 'all_channels'):
+            FFmpegProcessManager.all_channels[name] = self   
+                 
         # Configuration des callbacks
         self.process_manager.on_process_died = self._handle_process_died
         self.process_manager.on_position_update = self._handle_position_update
@@ -345,6 +349,37 @@ class IPTVChannel:
     def start_stream(self) -> bool:
         """Démarre le stream avec FFmpeg en utilisant les nouvelles classes, avec fallback CPU"""
         try:
+            # Vérification rapide que la chaîne est prête
+            if not self.ready_for_streaming:
+                logger.warning(f"[{self.name}] ⚠️ Chaîne non prête pour le streaming (pas de vidéos)")
+                return False
+
+            logger.info(f"[{self.name}] 🚀 Démarrage du stream...")
+
+            hls_dir = Path(f"/app/hls/{self.name}")
+            
+            # AJOUT: Nettoyage complet des anciens segments avant démarrage
+            if hls_dir.exists():
+                # Suppression de tous les segments .ts
+                for segment in hls_dir.glob("*.ts"):
+                    try:
+                        segment.unlink()
+                    except Exception as e:
+                        logger.error(f"[{self.name}] ❌ Erreur suppression segment {segment.name}: {e}")
+                
+                # Suppression de la playlist
+                playlist_file = hls_dir / "playlist.m3u8"
+                if playlist_file.exists():
+                    try:
+                        playlist_file.unlink()
+                    except Exception as e:
+                        logger.error(f"[{self.name}] ❌ Erreur suppression playlist: {e}")
+            
+            # Création du dossier si nécessaire
+            hls_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Le reste de la méthode reste inchangé...
+    
             # Vérification rapide que la chaîne est prête
             if not self.ready_for_streaming:
                 logger.warning(f"[{self.name}] ⚠️ Chaîne non prête pour le streaming (pas de vidéos)")

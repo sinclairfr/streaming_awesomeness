@@ -368,6 +368,54 @@ class PlaybackPositionManager:
         except Exception as e:
             logger.error(f"[{self.channel_name}] ❌ Erreur chargement état: {e}")
         """
+        # Charge l'état depuis un fichier JSON et avance la position en fonction du temps écoulé
+        """
+        try:
+            state_file = self.state_dir / f"{self.channel_name}_position.json"
+            
+            if not state_file.exists():
+                return
+                
+            with open(state_file, 'r') as f:
+                state = json.load(f)
+                
+            # On ne charge que si c'est le même channel
+            if state.get("channel_name") != self.channel_name:
+                return
+                
+            # On restaure l'état
+            self.current_position = state.get("current_position", 0)
+            self.last_known_position = state.get("last_known_position", 0)
+            self.start_offset = state.get("start_offset", 0)
+            self.total_duration = state.get("total_duration", 0)
+            
+            # On récupère le timestamp de la dernière mise à jour
+            last_update = state.get("last_update", 0)
+            current_time = time.time()
+            
+            # Calcul du temps écoulé depuis la dernière mise à jour
+            elapsed_time = current_time - last_update
+            
+            # On vérifie si l'état n'est pas trop vieux (max 24h)
+            if elapsed_time > 86400:  # 24h en secondes
+                logger.warning(f"[{self.channel_name}] ⚠️ État trop ancien, on réinitialise")
+                self.current_position = 0
+                self.last_known_position = 0
+                self.start_offset = 0
+                return
+                
+            # Mise à jour de la position en fonction du temps écoulé (mode direct TV)
+            if self.total_duration > 0 and elapsed_time > 0:
+                # On avance la position en fonction du temps écoulé
+                self.current_position = (self.current_position + elapsed_time) % self.total_duration
+                self.last_known_position = self.current_position
+                logger.info(f"[{self.channel_name}] ⏱️ Position avancée de {elapsed_time:.2f}s → {self.current_position:.2f}s")
+            
+            logger.info(f"[{self.channel_name}] ✅ État chargé, position ajustée: {self.last_known_position:.2f}s")
+                
+        except Exception as e:
+            logger.error(f"[{self.channel_name}] ❌ Erreur chargement état: {e}")
+        """
         # Charge l'état depuis un fichier JSON
         """
         try:
