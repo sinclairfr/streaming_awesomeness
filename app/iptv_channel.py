@@ -92,26 +92,14 @@ class IPTVChannel:
         threading.Thread(target=self._scan_videos_async, daemon=True).start() 
 
         self._verify_playlist()
-
+        
     def _handle_position_update(self, position):
         """Reçoit les mises à jour de position du ProcessManager"""
-        # Vérifications pour détecter des problèmes au démarrage
-        if position < 20 and hasattr(self.position_manager, 'start_offset'):
-            if self.position_manager.start_offset > 50:
-                current_time = time.time()
-                if hasattr(self.position_manager, 'stream_start_time'):
-                    elapsed = current_time - self.position_manager.stream_start_time
-                    if elapsed < 60:  # Premières minutes
-                        logger.warning(f"[{self.name}] ⚠️ Position suspecte: {position:.2f}s vs {self.position_manager.start_offset:.2f}s attendu")
-                        # Si l'écart est vraiment important, on redémarre le stream
-                        if abs(position - self.position_manager.start_offset) > 40 and elapsed > 5:
-                            logger.error(f"[{self.name}] 🔄 Redémarrage du stream pour corriger l'offset")
-                            self.stop_stream_if_needed()
-                            time.sleep(2)
-                            self.start_stream()
-                            return
+        # On se contente de loguer les sauts de position sans redémarrer
+        if hasattr(self, 'last_logged_position') and abs(position - self.last_logged_position) > 30:
+            logger.info(f"[{self.name}] 📊 Saut détecté: {self.last_logged_position:.2f}s → {position:.2f}s")
         
-        # Passage du fichier de progression et non de la position numérique
+        self.last_logged_position = position
         self.position_manager.update_from_progress(self.logger.get_progress_file())
         
     def _scan_videos(self) -> bool:

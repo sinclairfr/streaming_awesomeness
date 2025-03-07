@@ -27,11 +27,9 @@ class FFmpegCommandBuilder:
         self.video_bitrate = "5M"
         self.max_bitrate = "5M"
         self.buffer_size = "10M"
-            
+
     def build_command(self, input_file, output_dir, playback_offset=0, progress_file=None, has_mkv=False):
-        """
-        # Construit la commande FFmpeg complète
-        """
+        """Construit la commande FFmpeg complète"""
         try:
             logger.info(f"[{self.channel_name}] 🛠️ Construction de la commande FFmpeg...")
             
@@ -43,23 +41,30 @@ class FFmpegCommandBuilder:
             # Assemblage de la commande complète
             command = input_params + encoding_params + hls_params
             
-            # Vérification du chemin de sortie (correction du bug)
-            output_path_index = command.index(f"{output_dir}/playlist.m3u8")
-            if output_path_index > 0:
-                output_path = command[output_path_index]
-                # Vérification que le chemin est correct
-                if not output_path.startswith("/app/hls/"):
-                    command[output_path_index] = f"/app/hls/{self.channel_name}/playlist.m3u8"
+            # Vérification et correction du chemin de sortie
+            output_file = command[-1]
+            if not output_file.startswith('/app/hls/'):
+                # On corrige le chemin de sortie
+                corrected_path = f"/app/hls/{self.channel_name}/playlist.m3u8"
+                command[-1] = corrected_path
+                logger.info(f"[{self.channel_name}] 🛠️ Correction du chemin de sortie: {output_file} -> {corrected_path}")
             
             # Log pour debug
             logger.info(f"[{self.channel_name}] 📝 Commande: {' '.join(command)}")
+            
+            # Juste avant le return command
+            output_path = command[-1]
+            if '/app/hls' in output_path and not '/app/hls/' in output_path:
+                fixed_path = output_path.replace('/app/hls', '/app/hls/')
+                command[-1] = fixed_path
+                logger.info(f"[{self.channel_name}] 🔧 Correction chemin: {output_path} → {fixed_path}")
             
             return command  
         except Exception as e:
             logger.error(f"[{self.channel_name}] ❌ Erreur construction commande: {e}")
             # Fallback à une commande minimale en cas d'erreur
             return self.build_fallback_command(input_file, output_dir)
-
+        
     def _create_concat_file(self) -> Optional[Path]:
         """Version ultra simplifiée pour débloquer la situation"""
         try:
