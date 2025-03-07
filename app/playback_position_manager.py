@@ -85,6 +85,7 @@ class PlaybackPositionManager:
     def update_from_progress(self, progress_file):
         """
         # Met à jour la position à partir du fichier de progression FFmpeg
+        # Avec détection des anomalies de saut au démarrage
         """
         if not progress_file or not Path(progress_file).exists():
             return False
@@ -105,14 +106,30 @@ class PlaybackPositionManager:
                         if time_part.isdigit():
                             # Conversion en secondes
                             ms_value = int(time_part)
+                            new_position = ms_value / 1_000_000
+                            
+                            # AJOUT: Détection des sauts anormaux (régression d'offset importante)
+                            if hasattr(self, 'start_offset') and self.start_offset > 10:
+                                # Si on est dans les premières secondes après le démarrage
+                                now = time.time()
+                                if hasattr(self, 'stream_start_time') and now - self.stream_start_time < 30:
+                                    # Si le nouveau temps est proche de zéro alors qu'on avait demandé un offset important
+                                    if new_position < 10 and abs(new_position - self.start_offset) > 30:
+                                        logger.warning(f"[{self.channel_name}] ⚠️ Détection d'une régression anormale d'offset: {new_position}s vs {self.start_offset}s demandé, on ignore cette mise à jour")
+                                        return False
                             
                             # Correction pour valeurs négatives (parfois FFmpeg donne des valeurs négatives)
                             if ms_value < 0 and self.total_duration > 0:
                                 ms_value = (self.total_duration * 1_000_000) + ms_value
+                                new_position = ms_value / 1_000_000
                             
                             # Mise à jour de la position
                             with self.lock:
-                                self.current_position = ms_value / 1_000_000
+                                # AJOUT: Log pour débug
+                                if abs(self.current_position - new_position) > 30:
+                                    logger.info(f"[{self.channel_name}] 📊 Saut détecté: {self.current_position:.2f}s → {new_position:.2f}s")
+                                    
+                                self.current_position = new_position
                                 self.last_update_time = time.time()
                                 
                             return True
@@ -121,8 +138,8 @@ class PlaybackPositionManager:
                                 
         except Exception as e:
             logger.error(f"[{self.channel_name}] ❌ Erreur lecture position: {e}")
-            return False
-    
+            return False   
+
     def save_position(self):
         """
         # Sauvegarde la position actuelle
@@ -380,3 +397,61 @@ class PlaybackPositionManager:
         
         except Exception as e:
             logger.error(f"[{self.channel_name}] ❌ Erreur lors du chargement de la position: {e}")
+    
+    def update_from_progress(self, progress_file):
+        """
+        # Met à jour la position à partir du fichier de progression FFmpeg
+        # Avec détection des anomalies de saut au démarrage
+        """
+        if not progress_file or not Path(progress_file).exists():
+            return False
+            
+        try:
+            self.last_progress_file = progress_file
+            
+            with open(progress_file, 'r') as f:
+                content = f.read()
+                
+                # On cherche la position dans le fichier de progression
+                if 'out_time_ms=' in content:
+                    position_lines = [l for l in content.split('\n') if 'out_time_ms=' in l]
+                    if position_lines:
+                        # On prend la dernière ligne
+                        time_part = position_lines[-1].split('=')[1]
+                        
+                        if time_part.isdigit():
+                            # Conversion en secondes
+                            ms_value = int(time_part)
+                            new_position = ms_value / 1_000_000
+                            
+                            # AJOUT: Détection des sauts anormaux (régression d'offset importante)
+                            if hasattr(self, 'start_offset') and self.start_offset > 10:
+                                # Si on est dans les premières secondes après le démarrage
+                                now = time.time()
+                                if hasattr(self, 'stream_start_time') and now - self.stream_start_time < 30:
+                                    # Si le nouveau temps est proche de zéro alors qu'on avait demandé un offset important
+                                    if new_position < 10 and abs(new_position - self.start_offset) > 30:
+                                        logger.warning(f"[{self.channel_name}] ⚠️ Détection d'une régression anormale d'offset: {new_position}s vs {self.start_offset}s demandé, on ignore cette mise à jour")
+                                        return False
+                            
+                            # Correction pour valeurs négatives 
+                            if ms_value < 0 and self.total_duration > 0:
+                                ms_value = (self.total_duration * 1_000_000) + ms_value
+                                new_position = ms_value / 1_000_000
+                            
+                            # Mise à jour de la position
+                            with self.lock:
+                                # Log des sauts importants
+                                if abs(self.current_position - new_position) > 30:
+                                    logger.info(f"[{self.channel_name}] 📊 Saut détecté: {self.current_position:.2f}s → {new_position:.2f}s")
+                                    
+                                self.current_position = new_position
+                                self.last_update_time = time.time()
+                                
+                            return True
+            
+            return False
+                                
+        except Exception as e:
+            logger.error(f"[{self.channel_name}] ❌ Erreur lecture position: {e}")
+            return False

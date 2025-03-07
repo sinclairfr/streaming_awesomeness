@@ -56,6 +56,7 @@ class IPTVChannel:
                  
         # Configuration des callbacks
         self.process_manager.on_process_died = self._handle_process_died
+        # On ne passe pas directement la méthode mais on crée un wrapper
         self.process_manager.on_position_update = self._handle_position_update
         self.process_manager.on_segment_created = self._handle_segment_created
 
@@ -91,6 +92,22 @@ class IPTVChannel:
         threading.Thread(target=self._scan_videos_async, daemon=True).start() 
 
         self._verify_playlist()
+        
+    def _handle_position_update(self, position):
+        """Reçoit les mises à jour de position du ProcessManager"""
+        # Vérifications pour détecter des problèmes au démarrage
+        if position < 10 and hasattr(self.position_manager, 'start_offset'):
+            if self.position_manager.start_offset > 20:
+                current_time = time.time()
+                if hasattr(self.position_manager, 'stream_start_time'):
+                    elapsed = current_time - self.position_manager.stream_start_time
+                    if elapsed < 20:  # Premières secondes
+                        logger.warning(f"[{self.name}] ⚠️ Position suspecte: {position:.2f}s vs {self.position_manager.start_offset:.2f}s attendu")
+                        # On n'ignore pas complètement, mais on ne met pas à jour le fichier d'état
+                        return
+        
+        # Passage du fichier de progression et non de la position numérique
+        self.position_manager.update_from_progress(self.logger.get_progress_file())
         
     def _scan_videos(self) -> bool:
         """Scanne les fichiers vidéos et met à jour processed_videos"""
@@ -360,7 +377,6 @@ class IPTVChannel:
 
             hls_dir = Path(f"/app/hls/{self.name}")
             
-            # AJOUT: Nettoyage complet des anciens segments avant démarrage
             if hls_dir.exists():
                 # Suppression de tous les segments .ts
                 for segment in hls_dir.glob("*.ts"):
@@ -407,12 +423,27 @@ class IPTVChannel:
                 start_offset = start_offset % self.total_duration
                 logger.info(f"[{self.name}] ⏱️ Offset corrigé: {start_offset:.2f}s")
 
+            # AJOUT: Mémorisation du moment de démarrage et de l'offset demandé
+            self.position_manager.stream_start_time = time.time()
+            self.position_manager.start_offset = start_offset
+            self.position_manager.channel_name = self.name  # Pour les logs
+            
             # Synchronisation des managers
             self.position_manager.set_position(start_offset)
             self.position_manager.set_playing(True)
             self.process_manager.set_playback_offset(start_offset)
             self.process_manager.set_total_duration(self.position_manager.total_duration)
 
+            # À ajouter après la récupération de l'offset
+            start_offset = self.position_manager.get_start_offset()
+            if self.total_duration > 0 and start_offset > self.total_duration:
+                start_offset = start_offset % self.total_duration
+                logger.info(f"[{self.name}] ⏱️ Offset corrigé: {start_offset:.2f}s")
+
+            # AJOUT: Mémorisation du moment de démarrage et de l'offset demandé
+            self.position_manager.stream_start_time = time.time()
+            self.position_manager.start_offset = start_offset
+            
             # PREMIÈRE TENTATIVE AVEC HARDWARE ACCÉLÉRATION
             self.command_builder.optimize_for_hardware()
             logger.info(f"[{self.name}] Vérification mkv...")
@@ -625,9 +656,42 @@ class IPTVChannel:
             self.error_handler.add_error("PROCESS_DIED")
         return parent_channel._restart_stream() if hasattr(parent_channel, '_restart_stream') else False    
     
-    def _handle_position_update(self, position):
-        """Reçoit les mises à jour de position du ProcessManager"""
-        self.position_manager.update_from_progress(self.logger.get_progress_file())
+    def save_position(self):
+        """
+        # Sauvegarde la position actuelle avec vérification de cohérence
+        """
+        with self.lock:
+            # Si la lecture est en cours, on calcule la position actuelle
+            if self.is_playing:
+                elapsed = time.time() - self.last_update_time
+                new_position = self.current_position + elapsed
+                
+                # AJOUT: Vérification de cohérence avec l'offset de départ
+                if hasattr(self, 'stream_start_time') and hasattr(self, 'start_offset'):
+                    stream_elapsed = time.time() - self.stream_start_time
+                    # Si on est encore dans les premières secondes du stream
+                    if stream_elapsed < 30:
+                        # Si la nouvelle position est proche de zéro alors qu'on avait un offset important
+                        if new_position < 10 and self.start_offset > 30:
+                            logger.warning(f"[{self.channel_name}] 🛑 Position incohérente détectée lors de la sauvegarde: {new_position:.2f}s vs {self.start_offset:.2f}s demandé")
+                            # On utilise l'offset de départ plutôt que la position calculée
+                            new_position = self.start_offset + stream_elapsed
+                
+                # On gère le bouclage automatique
+                if self.total_duration > 0:
+                    new_position %= self.total_duration
+                    
+                self.current_position = new_position
+                
+            # On sauvegarde la position
+            self.last_known_position = self.current_position
+            self.last_update_time = time.time()
+            
+            # On écrit l'état dans un fichier
+            self._save_state()
+            
+            logger.info(f"[{self.channel_name}] 💾 Position sauvegardée: {self.current_position:.2f}s")
+            return True    
         
     def _handle_segment_created(self, segment_path, size):  
         """Notifié quand un nouveau segment est créé"""
