@@ -302,10 +302,12 @@ class IPTVChannel:
     def _verify_playlist(self):
         """Vérifie que le fichier playlist est valide"""
         try:
-            playlist_path = Path(f"/app/content/{self.name}/_playlist.txt")
+            playlist_path = Path(self.video_dir) / "_playlist.txt"
             if not playlist_path.exists():
-                logger.error(f"[{self.name}] ❌ _playlist.txt n'existe pas")
+                logger.error(f"[{self.channel_name}] ❌ _playlist.txt n'existe pas")
                 return False
+
+            # Reste de la méthode inchangé...
 
             with open(playlist_path, 'r') as f:
                 lines = f.readlines()
@@ -540,7 +542,13 @@ class IPTVChannel:
         # Lance le scan dans un thread séparé
         threading.Thread(target=scan_and_notify, daemon=True).start()
         return True  
-     
+    
+    def start_stream_if_needed(self):
+        """Démarre le stream uniquement s'il n'est pas déjà en cours"""
+        if not self.process_manager.is_running():
+            return self.start_stream()
+        return True  
+    
     def update_watchers(self, count: int):
         """Mise à jour du nombre de watchers"""
         with self.lock:
@@ -588,28 +596,34 @@ class IPTVChannel:
 
     def _handle_process_died(self, return_code):
         """Gère la mort du processus FFmpeg"""
-        logger.error(f"[{self.name}] ❌ Processus FFmpeg terminé avec code: {return_code}")
+        logger.error(f"[{self.channel_name}] ❌ Processus FFmpeg terminé avec code: {return_code}")
         
-        # Éviter les redémarrages en cascade avec une vérification des délais d'inactivité
-        # Si le processus a été tué intentionnellement (code -9 = SIGKILL)
-        if return_code == -9:
-            # Calculer le temps d'inactivité
-            inactivity_duration = time.time() - getattr(self, 'last_watcher_time', 0)
+        # Cherche la chaîne associée
+        parent_channel = None
+        for name, channel in FFmpegProcessManager.all_channels.items() if hasattr(FFmpegProcessManager, 'all_channels') else {}:
+            if hasattr(channel, 'process_manager') and channel.process_manager == self:
+                parent_channel = channel
+                break
+        
+        # Vérifie si des spectateurs sont actifs
+        has_watchers = parent_channel and hasattr(parent_channel, 'watchers_count') and parent_channel.watchers_count > 0
+        
+        # Si on a des spectateurs, on redémarre toujours
+        if has_watchers:
+            logger.info(f"[{self.channel_name}] 🔄 Redémarrage car {parent_channel.watchers_count} spectateur(s) actif(s)")
+            return parent_channel._restart_stream() if hasattr(parent_channel, '_restart_stream') else False
             
-            # Si l'inactivité est supérieure au seuil, considérer que c'était un arrêt intentionnel
-            if inactivity_duration > TIMEOUT_NO_VIEWERS:
-                logger.info(f"[{self.name}] ✅ Processus FFmpeg tué proprement après {inactivity_duration:.1f}s d'inactivité")
-                return False  # Ne pas redémarrer
+        # Si arrêt intentionnel (SIGKILL) sans spectateurs, ne pas redémarrer
+        if return_code == -9:
+            inactivity = time.time() - getattr(parent_channel, 'last_watcher_time', 0) if parent_channel else float('inf')
+            if inactivity > TIMEOUT_NO_VIEWERS:
+                logger.info(f"[{self.channel_name}] ✅ Processus FFmpeg tué proprement après {inactivity:.1f}s d'inactivité")
+                return False
         
-        # Vérifier aussi le cooldown global avant d'ajouter une erreur
-        elapsed = time.time() - getattr(self, "last_restart_time", 0)
-        if elapsed < getattr(self.error_handler, "restart_cooldown", 60):
-            logger.info(f"[{self.name}] ⏱️ Cooldown actif, pas de redémarrage immédiat ({elapsed:.1f}s < {getattr(self.error_handler, 'restart_cooldown', 60)}s)")
-            return False
-        
-        # Sinon, comportement normal
-        self.error_handler.add_error("PROCESS_DIED")
-        return self._restart_stream()
+        # Cas par défaut : redémarrage via l'error handler
+        if hasattr(self, 'error_handler'):
+            self.error_handler.add_error("PROCESS_DIED")
+        return parent_channel._restart_stream() if hasattr(parent_channel, '_restart_stream') else False    
     
     def _handle_position_update(self, position):
         """Reçoit les mises à jour de position du ProcessManager"""
