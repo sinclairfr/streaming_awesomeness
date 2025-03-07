@@ -320,6 +320,7 @@ class FFmpegProcessManager:
                 time.sleep(1)
         
         logger.info(f"[{self.channel_name}] 👋 Fin de la surveillance FFmpeg") 
+    
     def _update_playback_position(self, progress_file):
         """
         # Met à jour la position de lecture en lisant le fichier de progression
@@ -370,6 +371,7 @@ class FFmpegProcessManager:
             self.playback_offset = offset
             
         self.last_playback_time = time.time()        
+    
     def get_playback_offset(self):
         """
         # Renvoie l'offset de lecture actuel

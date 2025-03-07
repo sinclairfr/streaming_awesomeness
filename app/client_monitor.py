@@ -31,20 +31,22 @@ class ClientMonitor(threading.Thread):
         #self.segment_monitor_thread.start()
 
     def _cleanup_loop(self):
-        """Nettoie les watchers inactifs"""
+        """Nettoie les watchers inactifs plus fréquemment"""
         while True:
-            time.sleep(60)
+            time.sleep(10) 
             self._cleanup_inactive()
-
+            
     def _cleanup_inactive(self):
         """Nettoie les watchers inactifs"""
         now = time.time()
         to_remove = []
 
         with self.lock:
-            # Check for inactive watchers (>60s without request)
+            # Réduire le seuil à 15 secondes pour être plus réactif
+            inactivity_threshold = 15
+
             for (channel, ip), last_seen in self.watchers.items():
-                if now - last_seen > self.inactivity_threshold:
+                if now - last_seen > inactivity_threshold:
                     to_remove.append((channel, ip))
 
             affected_channels = set()
@@ -55,22 +57,15 @@ class ClientMonitor(threading.Thread):
                 affected_channels.add(channel)
                 logger.info(f"🗑️ Watcher supprimé: {ip} -> {channel}")
 
-            # On nettoie aussi les segments des chaînes affectées
-            for channel in affected_channels:
-                if channel in self.segments_by_channel:
-                    # On garde les infos de segments des 5 dernières minutes max
-                    current_segments = self.segments_by_channel[channel]
-                    self.segments_by_channel[channel] = {
-                        seg_id: ts for seg_id, ts in current_segments.items()
-                        if now - ts < 300  # 5 minutes
-                    }
-
-            # Mise à jour des watchers pour les chaînes affectées
-            for channel in affected_channels:
+            # On fait une mise à jour COMPLÈTE de TOUTES les chaînes
+            all_channels = set([ch for (ch, _), _ in self.watchers.items()])
+            all_channels.update(affected_channels)
+            
+            for channel in all_channels:
                 count = len([1 for (ch, _), _ in self.watchers.items() if ch == channel])
-                logger.warning(f"[{channel}] ⚠️ Mise à jour  : {count} watchers restants")
+                logger.info(f"[{channel}] 🔄 Mise à jour forcée: {count} watchers actifs")
                 self.update_watchers(channel, count, "/hls/")
-
+    
     def _monitor_segment_jumps(self):
         """Surveille les sauts anormaux dans les segments"""
         while True:

@@ -3,8 +3,6 @@ import os
 import logging
 from pathlib import Path
 
-
-
 # Configuration des chemins
 LOG_DIR = os.getenv("LOG_DIR", "/logs")
 CONTENT_DIR = Path(os.getenv('CONTENT_DIR', '/mnt/videos/streaming_awesomeness/content'))

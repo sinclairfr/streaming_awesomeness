@@ -333,7 +333,7 @@ class PlaybackPositionManager:
 
     def _load_state(self):
         """
-        # Charge l'état depuis un fichier JSON et avance la position en fonction du temps écoulé
+        # Charge l'état depuis un fichier JSON et calcule une position de lecture cohérente
         """
         try:
             state_file = self.state_dir / f"{self.channel_name}_position.json"
@@ -369,18 +369,14 @@ class PlaybackPositionManager:
                 self.start_offset = 0
                 return
                 
-            # Mise à jour de la position en fonction du temps écoulé (mode direct TV)
+            # Mise à jour plus conservatrice de la position
+            # Au lieu d'avancer selon le temps réel écoulé, on avance selon un facteur plus raisonnable
             if self.total_duration > 0 and elapsed_time > 0:
-                # CORRECTION: On vérifie que le temps écoulé reste raisonnable
-                # Si le temps écoulé est supérieur à 3x la durée totale, on limite
-                if elapsed_time > self.total_duration * 3:
-                    logger.warning(f"[{self.channel_name}] ⚠️ Temps écoulé excessif ({elapsed_time:.2f}s), limitation appliquée")
-                    elapsed_time = self.total_duration * 0.5  # On limite à 50% de la durée
-                
-                # On avance la position en fonction du temps écoulé, mais on s'assure de faire un modulo
-                self.current_position = (self.current_position + elapsed_time) % self.total_duration
+                # On limite à un maximum de 10% de la durée totale pour éviter les sauts trop grands
+                max_advancement = min(elapsed_time, self.total_duration * 0.1)
+                self.current_position = (self.last_known_position + max_advancement) % self.total_duration
+                logger.info(f"[{self.channel_name}] ⏱️ Position avancée de manière mesurée: {self.last_known_position:.2f}s → {self.current_position:.2f}s")
                 self.last_known_position = self.current_position
-                logger.info(f"[{self.channel_name}] ⏱️ Position avancée de {elapsed_time:.2f}s → {self.current_position:.2f}s (durée totale: {self.total_duration:.2f}s)")
         
         except Exception as e:
-            logger.error(f"[{self.channel_name}] ❌ Erreur lors de l'avancement de la position: {e}")
+            logger.error(f"[{self.channel_name}] ❌ Erreur lors du chargement de la position: {e}")

@@ -1507,37 +1507,3 @@ class VideoProcessor:
                 
         except Exception as e:
             logger.error(f"[{self.channel_name}] ❌ Erreur déplacement fichier vers ignored: {e}")
-        """
-        Déplace un fichier invalide vers le dossier 'ignored'
-        
-        Args:
-            file_path: Chemin du fichier à déplacer
-            reason: Raison de l'invalidité du fichier
-        """
-        try:
-            # S'assurer que le dossier ignored existe
-            ignored_dir = Path(self.channel_dir) / "ignored"
-            ignored_dir.mkdir(parents=True, exist_ok=True)
-                
-            # Créer le chemin de destination (sans renommage)
-            dest_path = ignored_dir / file_path.name
-            
-            # Si le fichier de destination existe déjà, le supprimer
-            if dest_path.exists():
-                dest_path.unlink()
-                logger.info(f"[{self.channel_name}] 🗑️ Suppression du fichier existant dans ignored: {dest_path.name}")
-            
-            # Déplacer le fichier (pas de copie)
-            if file_path.exists():
-                shutil.move(str(file_path), str(dest_path))
-                
-                # Créer un fichier de log à côté avec la raison
-                log_path = ignored_dir / f"{dest_path.stem}_reason.txt"
-                with open(log_path, "w") as f:
-                    f.write(f"Fichier ignoré le {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-                    f.write(f"Raison: {reason}\n")
-                    
-                logger.info(f"[{self.channel_name}] 🚫 Fichier {file_path.name} déplacé vers ignored: {reason}")
-                
-        except Exception as e:
-            logger.error(f"[{self.channel_name}] ❌ Erreur déplacement fichier vers ignored: {e}")

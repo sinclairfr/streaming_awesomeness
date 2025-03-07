@@ -90,3 +90,4 @@ class StreamErrorHandler:
                 f.write("-" * 80 + "\n")
         except Exception as e:
             logger.error(f"Erreur écriture log crash pour {self.channel_name}: {e}")
+            

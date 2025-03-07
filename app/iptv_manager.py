@@ -231,7 +231,7 @@ class IPTVManager:
                     for name, channel in sorted(self.channels.items()):
                         if hasattr(channel, 'watchers_count'):
                             count = channel.watchers_count
-                            watcher_text = f"{count} watcher{'' if count == 1 else 's'}"
+                            watcher_text = f"{count} watcher{'' if count <= 1 else 's'}"
                             active_watchers.append(f"{name}: {watcher_text}")
                     
                     if active_watchers:
