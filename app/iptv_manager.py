@@ -99,11 +99,28 @@ class IPTVManager:
         self.channel_init_thread.start()
 
         # On crée tous les objets IPTVChannel mais SANS démarrer FFmpeg
-        logger.info(f"Scan initial dans {self.content_dir}")
-        self.scan_channels(initial=True, force=True)
-
         # Moniteur clients
+        logger.info(f"🚀 Démarrage du client_monitor avec {NGINX_ACCESS_LOG}")
         self.client_monitor = ClientMonitor(NGINX_ACCESS_LOG, self.update_watchers, self)
+
+        # Vérification explicite qu'on a bien accès au fichier
+        if os.path.exists(NGINX_ACCESS_LOG):
+            try:
+                with open(NGINX_ACCESS_LOG, 'r') as f:
+                    # On lit juste les dernières lignes pour voir si ça fonctionne
+                    f.seek(max(0, os.path.getsize(NGINX_ACCESS_LOG) - 1000))
+                    last_lines = f.readlines()
+                    logger.info(f"✅ Lecture réussie du fichier de log, {len(last_lines)} dernières lignes trouvées")
+            except Exception as e:
+                logger.error(f"❌ Erreur lors de la lecture du fichier de log: {e}")
+
+        self.client_monitor.start()
+
+        self._log_monitor_thread = threading.Thread(
+            target=self._check_client_monitor, 
+            daemon=True
+        )
+        self._log_monitor_thread.start()
         self.client_monitor.start()
 
         # Moniteur ressources
@@ -124,7 +141,21 @@ class IPTVManager:
         )
         self.watchers_thread.start()
         self.running = True
-    
+
+    def _check_client_monitor(self):
+        """Vérifie périodiquement l'état du client_monitor"""
+        while True:
+            try:
+                if not hasattr(self, 'client_monitor') or not self.client_monitor.is_alive():
+                    logger.critical("🚨 client_monitor n'est plus actif!")
+                    # Tentative de redémarrage
+                    logger.info("🔄 Tentative de redémarrage du client_monitor...")
+                    self.client_monitor = ClientMonitor(NGINX_ACCESS_LOG, self.update_watchers, self)
+                    self.client_monitor.start()
+            except Exception as e:
+                logger.error(f"❌ Erreur vérification client_monitor: {e}")
+            time.sleep(60)  # Vérification toutes les minutes
+            
     def _process_channel_init_queue(self):
         """Traite la queue d'initialisation des chaînes en parallèle"""
         while not self.stop_init_thread.is_set():
@@ -266,6 +297,9 @@ class IPTVManager:
     def update_watchers(self, channel_name: str, count: int, request_path: str):
         """Met à jour les watchers en fonction des requêtes m3u8 et ts"""
         try:
+            # Log pour débug
+            logger.debug(f"📝 Request: {channel_name} - {request_path} - count: {count}")
+            
             if channel_name not in self.channels:
                 logger.error(f"❌ Chaîne inconnue: {channel_name}")
                 return
@@ -282,6 +316,9 @@ class IPTVManager:
             old_count = channel.watchers_count
             channel.watchers_count = count
 
+            # Log même quand le compte ne change pas, pour débug
+            logger.debug(f"[{channel_name}] 👁️ Watchers: {count} (était: {old_count})")
+
             if old_count != count:
                 logger.info(f"📊 Mise à jour {channel_name}: {count} watchers")
 
@@ -291,6 +328,8 @@ class IPTVManager:
                         logger.info(f"[{channel_name}] 🔥 Premier watcher, démarrage du stream")
                         if not channel.start_stream():
                             logger.error(f"[{channel_name}] ❌ Échec démarrage stream")
+                        else:
+                            logger.info(f"[{channel_name}] ✅ Stream démarré avec succès")
                     else:
                         logger.warning(f"[{channel_name}] ⚠️ Chaîne pas encore prête, impossible de démarrer le stream")
                 elif old_count > 0 and count == 0:
@@ -299,6 +338,8 @@ class IPTVManager:
 
         except Exception as e:
             logger.error(f"❌ Erreur update_watchers: {e}")
+            import traceback
+            logger.error(f"Stack trace: {traceback.format_exc()}")
 
     def _clean_startup(self):
         """Nettoie avant de démarrer"""

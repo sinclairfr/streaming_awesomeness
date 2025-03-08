@@ -42,8 +42,8 @@ class ClientMonitor(threading.Thread):
         to_remove = []
 
         with self.lock:
-            # Réduire le seuil à 15 secondes pour être plus réactif
-            inactivity_threshold = 15
+            # Augmenter ce seuil à 30 secondes pour être plus tolérant
+            inactivity_threshold = 30
 
             for (channel, ip), last_seen in self.watchers.items():
                 if now - last_seen > inactivity_threshold:
@@ -55,9 +55,9 @@ class ClientMonitor(threading.Thread):
                 channel, ip = key
                 del self.watchers[key]
                 affected_channels.add(channel)
-                logger.info(f"🗑️ Watcher supprimé: {ip} -> {channel}")
+                logger.info(f"🗑️ Watcher supprimé: {ip} -> {channel} (inactif depuis {now - last_seen:.1f}s)")
 
-            # On fait une mise à jour COMPLÈTE de TOUTES les chaînes
+            # On fait une mise à jour COMPLÈTE de TOUTES les chaînes actives
             all_channels = set([ch for (ch, _), _ in self.watchers.items()])
             all_channels.update(affected_channels)
             
@@ -65,7 +65,7 @@ class ClientMonitor(threading.Thread):
                 count = len([1 for (ch, _), _ in self.watchers.items() if ch == channel])
                 logger.info(f"[{channel}] 🔄 Mise à jour forcée: {count} watchers actifs")
                 self.update_watchers(channel, count, "/hls/")
-    
+
     def _monitor_segment_jumps(self):
         """Surveille les sauts anormaux dans les segments"""
         while True:
@@ -103,71 +103,194 @@ class ClientMonitor(threading.Thread):
                 
             time.sleep(10)  # Vérification toutes les 10 secondes
 
+    def _check_log_file(self):
+        """Vérifie périodiquement l'état du fichier de log et force une reconnexion si nécessaire"""
+        while True:
+            try:
+                # Vérifier si le fichier existe
+                if not os.path.exists(self.log_path):
+                    logger.error(f"❌ Log file introuvable lors de la vérification périodique: {self.log_path}")
+                    # Forcer la reconnexion
+                    self._force_reconnect = True
+                    
+                # Vérifier la taille et les permissions
+                try:
+                    file_info = os.stat(self.log_path)
+                    file_size = file_info.st_size
+                    
+                    # Si le fichier est vide ou trop petit
+                    if file_size < 10:
+                        logger.warning(f"⚠️ Fichier log anormalement petit: {file_size} bytes")
+                    
+                    # Vérifier les permissions
+                    if not os.access(self.log_path, os.R_OK):
+                        logger.error(f"❌ Permissions insuffisantes sur le fichier log")
+                        self._force_reconnect = True
+                        
+                except Exception as e:
+                    logger.error(f"❌ Erreur vérification stats fichier log: {e}")
+                    
+                # Vérifier l'activité Nginx
+                try:
+                    nginx_running = False
+                    for proc in psutil.process_iter(['name']):
+                        if 'nginx' in proc.info['name']:
+                            nginx_running = True
+                            break
+                    
+                    if not nginx_running:
+                        logger.critical(f"🚨 Nginx semble ne pas être en cours d'exécution!")
+                        # Tenter de voir si le containeur est en cours d'exécution
+                        result = subprocess.run(["docker", "ps", "--filter", "name=iptv-nginx"], capture_output=True, text=True)
+                        logger.info(f"État containeur Nginx: {result.stdout}")
+                except Exception as e:
+                    logger.error(f"❌ Erreur vérification Nginx: {e}")
+                    
+            except Exception as e:
+                logger.error(f"❌ Erreur dans _check_log_file: {e}")
+                
+            time.sleep(60)  # Vérification toutes les minutes
+            
     def run(self):
         """On surveille les requêtes clients"""
-        logger.debug("👀 Démarrage de la surveillance des requêtes...")
+        logger.info("👀 Démarrage de la surveillance des requêtes...")
 
-        try:
-            if not os.path.exists(self.log_path):
-                logger.error(f"❌ Log file introuvable: {self.log_path}")
-                return
+        retry_count = 0
+        max_retries = 5
+        
+        while True:
+            try:
+                # Vérifier si le fichier existe
+                if not os.path.exists(self.log_path):
+                    logger.error(f"❌ Log file introuvable: {self.log_path}")
+                    # Attendre et réessayer
+                    time.sleep(10)
+                    retry_count += 1
+                    if retry_count > max_retries:
+                        logger.critical(f"❌ Impossible de trouver le fichier de log après {max_retries} tentatives")
+                        # Redémarrage forcé du monitoring
+                        time.sleep(30)
+                        retry_count = 0
+                    continue
 
-            logger.debug(f"📖 Ouverture du log: {self.log_path}")
-            with open(self.log_path, "r") as f:
-                f.seek(0, 2)  # Se positionne à la fin du fichier
-                while True:
-                    line = f.readline().strip()
-                    if not line:
-                        time.sleep(0.5)
-                        continue
-
-                    # Debug pour voir les logs en entier (si besoin)
-                    # logger.debug(f"📝 Ligne lue: {line}")
-
-                    # On ne s'intéresse qu'aux requêtes HLS
-                    if "GET /hls/" not in line:
-                        continue
-
-                    parts = line.split()
-                    if len(parts) < 7:
-                        continue
-
-                    ip = parts[0]
-                    request = parts[6].strip('"')
-
-                    # On extrait le channel
-                    match = re.search(r'/hls/([^/]+)/', request)
-                    if not match:
-                        continue
-
-                    channel = match.group(1)
+                logger.info(f"📖 Ouverture du log: {self.log_path}")
+                
+                # Tester si le fichier est accessible en lecture
+                try:
+                    with open(self.log_path, "r") as test_file:
+                        last_pos = test_file.seek(0, 2)  # Se positionne à la fin
+                        logger.info(f"✅ Fichier de log accessible, taille: {last_pos} bytes")
+                except Exception as e:
+                    logger.error(f"❌ Impossible de lire le fichier de log: {e}")
+                    time.sleep(10)
+                    continue
                     
-                    # Extraction du numéro de segment si présent
-                    segment_match = re.search(r'segment_(\d+)\.ts', request)
-                    segment_id = segment_match.group(1) if segment_match else None
+                with open(self.log_path, "r") as f:
+                    # Se positionne à la fin du fichier
+                    f.seek(0, 2)
                     
-                    # Pour le debug avancé
-                    if segment_id:
-                        logger.debug(f"🔍 Segment détecté: {channel} - segment_{segment_id}.ts demandé par {ip}")
-                    else:
-                        logger.debug(f"🔍 Requête HLS: {ip} -> {channel} ({request})")
-
-                    with self.lock:
-                        # Mise à jour du timestamp pour ce watcher
-                        self.watchers[(channel, ip)] = time.time()
+                    # Log pour debug
+                    logger.info(f"👁️ Monitoring actif sur {self.log_path}")
+                    retry_count = 0
+                    
+                    last_activity_time = time.time()
+                    last_heartbeat_time = time.time()
+                    
+                    while True:
+                        line = f.readline().strip()
+                        current_time = time.time()
                         
-                        # Si c'est une requête de segment, on l'enregistre
+                        # Heartbeat périodique pour s'assurer que le monitoring est actif
+                        if current_time - last_heartbeat_time > 60:  # Toutes les minutes
+                            logger.info(f"💓 ClientMonitor actif, dernière activité il y a {current_time - last_activity_time:.1f}s")
+                            last_heartbeat_time = current_time
+                            
+                            # Vérification périodique du fichier
+                            try:
+                                if not os.path.exists(self.log_path):
+                                    logger.error(f"❌ Fichier log disparu: {self.log_path}")
+                                    break
+                                    
+                                # Vérification que le fichier n'a pas été tronqué
+                                current_pos = f.tell()
+                                file_size = os.path.getsize(self.log_path)
+                                if current_pos > file_size:
+                                    logger.error(f"❌ Fichier log tronqué: position {current_pos}, taille {file_size}")
+                                    break
+                            except Exception as e:
+                                logger.error(f"❌ Erreur vérification fichier log: {e}")
+                                break
+                        
+                        if not line:
+                            # Si pas d'activité depuis longtemps, forcer une relecture des dernières lignes
+                            if current_time - last_activity_time > 300:  # 5 minutes
+                                logger.warning(f"⚠️ Pas d'activité depuis 5 minutes, relecture forcée des dernières lignes")
+                                f.seek(max(0, f.tell() - 10000))  # Retour en arrière de 10Ko
+                                last_activity_time = current_time
+                                
+                            time.sleep(0.1)  # Réduit la charge CPU
+                            continue
+
+                        # Une ligne a été lue, mise à jour du temps d'activité
+                        last_activity_time = current_time
+
+                        # Log pour debug IMPORTANT pour voir si on lit bien les lignes
+                        logger.debug(f"📝 Ligne lue: {line}")
+
+                        # On ne s'intéresse qu'aux requêtes HLS
+                        if "GET /hls/" not in line:
+                            continue
+
+                        parts = line.split()
+                        if len(parts) < 7:
+                            logger.warning(f"⚠️ Format de ligne invalide: {line}")
+                            continue
+
+                        ip = parts[0]
+                        request = parts[6].strip('"')
+
+                        # On extrait le channel
+                        match = re.search(r'/hls/([^/]+)/', request)
+                        if not match:
+                            logger.warning(f"⚠️ Impossible d'extraire le channel: {request}")
+                            continue
+
+                        channel = match.group(1)
+                        
+                        # Log explicite pour le debug
+                        logger.info(f"🔍 Requête détectée: {ip} -> {channel} ({request})")
+                        
+                        # Extraction du numéro de segment si présent
+                        segment_match = re.search(r'segment_(\d+)\.ts', request)
+                        segment_id = segment_match.group(1) if segment_match else None
+                        
+                        # Pour le debug avancé
                         if segment_id:
-                            self.segments_by_channel.setdefault(channel, {})[segment_id] = time.time()
-                        
-                        # Calcul des watchers actifs pour ce channel
-                        active_watchers = len([1 for (ch, _), ts in self.watchers.items() 
-                                             if ch == channel and time.time() - ts < self.inactivity_threshold])
-                        
-                        # Mise à jour des watchers si nécessaire
-                        self.update_watchers(channel, active_watchers, request)
+                            logger.debug(f"🔍 Segment détecté: {channel} - segment_{segment_id}.ts demandé par {ip}")
+                        else:
+                            logger.debug(f"🔍 Requête playlist: {ip} -> {channel} ({request})")
 
-        except Exception as e:
-            logger.error(f"❌ Erreur fatale dans client_monitor: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
+                        with self.lock:
+                            # Mise à jour du timestamp pour ce watcher
+                            self.watchers[(channel, ip)] = time.time()
+                            
+                            # Si c'est une requête de segment, on l'enregistre
+                            if segment_id:
+                                self.segments_by_channel.setdefault(channel, {})[segment_id] = time.time()
+                            
+                            # Calcul des watchers actifs pour ce channel
+                            active_watchers = len([1 for (ch, _), ts in self.watchers.items() 
+                                                if ch == channel and time.time() - ts < self.inactivity_threshold])
+                            
+                            # Mise à jour des watchers si nécessaire
+                            self.update_watchers(channel, active_watchers, request)
+
+            except Exception as e:
+                logger.error(f"❌ Erreur fatale dans client_monitor: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                
+                # Attente avant de réessayer
+                time.sleep(10)
+                        
+ 
