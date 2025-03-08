@@ -70,6 +70,7 @@ class PlaybackPositionManager:
             self._save_state()
     
     def get_start_offset(self):
+        # Utiliser l'horodatage actuel pour calculer un offset qui évolue naturellement
         reference_date = time.mktime((2025, 1, 1, 0, 0, 0, 0, 0, 0))
         current_time = time.time()
         elapsed = current_time - reference_date

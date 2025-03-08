@@ -726,7 +726,7 @@ class IPTVChannel:
         except Exception as e:
             logger.error(f"Erreur lors du redémarrage de {self.name}: {e}")
             return False
-    
+        
     def stop_stream_if_needed(self):
         """Arrête proprement le stream en utilisant les managers"""
         try:
