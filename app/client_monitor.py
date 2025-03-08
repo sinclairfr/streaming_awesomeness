@@ -36,13 +36,15 @@ class ClientMonitor(threading.Thread):
             time.sleep(10) 
             self._cleanup_inactive()
             
+ 
     def _cleanup_inactive(self):
         """Nettoie les watchers inactifs"""
         now = time.time()
         to_remove = []
 
         with self.lock:
-            inactivity_threshold = 30 
+            # Réduire le seuil d'inactivité à 15 secondes
+            inactivity_threshold = 15
 
             for (channel, ip), last_seen in self.watchers.items():
                 if now - last_seen > inactivity_threshold:
@@ -56,14 +58,16 @@ class ClientMonitor(threading.Thread):
                 affected_channels.add(channel)
                 logger.info(f"🗑️ Watcher supprimé: {ip} -> {channel} (inactif depuis {now - last_seen:.1f}s)")
 
-            # On fait une mise à jour COMPLÈTE de TOUTES les chaînes actives
-            all_channels = set([ch for (ch, _), _ in self.watchers.items()])
-            all_channels.update(affected_channels)
-            
-            for channel in all_channels:
+            # Pour chaque chaîne affectée, recalculer le nombre EXACT de watchers
+            for channel in affected_channels:
                 count = len([1 for (ch, _), _ in self.watchers.items() if ch == channel])
                 logger.info(f"[{channel}] 🔄 Mise à jour forcée: {count} watchers actifs")
                 self.update_watchers(channel, count, "/hls/")
+
+            # Ne pas faire de mise à jour complète - elle peut être contradictoire
+            # Et supprimer ces lignes qui font un double comptage:
+            # all_channels = set([ch for (ch, _), _ in self.watchers.items()])
+            # all_channels.update(affected_channels)
 
     def _monitor_segment_jumps(self):
         """Surveille les sauts anormaux dans les segments"""

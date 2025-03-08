@@ -145,18 +145,18 @@ class FFmpegCommandBuilder:
         """Construit les paramètres HLS optimisés pour la stabilité et les changements d'offset"""
         return [
             "-f", "hls",
-            "-hls_time", "6",                 # Augmenté à 6 secondes pour plus de stabilité 
-            "-hls_list_size", "60",           # Augmenté à 60 pour garder bien plus de segments
-            "-hls_delete_threshold", "20",    # Augmenté drastiquement pour éviter suppressions trop agressives
-            "-hls_flags", "delete_segments+append_list+program_date_time+independent_segments",
-            #+split_by_time+discont_start",
+            "-hls_time", "6",                 # Gardons à 6 secondes
+            "-hls_list_size", "60",           # OK à 60 pour garder assez de segments
+            "-hls_delete_threshold", "20",    # OK pour éviter suppressions trop agressives
+            "-hls_flags", "delete_segments+append_list+program_date_time+independent_segments+split_by_time",
+            # On ajoute split_by_time pour forcer des segments à intervalles réguliers
             "-hls_allow_cache", "1",
             "-start_number", "0",
             "-hls_segment_type", "mpegts",
-            "-max_delay", "8000000",          # Augmenté pour beaucoup plus de tolérance
-            "-hls_init_time", "6",            # Ajusté pour correspondre à hls_time
-            "-force_key_frames", "expr:gte(t,n_forced*6)",  # Ajusté pour correspondre à hls_time
-            "-sc_threshold", "0",             # Désactive la détection de changement de scène
+            "-max_delay", "8000000",
+            "-hls_init_time", "6",
+            "-force_key_frames", "expr:gte(t,n_forced*6)",
+            "-sc_threshold", "0",  # Désactive détection changement de scène
             "-hls_segment_filename", f"{output_dir}/segment_%d.ts",
             f"{output_dir}/playlist.m3u8"
         ]

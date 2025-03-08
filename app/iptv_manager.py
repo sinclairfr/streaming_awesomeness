@@ -358,13 +358,13 @@ class IPTVManager:
     def update_watchers(self, channel_name: str, count: int, request_path: str):
         """Met à jour les watchers en fonction des requêtes m3u8 et ts"""
         try:
-            # Log pour débug
-            logger.debug(f"📝 Request: {channel_name} - {request_path} - count: {count}")
+            # Log explicite pour débug
+            logger.info(f"🔍 Requête détectée: {channel_name} - {request_path} - count: {count}")
             
             # Si la chaîne n'existe pas, on vérifie si on peut la créer
             if channel_name not in self.channels:
                 # [code existant inchangé]
-                    
+                        
                 # Si la chaîne n'est toujours pas disponible
                 if channel_name not in self.channels:
                     logger.warning(f"❌ Chaîne inconnue: {channel_name}")
@@ -381,22 +381,16 @@ class IPTVManager:
 
             old_count = getattr(channel, 'watchers_count', 0)
             
-            # CORRECTION: Pour éviter les faux zéros, on ne met pas à jour si count=0 et qu'on a eu une activité récente
-            time_since_last_activity = time.time() - channel.last_watcher_time
-            if count == 0 and time_since_last_activity < 20:  # Moins de 20 secondes depuis la dernière activité
-                logger.debug(f"[{channel_name}] Ignoring temporary zero count (last activity: {time_since_last_activity:.1f}s ago)")
-                return
-                    
-            # Mise à jour du compteur
+            # Pas de vérification conditionnelle, on applique toujours la valeur exacte fournie
             channel.watchers_count = count
 
             # Log même quand le compte ne change pas, pour débug
-            logger.debug(f"[{channel_name}] 👁️ Watchers: {count} (était: {old_count})")
+            logger.info(f"[{channel_name}] 👁️ Watchers: {count} (était: {old_count})")
 
             if old_count != count:
                 logger.info(f"📊 Mise à jour {channel_name}: {count} watchers")
 
-            # NOUVEAU: Vérifier et démarrer le stream si nécessaire, peu importe s'il y a eu changement
+            # Vérifier et démarrer le stream si nécessaire
             if count > 0:
                 # Vérification si la chaîne est prête
                 if channel_name in self.channel_ready_status and self.channel_ready_status[channel_name]:
@@ -639,8 +633,8 @@ class IPTVManager:
             self._setup_ready_observer()
             
             # Attente suffisamment longue pour l'initialisation des chaînes
-            logger.info("⏳ Attente de 45 secondes pour l'initialisation des chaînes...")
-            time.sleep(45)
+            logger.info("⏳ Attente de 30 secondes pour l'initialisation des chaînes...")
+            time.sleep(30)
             
             # Démarrage automatique des chaînes prêtes
             self.auto_start_ready_channels()
