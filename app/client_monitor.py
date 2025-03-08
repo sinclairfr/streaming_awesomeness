@@ -44,7 +44,7 @@ class ClientMonitor(threading.Thread):
 
         with self.lock:
             # Réduire le seuil d'inactivité à 15 secondes
-            inactivity_threshold = 15
+            inactivity_threshold = 45
 
             for (channel, ip), last_seen in self.watchers.items():
                 if now - last_seen > inactivity_threshold:

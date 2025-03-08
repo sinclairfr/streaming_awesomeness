@@ -10,13 +10,12 @@ services:
     user: root
     entrypoint: ["/bin/bash", "-c", "id -g streamer || groupadd streamer; id -u streamer || useradd -m -g streamer streamer; chmod 777 /dev/dri/renderD128 || true; chmod 777 /dev/dri/card1 || true; chown -R streamer:streamer /app /var/log/nginx || true; chmod -R 777 /app /var/log/nginx || true; exec python3 main.py"]
     volumes:
-      - ./app/hls:/app/hls:rw
+      - /tmp/hls:/app/hls:rw
       - ./app/logs:/app/logs:rw
       - ./nginx_logs:/var/log/nginx:rw
       - ./app:/app:rw  # Regroupe tous les fichiers de l'application
       - ./requirements.txt:/app/requirements.txt:rw
       - /mnt/docker_data/torrent_machine/downloads/streaming_awesomeness:/mnt/videos/streaming_awesomeness
-       # For memory management
     devices:
       - /dev/dri/card1:/dev/dri/card1
       - /dev/dri/renderD128:/dev/dri/renderD128

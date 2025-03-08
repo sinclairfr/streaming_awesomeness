@@ -70,30 +70,16 @@ class PlaybackPositionManager:
             self._save_state()
     
     def get_start_offset(self):
-        """
-        Calcule l'offset basé sur le temps écoulé depuis le 01/01/2025
-        avec bouclage sur la durée totale
-        """
-        try:
-            # Date de référence: 01/01/2025 00:00:00
-            reference_date = time.mktime((2025, 1, 1, 0, 0, 0, 0, 0, 0))
-            current_time = time.time()
-            
-            # Temps écoulé depuis la référence en secondes
-            elapsed = current_time - reference_date
-            
-            # Si la durée totale est valide, on applique le modulo
-            if self.total_duration > 0:
-                offset = elapsed % self.total_duration
-                logger.info(f"[{self.channel_name}] ⏱️ Offset calculé: {offset:.2f}s (modulo {self.total_duration:.2f}s)")
-                return offset
-            else:
-                # Fallback sécurisé
-                logger.warning(f"[{self.channel_name}] ⚠️ Durée totale invalide, offset à 0")
-                return 0.0
-                
-        except Exception as e:
-            logger.error(f"[{self.channel_name}] ❌ Erreur calcul offset: {e}")
+        reference_date = time.mktime((2025, 1, 1, 0, 0, 0, 0, 0, 0))
+        current_time = time.time()
+        elapsed = current_time - reference_date
+        if self.total_duration > 0:
+            offset = elapsed % self.total_duration
+            logger.info(f"[{self.channel_name}] Offset calculé: {offset:.2f}s (modulo {self.total_duration:.2f}s)")
+            return offset
+        else:
+            # Fallback sécurisé
+            logger.warning(f"[{self.channel_name}] ⚠️ Durée totale invalide, offset à 0")
             return 0.0
      
     def calculate_durations(self, video_files):

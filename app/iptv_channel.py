@@ -191,8 +191,8 @@ class IPTVChannel:
                 # On conserve la durée existante si possible, sinon valeur par défaut
                 if hasattr(self, 'total_duration') and self.total_duration > 0:
                     return self.total_duration
-                return 120.0
-            
+                return 3600.0
+                        
             # Si la durée a déjà été calculée et qu'on a le même nombre de fichiers
             # qu'avant, on peut conserver la durée existante pour éviter les sauts
             existing_duration = getattr(self, 'total_duration', 0)
@@ -214,7 +214,7 @@ class IPTVChannel:
                 logger.warning(f"[{self.name}] ⚠️ Durée totale invalide, fallback à la valeur existante ou 120s")
                 if existing_duration > 0:
                     return existing_duration
-                return 120.0
+                return 3600.0
             
             # On stocke les métadonnées pour les futures comparaisons
             self.total_duration = total_duration
@@ -229,7 +229,7 @@ class IPTVChannel:
             # Fallback à la valeur existante ou valeur par défaut
             if hasattr(self, 'total_duration') and self.total_duration > 0:
                 return self.total_duration
-            return 120.0
+            return 3600.0
         
     def _check_segments(self, hls_dir: str) -> dict:
         """
@@ -568,149 +568,102 @@ class IPTVChannel:
         except Exception as e:
             logger.error(f"[{self.name}] ❌ Erreur vérification playlist: {e}")
             return False
-
+        
     def start_stream(self) -> bool:
-        """Démarre le stream avec FFmpeg en utilisant les nouvelles classes, avec fallback CPU"""
+        """
+        Démarre le flux HLS pour cette chaîne via FFmpeg, 
+        en appliquant l'offset si la durée totale est > 0.
+        """
         try:
-            # Vérification rapide que la chaîne est prête
+            # 1) Vérifier qu'on a des vidéos prêtes
             if not self.ready_for_streaming:
-                logger.warning(f"[{self.name}] ⚠️ Chaîne non prête pour le streaming (pas de vidéos)")
+                logger.warning(f"[{self.name}] ⚠️ Chaîne non prête (pas de vidéos). Annulation du démarrage.")
                 return False
 
-            logger.info(f"[{self.name}] 🚀 Démarrage du stream...")
+            # 2) Vérifier la durée pour éviter offset = 0 (si total_duration = 0, le modulo forcera l'offset à 0)
+            if self.position_manager.total_duration <= 0:
+                # On réessaye de calculer la durée (par exemple, forcer un scan)
+                # si vous avez une fonction _calculate_total_duration()
+                recalculated = self._calculate_total_duration()
+                if recalculated <= 0:
+                    logger.error(f"[{self.name}] ❌ Durée totale introuvable. Impossible d'appliquer un offset correct.")
+                    return False
 
+            # 3) Nettoyer le dossier HLS (playlist/segments) avant de lancer FFmpeg
             hls_dir = Path(f"/app/hls/{self.name}")
-            
             if hls_dir.exists():
-                # Suppression de tous les segments .ts
-                for segment in hls_dir.glob("*.ts"):
+                # Supprime d'abord les segments existants
+                for seg in hls_dir.glob("*.ts"):
                     try:
-                        segment.unlink()
+                        seg.unlink()
                     except Exception as e:
-                        logger.error(f"[{self.name}] ❌ Erreur suppression segment {segment.name}: {e}")
-                
-                # Suppression de la playlist
-                playlist_file = hls_dir / "playlist.m3u8"
-                if playlist_file.exists():
-                    try:
-                        playlist_file.unlink()
-                    except Exception as e:
-                        logger.error(f"[{self.name}] ❌ Erreur suppression playlist: {e}")
-            
-            # Création du dossier si nécessaire
-            hls_dir.mkdir(parents=True, exist_ok=True)
-                
-            # Vérification rapide que la chaîne est prête
-            if not self.ready_for_streaming:
-                logger.warning(f"[{self.name}] ⚠️ Chaîne non prête pour le streaming (pas de vidéos)")
-                return False
+                        logger.warning(f"[{self.name}] Erreur suppression segment {seg.name}: {e}")
 
-            # Utilisation du fichier playlist déjà créé
-            concat_file = Path(self.video_dir) / "_playlist.txt"
-            if not concat_file.exists():
-                concat_file = self._create_concat_file()
-                
-            if not concat_file or not concat_file.exists():
-                logger.error(f"[{self.name}] ❌ _playlist.txt introuvable")
-                return False
+                # Supprime l'ancienne playlist
+                old_playlist = hls_dir / "playlist.m3u8"
+                if old_playlist.exists():
+                    try:
+                        old_playlist.unlink()
+                    except Exception as e:
+                        logger.warning(f"[{self.name}] Erreur suppression playlist: {e}")
             else:
-                logger.info(f"[{self.name}] ✅ _playlist.txt trouvé")
+                hls_dir.mkdir(parents=True, exist_ok=True)
 
-            # Récupération de l'offset basé sur le temps écoulé depuis 01/01/2025
-            # Initialisation de l'offset basé sur la date de référence
-            start_offset = self.position_manager.get_start_offset()
-            self.position_manager.set_playback_offset(start_offset)
-            if hasattr(self, 'process_manager'):
+            # 4) Calculer ou récupérer l'offset initial
+            start_offset = self.position_manager.get_start_offset()  # renvoie 0 si total_duration=0
+            if start_offset > 0:
+                self.position_manager.set_playback_offset(start_offset)
                 self.process_manager.set_playback_offset(start_offset)
-            logger.debug(f"[{self.name}] 🕒 Offset initial basé sur 01/01/2025: {start_offset:.2f}s")
+            else:
+                logger.info(f"[{self.name}] Offset = 0s (lecture depuis le début).")
 
-            # On passe l'information au process_manager pour la commande ffmpeg
+            # 5) Définir la durée totale dans le process_manager (pour le modulo, etc.)
             self.process_manager.set_total_duration(self.position_manager.total_duration)
 
-            # PREMIÈRE TENTATIVE AVEC HARDWARE ACCÉLÉRATION
-            self.command_builder.optimize_for_hardware()
-            logger.info(f"[{self.name}] Vérification mkv...")
-            has_mkv = self.command_builder.detect_mkv_in_playlist(concat_file)
-            
+            # 6) Vérifier l'existence du _playlist.txt de concat
+            concat_file = Path(self.video_dir) / "_playlist.txt"
+            if not concat_file.exists():
+                # On essaie de le recréer si besoin
+                new_concat = self._create_concat_file()
+                if not new_concat or not new_concat.exists():
+                    logger.error(f"[{self.name}] ❌ Impossible de lancer: _playlist.txt introuvable.")
+                    return False
+
+            # 7) Construire la commande FFmpeg
+            #    (on suppose que build_command() inclut déjà l'option -ss <offset> 
+            #     avant l'input, selon self.process_manager.playback_offset)
             command = self.command_builder.build_command(
                 input_file=concat_file,
                 output_dir=hls_dir,
-                playback_offset=start_offset,
+                playback_offset=self.process_manager.get_playback_offset(),
                 progress_file=self.logger.get_progress_file(),
-                has_mkv=has_mkv
+                has_mkv=self.command_builder.detect_mkv_in_playlist(concat_file)
             )
-            
-            # NOUVELLE VÉRIFICATION: S'assurer que l'offset est bien au début du processus
-            # Cela force FFmpeg à appliquer l'offset correctement
-            # Recherche de '-ss' dans la commande
-            ss_index = -1
-            for i, arg in enumerate(command):
-                if arg == "-ss" and i + 1 < len(command):
-                    ss_index = i
-                    break
-            
-            # Si -ss existe déjà, on le remplace, sinon on l'ajoute au début
-            if ss_index >= 0:
-                command[ss_index + 1] = f"{start_offset:.2f}"
-            else:
-                # Ajout juste après ffmpeg et avant les options principales
-                command.insert(1, "-ss")
-                command.insert(2, f"{start_offset:.2f}")
-            
-            # Lancement du process
-            if not self.process_manager.start_process(command, hls_dir):
-                logger.error(f"[{self.name}] ❌ Échec démarrage FFmpeg")
-                
-                # SECONDE TENTATIVE EN MODE CPU
-                logger.warning(f"[{self.name}] 🔄 Nouvelle tentative en mode CPU")
-                self.command_builder.use_gpu = False
-                
-                # Reconstruction de la commande en mode CPU
-                cpu_command = self.command_builder.build_command(
-                    input_file=concat_file,
-                    output_dir=hls_dir,
-                    playback_offset=start_offset,
-                    progress_file=self.logger.get_progress_file(),
-                    has_mkv=has_mkv
-                )
-                
-                # Même vérification pour l'option -ss
-                ss_index = -1
-                for i, arg in enumerate(cpu_command):
-                    if arg == "-ss" and i + 1 < len(cpu_command):
-                        ss_index = i
-                        break
-                
-                if ss_index >= 0:
-                    cpu_command[ss_index + 1] = f"{start_offset:.2f}"
-                else:
-                    cpu_command.insert(1, "-ss")
-                    cpu_command.insert(2, f"{start_offset:.2f}")
-                
-                # Lancement du process en mode CPU
-                if not self.process_manager.start_process(cpu_command, hls_dir):
-                    logger.error(f"[{self.name}] ❌ Échec démarrage FFmpeg en mode CPU")
-                    return False
-                
-            # Configuration du position_manager
-            self.process_manager.set_playback_offset(start_offset)
-                
-            logger.info(f"[{self.name}] ✅ Stream démarré avec succès à la position {start_offset:.2f}s")
-            return True
 
-            # Succès du démarrage, on initialise un thread de surveillance
-            if not hasattr(self, 'segment_monitor_thread') or not self.segment_monitor_thread.is_alive():
-                self.segment_monitor_thread = threading.Thread(
-                    target=self._segment_monitor_loop,
-                    daemon=True
-                )
-                self.segment_monitor_thread.start()
-                logger.info(f"[{self.name}] 👀 Surveillance des segments démarrée")
-            
+            logger.info(f"[{self.name}] 🚀 Lancement FFmpeg: {' '.join(command)}")
+
+            # 8) Démarrer le process FFmpeg via le FFmpegProcessManager
+            success = self.process_manager.start_process(command, str(hls_dir))
+            if not success:
+                logger.error(f"[{self.name}] ❌ Échec du démarrage FFmpeg (première tentative).")
+
+                # Fallback éventuel si usage GPU -> re-tenter en CPU
+                # ...exemple:
+                # self.command_builder.use_gpu = False
+                # cpu_command = self.command_builder.build_command(...)
+                # success = self.process_manager.start_process(cpu_command, str(hls_dir))
+                # if not success:
+                #     logger.error(f"[{self.name}] ❌ Échec démarrage FFmpeg en CPU.")
+                #     return False
+
+                return False
+
+            logger.info(f"[{self.name}] ✅ FFmpeg démarré avec PID: {self.process_manager.process.pid}")
+            logger.info(f"[{self.name}] ✅ Stream démarré avec succès à {start_offset:.2f}s.")
             return True
 
         except Exception as e:
-            logger.error(f"Erreur démarrage stream {self.name}: {e}")
+            logger.error(f"[{self.name}] ❌ Erreur start_stream: {e}")
             return False
 
     def _segment_monitor_loop(self):

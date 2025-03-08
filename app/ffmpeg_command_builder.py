@@ -142,35 +142,58 @@ class FFmpegCommandBuilder:
         return params
     
     def build_hls_params(self, output_dir):
-        """Construit des paramètres HLS optimisés et compatibles"""
+        """
+        Construit des paramètres HLS en supprimant program_date_time, append_list et split_by_time,
+        tout en ajoutant discont_start.
+        """
+
+        # Tu peux ajuster les valeurs selon tes besoins
+        # Dans cet exemple, on met hls_time=2, hls_list_size=15, hls_delete_threshold=5,
+        # on garde independent_segments et round_durations (optionnels),
+        # on ajoute discont_start, on enlève program_date_time et append_list.
+        
         return [
             "-f", "hls",
-            "-hls_time", "6",
-            "-hls_list_size", "600",
-            "-hls_delete_threshold", "200",
-            "-hls_flags", "delete_segments+append_list+program_date_time+split_by_time+omit_endlist",
-            "-hls_allow_cache", "0",
+            "-hls_time", "2",             # Taille en secondes de chaque segment
+            "-hls_list_size", "15",       # Nombre de segments listés
+            "-hls_delete_threshold", "5",  # Supprime les segments plus anciens
+            # Flags HLS
+            # on retire program_date_time, append_list, split_by_time
+            # on conserve +independent_segments,+round_durations (optionnels) et on ajoute +discont_start
+            "-hls_flags", "delete_segments+independent_segments+round_durations+discont_start",
+            # Autoriser le cache ?
+            "-hls_allow_cache", "1",
+            # Le numéro de segment repart de 0
             "-start_number", "0",
             "-hls_segment_type", "mpegts",
-            "-max_delay", "8000000",
-            "-sc_threshold", "0",       # Garde ça, c'est applicable avec copy
+            # Optionnel : limite la latence (max_delay)
+            "-max_delay", "2000000",
+            # Optionnel : force la durée d'init au 1er segment
+            "-hls_init_time", "2",
+            # Nom des segments
             "-hls_segment_filename", f"{output_dir}/segment_%d.ts",
+            # Sortie playlist
             f"{output_dir}/playlist.m3u8"
         ]
+
+
         
     def build_encoding_params(self, has_mkv=False):
         """Construit les paramètres d'encodage optimisés pour la copie directe"""
         logger.info(f"[{self.channel_name}] 📼 Paramètres optimisés pour la copie directe")
         
         # Par défaut, on privilégie la copie directe
+        # dans build_encoding_params()
         params = [
-            "-c:v", "copy",                # Copie directe du flux vidéo
-            "-c:a", "copy",                # Copie directe du flux audio
-            "-sn", "-dn",                  # Pas de sous-titres/données
-            "-map", "0:v:0",               # Premier flux vidéo uniquement
-            "-map", "0:a:0?",              # Premier flux audio s'il existe
-            "-max_muxing_queue_size", "4096"  # Buffer augmenté
+            "-c:v", "copy",
+            "-c:a", "copy",
+            "-sn", "-dn",
+            "-map", "0:v:0",
+            "-map", "0:a:0?",
+            "-max_muxing_queue_size", "4096"
         ]
+
+        # Si on détecte un fichier MKV, on ajuste les paramètres
         
         # Ajustements pour MKV si nécessaire
         if has_mkv:
@@ -201,7 +224,7 @@ class FFmpegCommandBuilder:
             "-f", "hls",
             "-hls_time", "6",
             "-hls_list_size", "5",
-            "-hls_flags", "delete_segments+append_list",
+            "-hls_flags", "delete_segments",
             "-hls_segment_filename", f"{output_dir}/segment_%d.ts",
             f"{output_dir}/playlist.m3u8"
         ]
