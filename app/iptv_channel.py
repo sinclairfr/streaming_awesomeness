@@ -858,18 +858,12 @@ class IPTVChannel:
         if has_watchers:
             logger.info(f"[{self.channel_name}] 🔄 Redémarrage car {parent_channel.watchers_count} spectateur(s) actif(s)")
             return parent_channel._restart_stream() if hasattr(parent_channel, '_restart_stream') else False
-            
-        # Si arrêt intentionnel (SIGKILL) sans spectateurs, ne pas redémarrer
-        if return_code == -9:
-            inactivity = time.time() - getattr(parent_channel, 'last_watcher_time', 0) if parent_channel else float('inf')
-            if inactivity > TIMEOUT_NO_VIEWERS:
-                logger.info(f"[{self.channel_name}] ✅ Processus FFmpeg tué proprement après {inactivity:.1f}s d'inactivité")
-                return False
         
-        # Cas par défaut : redémarrage via l'error handler
+        # CHANGEMENT: Ne pas traiter SIGKILL (-9) différemment des autres codes 
+        # On utilise l'error handler pour tous les cas de mort du processus
         if hasattr(self, 'error_handler'):
             self.error_handler.add_error("PROCESS_DIED")
-        return parent_channel._restart_stream() if hasattr(parent_channel, '_restart_stream') else False    
+        return parent_channel._restart_stream() if hasattr(parent_channel, '_restart_stream') else False
         
     def _handle_segment_created(self, segment_path, size):  
         """Notifié quand un nouveau segment est créé"""

@@ -8,7 +8,7 @@ services:
       dockerfile: Dockerfile
     #user: "1000:1000"  # Exécuter en tant qu'utilisateur non-root (streamer)
     user: root
-    entrypoint: ["/bin/bash", "-c", "groupadd streamer && useradd -m -g streamer streamer && chmod 777 /dev/dri/renderD128 && chmod 777 /dev/dri/card1 && chown -R streamer:streamer /app /var/log/nginx && chmod -R 777 /app /var/log/nginx && exec python3 main.py"]
+    entrypoint: ["/bin/bash", "-c", "id -g streamer || groupadd streamer; id -u streamer || useradd -m -g streamer streamer; chmod 777 /dev/dri/renderD128 || true; chmod 777 /dev/dri/card1 || true; chown -R streamer:streamer /app /var/log/nginx || true; chmod -R 777 /app /var/log/nginx || true; exec python3 main.py"]
     volumes:
       - ./app/hls:/app/hls:rw
       - ./app/logs:/app/logs:rw
@@ -33,6 +33,8 @@ services:
     user: root
     container_name: iptv-nginx
     image: nginx:alpine
+    environment:
+      - TZ=Europe/Paris
     env_file:
       - .env
     ports:

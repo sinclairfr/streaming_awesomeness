@@ -363,20 +363,8 @@ class IPTVManager:
             
             # Si la chaîne n'existe pas, on vérifie si on peut la créer
             if channel_name not in self.channels:
-                # On vérifie d'abord si le dossier existe
-                channel_dir = Path(self.content_dir) / channel_name
-                if channel_dir.exists() and channel_dir.is_dir():
-                    logger.info(f"🔍 Tentative de création de la chaîne {channel_name} suite à une requête")
+                # [code existant inchangé]
                     
-                    # Ajout à la queue d'initialisation
-                    self.channel_init_queue.put({
-                        "name": channel_name,
-                        "dir": channel_dir
-                    })
-                    
-                    # On attend un peu pour que l'initialisation ait une chance de se faire
-                    time.sleep(2)
-                
                 # Si la chaîne n'est toujours pas disponible
                 if channel_name not in self.channels:
                     logger.warning(f"❌ Chaîne inconnue: {channel_name}")
@@ -398,7 +386,7 @@ class IPTVManager:
             if count == 0 and time_since_last_activity < 20:  # Moins de 20 secondes depuis la dernière activité
                 logger.debug(f"[{channel_name}] Ignoring temporary zero count (last activity: {time_since_last_activity:.1f}s ago)")
                 return
-                
+                    
             # Mise à jour du compteur
             channel.watchers_count = count
 
@@ -408,24 +396,23 @@ class IPTVManager:
             if old_count != count:
                 logger.info(f"📊 Mise à jour {channel_name}: {count} watchers")
 
-                if old_count == 0 and count > 0:
-                    # Vérification si la chaîne est prête
-                    if channel_name in self.channel_ready_status and self.channel_ready_status[channel_name]:
-                        logger.info(f"[{channel_name}] 🔥 Premier watcher, démarrage du stream")
+            # NOUVEAU: Vérifier et démarrer le stream si nécessaire, peu importe s'il y a eu changement
+            if count > 0:
+                # Vérification si la chaîne est prête
+                if channel_name in self.channel_ready_status and self.channel_ready_status[channel_name]:
+                    if not channel.process_manager.is_running():
+                        logger.info(f"[{channel_name}] 🔥 Watchers actifs mais stream arrêté, redémarrage")
                         if not channel.start_stream():
                             logger.error(f"[{channel_name}] ❌ Échec démarrage stream")
                         else:
-                            logger.info(f"[{channel_name}] ✅ Stream démarré avec succès")
-                    else:
-                        logger.warning(f"[{channel_name}] ⚠️ Chaîne pas encore prête, impossible de démarrer le stream")
-                elif old_count > 0 and count == 0:
-                    # On ne coupe PAS immédiatement, on laisse le monitoring gérer ça
-                    logger.info(f"[{channel_name}] ⚠️ Plus de watchers recensés")
+                            logger.info(f"[{channel_name}] ✅ Stream redémarré avec succès")
+                else:
+                    logger.warning(f"[{channel_name}] ⚠️ Chaîne pas encore prête, impossible de démarrer le stream")
 
         except Exception as e:
             logger.error(f"❌ Erreur update_watchers: {e}")
             import traceback
-            logger.error(f"Stack trace: {traceback.format_exc()}")    
+            logger.error(f"Stack trace: {traceback.format_exc()}")
                         
     def _clean_startup(self):
         """Nettoie avant de démarrer"""

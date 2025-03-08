@@ -35,6 +35,13 @@ class Application:
     def setup(self):
         """On initialise l'environnement"""
         try:
+            # Configuration du fuseau horaire
+            import time
+            import os
+            os.environ['TZ'] = 'Europe/Paris'
+            time.tzset()  # Applique le changement
+            logger.info(f"🕒 Fuseau horaire configuré: {time.tzname}")
+            
             # On vérifie/crée les dossiers requis
             for d in [CONTENT_DIR, "/app/hls", "/app/logs", "/app/logs/ffmpeg"]:
                 Path(d).mkdir(parents=True, exist_ok=True)
