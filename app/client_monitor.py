@@ -42,8 +42,7 @@ class ClientMonitor(threading.Thread):
         to_remove = []
 
         with self.lock:
-            # Augmenter ce seuil à 30 secondes pour être plus tolérant
-            inactivity_threshold = 30
+            inactivity_threshold = 30 
 
             for (channel, ip), last_seen in self.watchers.items():
                 if now - last_seen > inactivity_threshold:
@@ -151,7 +150,6 @@ class ClientMonitor(threading.Thread):
                 
             time.sleep(60)  # Vérification toutes les minutes
             
-            
     def run(self):
         """On surveille les requêtes clients"""
         logger.info("👀 Démarrage de la surveillance des requêtes...")
@@ -196,10 +194,16 @@ class ClientMonitor(threading.Thread):
                     
                     last_activity_time = time.time()
                     last_heartbeat_time = time.time()
+                    last_cleanup_time = time.time()
                     
                     while True:
                         line = f.readline().strip()
                         current_time = time.time()
+                        
+                        # Vérification périodique pour nettoyer les watchers inactifs
+                        if current_time - last_cleanup_time > 10:  # Tous les 10 secondes
+                            self._cleanup_inactive()
+                            last_cleanup_time = current_time
                         
                         # Heartbeat périodique pour s'assurer que le monitoring est actif
                         if current_time - last_heartbeat_time > 60:  # Toutes les minutes
@@ -279,7 +283,7 @@ class ClientMonitor(threading.Thread):
                             
                             # Calcul des watchers actifs pour ce channel
                             active_watchers = len([1 for (ch, _), ts in self.watchers.items() 
-                                                if ch == channel and time.time() - ts < self.inactivity_threshold])
+                                                if ch == channel and time.time() - ts < self.inactivity_threshold * 2])
                             
                             # Mise à jour des watchers si nécessaire - MÊME POUR LES 404!
                             # C'est important car ça permet de démarrer un flux suite à une requête 404

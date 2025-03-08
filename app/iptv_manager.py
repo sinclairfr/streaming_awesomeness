@@ -354,7 +354,7 @@ class IPTVManager:
             except Exception as e:
                 logger.error(f"❌ Erreur watchers_loop: {e}")
                 time.sleep(10)   
-                   
+
     def update_watchers(self, channel_name: str, count: int, request_path: str):
         """Met à jour les watchers en fonction des requêtes m3u8 et ts"""
         try:
@@ -392,6 +392,14 @@ class IPTVManager:
                 channel.last_segment_time = time.time()
 
             old_count = getattr(channel, 'watchers_count', 0)
+            
+            # CORRECTION: Pour éviter les faux zéros, on ne met pas à jour si count=0 et qu'on a eu une activité récente
+            time_since_last_activity = time.time() - channel.last_watcher_time
+            if count == 0 and time_since_last_activity < 20:  # Moins de 20 secondes depuis la dernière activité
+                logger.debug(f"[{channel_name}] Ignoring temporary zero count (last activity: {time_since_last_activity:.1f}s ago)")
+                return
+                
+            # Mise à jour du compteur
             channel.watchers_count = count
 
             # Log même quand le compte ne change pas, pour débug
@@ -417,8 +425,8 @@ class IPTVManager:
         except Exception as e:
             logger.error(f"❌ Erreur update_watchers: {e}")
             import traceback
-            logger.error(f"Stack trace: {traceback.format_exc()}")
-                    
+            logger.error(f"Stack trace: {traceback.format_exc()}")    
+                        
     def _clean_startup(self):
         """Nettoie avant de démarrer"""
         try:
