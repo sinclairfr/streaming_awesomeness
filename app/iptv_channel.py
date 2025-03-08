@@ -56,6 +56,7 @@ class IPTVChannel:
                  
         # Configuration des callbacks
         self.process_manager.on_process_died = self._handle_process_died
+        
         # On ne passe pas directement la méthode mais on crée un wrapper
         self.process_manager.on_position_update = self._handle_position_update
         self.process_manager.on_segment_created = self._handle_segment_created

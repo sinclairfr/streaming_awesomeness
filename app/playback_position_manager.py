@@ -60,36 +60,7 @@ class PlaybackPositionManager:
                 
             self.last_playback_time = time.time()
             self._save_state()         
-    
-    def get_position(self):
-        """
-        # Renvoie la position actuelle estimée
-        """
-        with self.lock:
-            # Si la lecture est en cours, on estime la position actuelle
-            if self.is_playing:
-                elapsed = time.time() - self.last_update_time
-                position = self.current_position + elapsed
-                
-                # On gère le bouclage automatique
-                if self.total_duration > 0:
-                    position %= self.total_duration
-                
-                return position
-            
-            # Sinon, on renvoie la dernière position connue
-            return self.last_known_position
-    
-    def set_position(self, position):
-        """
-        # Définit manuellement la position
-        """
-        with self.lock:
-            self.current_position = position
-            self.last_known_position = position
-            self.last_update_time = time.time()
-            self._save_state()
-    
+ 
     def set_total_duration(self, duration):
         """
         # Définit la durée totale de la playlist
@@ -98,22 +69,6 @@ class PlaybackPositionManager:
             self.total_duration = duration
             self._save_state()
     
-    def get_random_offset(self):
-        """
-        # Génère un offset de démarrage aléatoire
-        """
-        with self.lock:
-            if self.total_duration <= 0:
-                return 0
-            
-            # On prend un offset aléatoire entre 0 et 80% de la durée totale
-            max_offset = self.total_duration * 0.8
-            self.start_offset = random.uniform(0, max_offset)
-            
-            logger.info(f"[{self.channel_name}] 🎲 Offset aléatoire généré: {self.start_offset:.2f}s")
-            
-            return self.start_offset
-
     def get_start_offset(self):
         """
         Calcule l'offset basé sur le temps écoulé depuis le 01/01/2025
