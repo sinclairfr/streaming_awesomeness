@@ -188,22 +188,49 @@ class IPTVChannel:
             # Vérification que la liste processed_videos n'est pas vide
             if not self.processed_videos:
                 logger.warning(f"[{self.name}] ⚠️ Aucune vidéo à analyser pour le calcul de durée")
-                self.total_duration = 120.0  # Valeur par défaut
+                # On conserve la durée existante si possible, sinon valeur par défaut
+                if hasattr(self, 'total_duration') and self.total_duration > 0:
+                    return self.total_duration
                 return 120.0
+            
+            # Si la durée a déjà été calculée et qu'on a le même nombre de fichiers
+            # qu'avant, on peut conserver la durée existante pour éviter les sauts
+            existing_duration = getattr(self, 'total_duration', 0)
+            cached_num_videos = getattr(self, '_num_processed_videos', 0)
+            
+            if existing_duration > 0 and cached_num_videos == len(self.processed_videos):
+                # On vérifie si les fichiers sont les mêmes en comparant les noms
+                current_filenames = sorted([p.name for p in self.processed_videos])
+                cached_filenames = getattr(self, '_cached_filenames', [])
+                
+                if current_filenames == cached_filenames:
+                    logger.info(f"[{self.name}] 🔄 Conservation de la durée calculée précédemment: {existing_duration:.2f}s")
+                    return existing_duration
                     
+            # Calcul de la durée via le position manager avec cache
             total_duration = self.position_manager.calculate_durations(self.processed_videos)
+            
             if total_duration <= 0:
-                logger.warning(f"[{self.name}] ⚠️ Durée totale invalide, fallback à 120s")
-                self.total_duration = 120.0
+                logger.warning(f"[{self.name}] ⚠️ Durée totale invalide, fallback à la valeur existante ou 120s")
+                if existing_duration > 0:
+                    return existing_duration
                 return 120.0
-                    
-            self.total_duration = total_duration  # Ajouter cette ligne
+            
+            # On stocke les métadonnées pour les futures comparaisons
+            self.total_duration = total_duration
+            self._num_processed_videos = len(self.processed_videos)
+            self._cached_filenames = sorted([p.name for p in self.processed_videos])
+            
+            logger.info(f"[{self.name}] ✅ Durée totale calculée: {total_duration:.2f}s ({len(self.processed_videos)} vidéos)")
             return total_duration
+            
         except Exception as e:
             logger.error(f"[{self.name}] ❌ Erreur calcul durée: {e}")
-            self.total_duration = 120.0  # Ajouter cette ligne
+            # Fallback à la valeur existante ou valeur par défaut
+            if hasattr(self, 'total_duration') and self.total_duration > 0:
+                return self.total_duration
             return 120.0
-
+        
     def _check_segments(self, hls_dir: str) -> dict:
         """
         Vérifie la génération des segments HLS et retourne des données structurées

@@ -146,8 +146,8 @@ class FFmpegCommandBuilder:
         return [
             "-f", "hls",
             "-hls_time", "6",
-            "-hls_list_size", "300",
-            "-hls_delete_threshold", "100",
+            "-hls_list_size", "600",
+            "-hls_delete_threshold", "200",
             "-hls_flags", "delete_segments+append_list+program_date_time+split_by_time+omit_endlist",
             "-hls_allow_cache", "0",
             "-start_number", "0",
