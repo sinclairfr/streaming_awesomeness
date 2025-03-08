@@ -98,7 +98,6 @@ class IPTVManager:
         self.channel_init_thread = threading.Thread(target=self._process_channel_init_queue, daemon=True)
         self.channel_init_thread.start()
 
-        # On crée tous les objets IPTVChannel mais SANS démarrer FFmpeg
         # Moniteur clients
         logger.info(f"🚀 Démarrage du client_monitor avec {NGINX_ACCESS_LOG}")
         self.client_monitor = ClientMonitor(NGINX_ACCESS_LOG, self.update_watchers, self)
@@ -114,14 +113,15 @@ class IPTVManager:
             except Exception as e:
                 logger.error(f"❌ Erreur lors de la lecture du fichier de log: {e}")
 
+        # Démarrage du client_monitor une seule fois
         self.client_monitor.start()
 
+        # Thread de surveillance du log
         self._log_monitor_thread = threading.Thread(
             target=self._check_client_monitor, 
             daemon=True
         )
         self._log_monitor_thread.start()
-        self.client_monitor.start()
 
         # Moniteur ressources
         self.resource_monitor = ResourceMonitor()
@@ -565,9 +565,13 @@ class IPTVManager:
             self._setup_ready_observer()
             
             # Debug du client_monitor
-            logger.debug("🚀 Démarrage du client_monitor...")
+            logger.debug("🚀 Vérification du client_monitor...")
             if not hasattr(self, 'client_monitor') or not self.client_monitor.is_alive():
                 logger.error("❌ client_monitor n'est pas démarré!")
+            else:
+                logger.info("✅ client_monitor est déjà actif")
+                
+            # Ne pas redémarrer le client_monitor s'il est déjà lancé
 
             while True:
                 time.sleep(1)

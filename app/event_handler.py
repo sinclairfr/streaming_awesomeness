@@ -303,7 +303,68 @@ class ChannelEventHandler(FileSystemEventHandler):
     def _handle_event(self, event):
         logger.debug(f"🔄 Modification détectée: {event.src_path}")
         self._schedule_scan()
+
+    def _schedule_scan(self):
+        """Planifie un scan avec un cooldown pour éviter les scans trop fréquents"""
+        current_time = time.time()
         
+        # Augmentation du cooldown pour éviter les scans trop fréquents
+        # 5s -> 30s minimum entre deux scans
+        if current_time - self.last_scan_time < self.scan_cooldown:
+            logger.debug(f"Scan ignoré: dernier scan il y a {current_time - self.last_scan_time:.1f}s (cooldown: {self.scan_cooldown}s)")
+            return
+            
+        self.last_scan_time = current_time
+        
+        # Si on a des chaînes spécifiques à scanner
+        with self.lock:
+            changed_channels = list(self.channel_changes)
+            self.channel_changes.clear()
+            
+        if changed_channels:
+            logger.info(f"🔄 Scan programmé pour les chaînes: {', '.join(changed_channels)}")
+            for channel_name in changed_channels:
+                if channel_name in self.manager.channels:
+                    channel = self.manager.channels[channel_name]
+                    if hasattr(channel, 'refresh_videos'):
+                        threading.Thread(
+                            target=channel.refresh_videos,
+                            daemon=True
+                        ).start()
+        else:
+            # On ne fait pas de scan complet si aucune chaîne n'est à scanner
+            # self.manager.scan_channels()
+            logger.debug("Scan complet ignoré: aucune chaîne spécifique à scanner")
+
+
+        """Planifie un scan avec un cooldown pour éviter les scans trop fréquents"""
+        current_time = time.time()
+        
+        # Si le dernier scan est trop récent, on ne fait rien
+        if current_time - self.last_scan_time < self.scan_cooldown:
+            return
+            
+        self.last_scan_time = current_time
+        
+        # Si on a des chaînes spécifiques à scanner
+        with self.lock:
+            changed_channels = list(self.channel_changes)
+            self.channel_changes.clear()
+            
+        if changed_channels:
+            logger.info(f"🔄 Scan programmé pour les chaînes: {', '.join(changed_channels)}")
+            for channel_name in changed_channels:
+                if channel_name in self.manager.channels:
+                    channel = self.manager.channels[channel_name]
+                    if hasattr(channel, 'refresh_videos'):
+                        threading.Thread(
+                            target=channel.refresh_videos,
+                            daemon=True
+                        ).start()
+        else:
+            # Scan complet en dernier recours
+            self.manager.scan_channels()
+            
 class ReadyContentHandler(FileSystemEventHandler):
     """Surveille les modifications dans les dossiers ready_to_stream"""
 

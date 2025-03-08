@@ -56,7 +56,7 @@ class Application:
         except Exception as e:
             logger.error(f"Erreur setup: {e}")
             return False
-            
+
     def run(self):
         """Boucle principale avec gestion des erreurs"""
         if not self.setup():
