@@ -203,9 +203,17 @@ class IPTVChannel:
             logger.error(f"[{self.name}] ❌ Erreur calcul durée: {e}")
             self.total_duration = 120.0  # Ajouter cette ligne
             return 120.0
+
+    def _check_segments(self, hls_dir: str) -> dict:
+        """
+        Vérifie la génération des segments HLS et retourne des données structurées
         
-    def _check_segments(self, hls_dir: str) -> bool:
-        """Vérifie la génération des segments HLS"""
+        Args:
+            hls_dir: Chemin du dossier HLS
+            
+        Returns:
+            dict: Informations sur les segments (count, liste, taille totale)
+        """
         try:
             segment_log_path = Path(f"/app/logs/segments/{self.name}_segments.log")
             segment_log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -215,47 +223,223 @@ class IPTVChannel:
             
             if not playlist.exists():
                 logger.error(f"[{self.name}] ❌ playlist.m3u8 introuvable")
-                return False
+                return {"success": False, "error": "playlist_not_found", "segments": []}
                 
+            # Lecture de la playlist
             with open(playlist) as f:
                 segments = [line.strip() for line in f if line.strip().endswith('.ts')]
                 
             if not segments:
                 logger.warning(f"[{self.name}] ⚠️ Aucun segment dans la playlist")
-                return False
-                
-            current_time = time.strftime("%Y-%m-%d %H:%M:%S")
-            log_entry = f"{current_time} - Segments actifs: {len(segments)}\n"
+                return {"success": False, "error": "no_segments", "segments": []}
             
+            # Analyse des segments
+            segment_data = []
+            total_size = 0
             for segment in segments:
                 segment_path = hls_path / segment
                 if segment_path.exists():
                     size = segment_path.stat().st_size
-                    mtime = time.strftime("%H:%M:%S", time.localtime(segment_path.stat().st_mtime))
-                    log_entry += f"  - {segment} (Size: {size/1024:.1f}KB, Modified: {mtime})\n"
-                else:
-                    log_entry += f"  - {segment} (MISSING)\n"
+                    mtime = segment_path.stat().st_mtime
+                    segment_id = int(segment.split('_')[-1].split('.')[0]) if '_' in segment else 0
                     
+                    segment_info = {
+                        "name": segment,
+                        "size": size,
+                        "mtime": mtime,
+                        "id": segment_id
+                    }
+                    segment_data.append(segment_info)
+                    total_size += size
+                else:
+                    segment_data.append({
+                        "name": segment,
+                        "missing": True,
+                        "id": int(segment.split('_')[-1].split('.')[0]) if '_' in segment else 0
+                    })
+                    
+            # Tri des segments par ID
+            segment_data.sort(key=lambda x: x.get("id", 0))
+            
+            # Détection des sauts de segments
+            jumps = []
+            for i in range(1, len(segment_data)):
+                current_id = segment_data[i].get("id", 0)
+                prev_id = segment_data[i-1].get("id", 0)
+                if current_id - prev_id > 5:  # Saut de plus de 5 segments
+                    jumps.append({
+                        "from": prev_id,
+                        "to": current_id,
+                        "gap": current_id - prev_id
+                    })
+                    logger.warning(
+                        f"[{self.name}] 🚨 Saut de segment détecté: {prev_id} → {current_id} (saut de {current_id - prev_id})"
+                    )
+            
+            # Log des informations
+            current_time = time.strftime("%Y-%m-%d %H:%M:%S")
+            log_entry = f"{current_time} - Segments actifs: {len(segments)}, Taille totale: {total_size/1024:.1f}KB\n"
+            
+            for seg in segment_data:
+                if "missing" in seg:
+                    log_entry += f"  - {seg['name']} (MANQUANT)\n"
+                else:
+                    mtime_str = time.strftime("%H:%M:%S", time.localtime(seg['mtime']))
+                    log_entry += f"  - {seg['name']} (ID: {seg['id']}, Taille: {seg['size']/1024:.1f}KB, Modifié: {mtime_str})\n"
+            
+            if jumps:
+                log_entry += f"  - SAUTS DÉTECTÉS: {len(jumps)}\n"
+                for jump in jumps:
+                    log_entry += f"    * Saut de {jump['from']} à {jump['to']} (gap: {jump['gap']})\n"
+            
             with open(segment_log_path, "a") as f:
                 f.write(log_entry)
                 f.write("-" * 80 + "\n")
-                
-            return True
             
+            return {
+                "success": True,
+                "count": len(segments),
+                "segments": segment_data,
+                "total_size": total_size,
+                "jumps": jumps
+            }
+                
         except Exception as e:
-            logger.error(f"[{self.name}] Erreur vérification segments: {e}")
-            return False
+            logger.error(f"[{self.name}] Erreur analyse segments: {e}")
+            return {"success": False, "error": str(e), "segments": []}
 
-    def _handle_timeouts(self, current_time, crash_threshold):
-        """Gère les timeouts et redémarre le stream si nécessaire"""
-        if current_time - self.last_segment_time > crash_threshold:
-            logger.error(f"🔥 Pas de nouveau segment pour {self.name} depuis {current_time - self.last_segment_time:.1f}s")
+    def _handle_timeouts(self, current_time=None, crash_threshold=60):
+        """
+        Gère les timeouts et redémarre le stream si nécessaire
+        
+        Args:
+            current_time: Temps actuel (calculé automatiquement si None)
+            crash_threshold: Seuil en secondes pour considérer un crash
+            
+        Returns:
+            bool: True si action entreprise, False sinon
+        """
+        # Si pas de temps fourni, on prend le temps actuel
+        if current_time is None:
+            current_time = time.time()
+        
+        # On vérifie que last_segment_time existe
+        if not hasattr(self, 'last_segment_time'):
+            self.last_segment_time = current_time
+            return False
+        
+        # On vérifie si on a un timeout de segments
+        time_since_last_segment = current_time - self.last_segment_time
+        
+        if time_since_last_segment > crash_threshold:
+            logger.error(
+                f"[{self.name}] 🔥 Pas de nouveau segment depuis {time_since_last_segment:.1f}s "
+                f"(seuil: {crash_threshold}s)"
+            )
+            
+            # Vérifier l'état du processus FFmpeg
+            if not self.process_manager.is_running():
+                logger.warning(f"[{self.name}] ⚠️ Processus FFmpeg déjà arrêté")
+                # On recrée le stream seulement s'il y a des viewers
+                if hasattr(self, 'watchers_count') and self.watchers_count > 0:
+                    logger.info(f"[{self.name}] 🔄 Redémarrage du stream (viewers actifs: {self.watchers_count})")
+                    if self._restart_stream():
+                        self.error_handler.reset()
+                        return True
+                return False
+                
+            # Analyse des segments actuels pour diagnostiquer
+            hls_dir = f"/app/hls/{self.name}"
+            segments_info = self._check_segments(hls_dir)
+            
+            # Détection des causes possibles
+            if segments_info.get("success"):
+                jumps = segments_info.get("jumps", [])
+                if jumps and len(jumps) > 0:
+                    logger.error(f"[{self.name}] 🚨 Problème possible: sauts de segments détectés ({len(jumps)})")
+                    # On signale les sauts pour le monitoring
+                    self.report_segment_jump(jumps[0]["from"], jumps[0]["to"])
+                    
+            # On utilise l'error handler pour gérer les redémarrages
             if self.error_handler.add_error("segment_timeout"):
+                logger.info(f"[{self.name}] 🔄 Redémarrage après timeout de segment")
                 if self._restart_stream():
                     self.error_handler.reset()
-                return True
+                    return True
+            
+            return True
+        
         return False
 
+    def report_segment_jump(self, prev_segment: int, curr_segment: int):
+        """
+        Gère les sauts détectés dans les segments HLS avec historique et prise de décision
+        
+        Args:
+            prev_segment: Le segment précédent
+            curr_segment: Le segment actuel (avec un saut)
+        """
+        try:
+            jump_size = curr_segment - prev_segment
+            
+            # On ne s'inquiète que des sauts importants
+            if jump_size <= 3:  # Tolérance pour quelques segments perdus
+                return
+                
+            logger.warning(f"[{self.name}] 🚨 Saut de segment détecté: {prev_segment} → {curr_segment} (delta: {jump_size})")
+            
+            # On stocke l'historique des sauts
+            if not hasattr(self, 'jump_history'):
+                self.jump_history = []
+                
+            # Ajout du saut à l'historique avec timestamp
+            current_time = time.time()
+            self.jump_history.append({
+                "time": current_time,
+                "from": prev_segment,
+                "to": curr_segment,
+                "gap": jump_size
+            })
+            
+            # On ne garde que les 10 derniers sauts
+            if len(self.jump_history) > 10:
+                self.jump_history = self.jump_history[-10:]
+                
+            # Analyse des sauts récents (5 dernières minutes)
+            recent_jumps = [j for j in self.jump_history if current_time - j["time"] < 300]
+            
+            # Détection des schémas de sauts
+            if len(recent_jumps) >= 3:
+                # Sauts de taille similaire (± 20%)
+                similar_sized_jumps = []
+                for jump in recent_jumps:
+                    similar = [j for j in recent_jumps if abs(j["gap"] - jump["gap"]) / max(1, jump["gap"]) < 0.2]
+                    if len(similar) >= 3:
+                        similar_sized_jumps = similar
+                        break
+                
+                # Si on a des sauts similaires, c'est probablement un problème systémique
+                if similar_sized_jumps:
+                    avg_gap = sum(j["gap"] for j in similar_sized_jumps) / len(similar_sized_jumps)
+                    logger.error(
+                        f"[{self.name}] 🔥 Problème systémique détecté: {len(similar_sized_jumps)} sauts "
+                        f"avec gap moyen de {avg_gap:.1f} segments"
+                    )
+                    
+                    # On redémarre seulement s'il y a des viewers actifs
+                    if hasattr(self, 'watchers_count') and self.watchers_count > 0:
+                        if self.error_handler.add_error(f"segment_jumps_{int(avg_gap)}"):
+                            logger.warning(f"[{self.name}] 🔄 Redémarrage programmé après détection de sauts systémiques")
+                            return self._restart_stream()
+                    else:
+                        logger.info(f"[{self.name}] ℹ️ Pas de redémarrage après sauts: aucun viewer actif")
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"[{self.name}] ❌ Erreur gestion saut de segment: {e}")
+            return False
+        
     def _check_viewer_inactivity(self, current_time, timeout):
         """Vérifie l'inactivité des viewers et gère l'arrêt du stream"""
         if not self.process_manager.is_running():
@@ -483,10 +667,48 @@ class IPTVChannel:
             logger.info(f"[{self.name}] ✅ Stream démarré avec succès à la position {start_offset:.2f}s")
             return True
 
+            # Succès du démarrage, on initialise un thread de surveillance
+            if not hasattr(self, 'segment_monitor_thread') or not self.segment_monitor_thread.is_alive():
+                self.segment_monitor_thread = threading.Thread(
+                    target=self._segment_monitor_loop,
+                    daemon=True
+                )
+                self.segment_monitor_thread.start()
+                logger.info(f"[{self.name}] 👀 Surveillance des segments démarrée")
+            
+            return True
+
         except Exception as e:
             logger.error(f"Erreur démarrage stream {self.name}: {e}")
             return False
 
+    def _segment_monitor_loop(self):
+        """Boucle de surveillance des segments"""
+        try:
+            # La boucle s'exécute tant que le processus est en cours
+            while self.process_manager.is_running():
+                current_time = time.time()
+                
+                # Vérification des timeouts toutes les 10 secondes
+                self._handle_timeouts(current_time, crash_threshold=60)
+                
+                # Analyse des segments toutes les 30 secondes
+                if not hasattr(self, 'last_segment_check') or current_time - self.last_segment_check >= 30:
+                    hls_dir = f"/app/hls/{self.name}"
+                    segments_info = self._check_segments(hls_dir)
+                    self.last_segment_check = current_time
+                    
+                    # Si on a détecté des sauts, on les reporte
+                    if segments_info.get("success") and segments_info.get("jumps"):
+                        for jump in segments_info.get("jumps", []):
+                            self.report_segment_jump(jump["from"], jump["to"])
+                
+                # On attend un peu avant la prochaine vérification
+                time.sleep(10)
+                
+        except Exception as e:
+            logger.error(f"[{self.name}] ❌ Erreur dans la boucle de surveillance des segments: {e}")
+            
     def _restart_stream(self) -> bool:
         """Redémarre le stream en cas de problème"""
         try:
@@ -707,42 +929,3 @@ class IPTVChannel:
         """Force un nouveau scan des vidéos"""
         threading.Thread(target=self._scan_videos_async, daemon=True).start()
         return True
-    
-    def _move_to_ignored(self, file_path: Path, reason: str):
-        """
-        Déplace un fichier invalide vers le dossier 'ignored'
-        
-        Args:
-            file_path: Chemin du fichier à déplacer
-            reason: Raison de l'invalidité du fichier
-        """
-        try:
-            # S'assurer que le dossier ignored existe
-            ignored_dir = Path(self.video_dir) / "ignored"
-            ignored_dir.mkdir(parents=True, exist_ok=True)
-                
-            # Créer le chemin de destination
-            dest_path = ignored_dir / file_path.name
-            
-            # Si le fichier de destination existe déjà, ajouter un suffixe
-            if dest_path.exists():
-                base_name = dest_path.stem
-                suffix = dest_path.suffix
-                timestamp = time.strftime("%Y%m%d_%H%M%S")
-                dest_path = ignored_dir / f"{base_name}_{timestamp}{suffix}"
-                
-            # Déplacer le fichier
-            if file_path.exists():
-                shutil.move(str(file_path), str(dest_path))
-                
-                # Créer un fichier de log à côté avec la raison
-                log_path = ignored_dir / f"{dest_path.stem}_reason.txt"
-                with open(log_path, "w") as f:
-                    f.write(f"Fichier ignoré le {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-                    f.write(f"Raison: {reason}\n")
-                    
-                logger.info(f"[{self.channel_name}] 🚫 Fichier {file_path.name} déplacé vers ignored: {reason}")
-                
-        except Exception as e:
-            logger.error(f"[{self.channel_name}] ❌ Erreur déplacement fichier vers ignored: {e}")
-

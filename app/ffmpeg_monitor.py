@@ -144,44 +144,6 @@ class FFmpegMonitor(threading.Thread):
                 logger.error(f"❌ Erreur watchers_loop: {e}")
                 time.sleep(10)                              
     
-    def _is_process_active(self, channel_name: str, pid: int) -> bool   :
-        """
-        Vérifie si un processus est actif en fonction des watchers et du temps d'inactivité
-        """
-        channel = self.channels.get(channel_name)
-        if not channel:
-            return False
-
-        # On récupère le statut des watchers
-        watchers_active = channel.watchers_count > 0
-        
-        # On vérifie le temps d'inactivité
-        current_time = time.time()
-        time_since_last_watcher = current_time - channel.last_watcher_time
-        
-        # Si pas de watchers depuis plus de TIMEOUT_NO_VIEWERS ou watchers_count = 0
-        if not watchers_active or time_since_last_watcher > TIMEOUT_NO_VIEWERS:
-            try:
-                # On tente de tuer le processus proprement
-                process = psutil.Process(pid)
-                process.terminate()
-                time.sleep(1)  # On laisse une seconde pour la terminaison propre
-                
-                # Si toujours en vie, on force
-                if process.is_running():
-                    process.kill()
-                    
-                logger.info(f"[{channel_name}] Process {pid} nettoyé (inactif depuis {time_since_last_watcher:.1f}s)")
-                    
-            except psutil.NoSuchProcess:
-                pass
-            except Exception as e:
-                logger.error(f"[{channel_name}] Erreur nettoyage process {pid}: {e}")
-                
-            return False
-            
-        return True
-    
     def run(self):
         while not self.stop_event.is_set():
             try:

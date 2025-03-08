@@ -306,37 +306,6 @@ class FFmpegProcessManager:
         
         logger.info(f"[{self.channel_name}] 👋 Fin de la surveillance FFmpeg") 
     
-    def _update_playback_position(self, progress_file):
-        """
-        # Met à jour la position de lecture en lisant le fichier de progression
-        """
-        if not progress_file or not Path(progress_file).exists():
-            return
-        
-        try:
-            with open(progress_file, 'r') as f:
-                content = f.read()
-                
-                # Extraction de la position temporelle
-                if 'out_time_ms=' in content:
-                    position_lines = [l for l in content.split('\n') if 'out_time_ms=' in l]
-                    if position_lines:
-                        # On prend la dernière ligne qui contient out_time_ms
-                        last_line = position_lines[-1]
-                        time_part = last_line.split('=')[1]
-                        
-                        # Conversion en secondes
-                        if time_part.isdigit():
-                            ms_value = int(time_part)
-                            position_seconds = ms_value / 1_000_000
-                            
-                            # Appel du callback
-                            if self.on_position_update:
-                                self.on_position_update(position_seconds)
-                        
-        except Exception as e:
-            logger.error(f"[{self.channel_name}] ❌ Erreur lecture position: {e}")
-    
     def set_total_duration(self, duration):
         """
         # Définit la durée totale de la playlist

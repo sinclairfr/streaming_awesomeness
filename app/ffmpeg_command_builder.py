@@ -64,33 +64,6 @@ class FFmpegCommandBuilder:
             logger.error(f"[{self.channel_name}] ❌ Erreur construction commande: {e}")
             # Fallback à une commande minimale en cas d'erreur
             return self.build_fallback_command(input_file, output_dir)
-        
-    def _create_concat_file(self) -> Optional[Path]:
-        """Version ultra simplifiée pour débloquer la situation"""
-        try:
-            # Renomme tous les fichiers problématiques avec des noms basiques
-            self._rename_all_videos_simple()
-            
-            # Crée une playlist simplifiée
-            processed_dir = Path(CONTENT_DIR) / self.name / "processed"
-            concat_file = Path(CONTENT_DIR) / self.name / "_playlist.txt"
-            
-            # Cherche tous les fichiers MP4
-            processed_files = list(processed_dir.glob("*.mp4"))
-            if not processed_files:
-                logger.error(f"[{self.name}] Aucune vidéo dans {processed_dir}")
-                return None
-                
-            # Écrit une playlist ultra basique
-            with open(concat_file, "w") as f:
-                for i, video in enumerate(sorted(processed_files)):
-                    f.write(f"file '{video}'\n")
-                    logger.debug(f"[{self.name}] Ajout de {video.name}")
-                    
-            return concat_file
-        except Exception as e:
-            logger.error(f"[{self.name}] Erreur playlist: {e}")
-            return None
 
     def _rename_all_videos_simple(self):
         """Renomme tous les fichiers problématiques avec des noms ultra simples"""

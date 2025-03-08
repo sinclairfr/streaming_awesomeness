@@ -76,19 +76,6 @@ class HLSCleaner:
 
             time.sleep(self.cleanup_interval)
 
-    def _check_disk_space(self):
-        """Vérifie l'espace disque"""
-        try:
-            disk_usage = shutil.disk_usage(self.hls_dir)
-            free_space_gb = disk_usage.free / (1024**3)
-
-            if free_space_gb < self.min_free_space_gb:
-                logger.warning(f"⚠️ Espace disque faible: {free_space_gb:.2f} GB")
-                self._aggressive_cleanup()
-
-        except Exception as e:
-            logger.error(f"Erreur vérification espace disque: {e}")
-
     def _cleanup_old_segments(self):
         """On ne supprime que les segments vraiment obsolètes"""
         try:
