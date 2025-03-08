@@ -151,6 +151,7 @@ class ClientMonitor(threading.Thread):
                 
             time.sleep(60)  # Vérification toutes les minutes
             
+            
     def run(self):
         """On surveille les requêtes clients"""
         logger.info("👀 Démarrage de la surveillance des requêtes...")
@@ -234,11 +235,8 @@ class ClientMonitor(threading.Thread):
                         # Une ligne a été lue, mise à jour du temps d'activité
                         last_activity_time = current_time
 
-                        # Log pour debug IMPORTANT pour voir si on lit bien les lignes
-                        logger.debug(f"📝 Ligne lue: {line}")
-
-                        # On ne s'intéresse qu'aux requêtes HLS
-                        if "GET /hls/" not in line:
+                        # On ne s'intéresse qu'aux requêtes /hls/ - IMPORTANT: Inclure les 404 aussi
+                        if "/hls/" not in line:
                             continue
 
                         parts = line.split()
@@ -248,6 +246,7 @@ class ClientMonitor(threading.Thread):
 
                         ip = parts[0]
                         request = parts[6].strip('"')
+                        status_code = parts[8] if len(parts) > 8 else "???"
 
                         # On extrait le channel
                         match = re.search(r'/hls/([^/]+)/', request)
@@ -257,8 +256,8 @@ class ClientMonitor(threading.Thread):
 
                         channel = match.group(1)
                         
-                        # Log explicite pour le debug
-                        logger.info(f"🔍 Requête détectée: {ip} -> {channel} ({request})")
+                        # Log explicite pour le debug - INCLURE TOUTES LES REQUÊTES, MÊME LES 404
+                        logger.info(f"🔍 Requête détectée: {ip} -> {channel} ({request}) [Status: {status_code}]")
                         
                         # Extraction du numéro de segment si présent
                         segment_match = re.search(r'segment_(\d+)\.ts', request)
@@ -282,7 +281,8 @@ class ClientMonitor(threading.Thread):
                             active_watchers = len([1 for (ch, _), ts in self.watchers.items() 
                                                 if ch == channel and time.time() - ts < self.inactivity_threshold])
                             
-                            # Mise à jour des watchers si nécessaire
+                            # Mise à jour des watchers si nécessaire - MÊME POUR LES 404!
+                            # C'est important car ça permet de démarrer un flux suite à une requête 404
                             self.update_watchers(channel, active_watchers, request)
 
             except Exception as e:
@@ -292,5 +292,3 @@ class ClientMonitor(threading.Thread):
                 
                 # Attente avant de réessayer
                 time.sleep(10)
-                        
- 

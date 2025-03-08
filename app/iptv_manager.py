@@ -299,9 +299,26 @@ class IPTVManager:
             # Log pour débug
             logger.debug(f"📝 Request: {channel_name} - {request_path} - count: {count}")
             
+            # Si la chaîne n'existe pas, on vérifie si on peut la créer
             if channel_name not in self.channels:
-                logger.error(f"❌ Chaîne inconnue: {channel_name}")
-                return
+                # On vérifie d'abord si le dossier existe
+                channel_dir = Path(self.content_dir) / channel_name
+                if channel_dir.exists() and channel_dir.is_dir():
+                    logger.info(f"🔍 Tentative de création de la chaîne {channel_name} suite à une requête")
+                    
+                    # Ajout à la queue d'initialisation
+                    self.channel_init_queue.put({
+                        "name": channel_name,
+                        "dir": channel_dir
+                    })
+                    
+                    # On attend un peu pour que l'initialisation ait une chance de se faire
+                    time.sleep(2)
+                
+                # Si la chaîne n'est toujours pas disponible
+                if channel_name not in self.channels:
+                    logger.warning(f"❌ Chaîne inconnue: {channel_name}")
+                    return
 
             channel = self.channels[channel_name]
 
@@ -312,7 +329,7 @@ class IPTVManager:
             if ".ts" in request_path:
                 channel.last_segment_time = time.time()
 
-            old_count = channel.watchers_count
+            old_count = getattr(channel, 'watchers_count', 0)
             channel.watchers_count = count
 
             # Log même quand le compte ne change pas, pour débug
@@ -339,7 +356,8 @@ class IPTVManager:
             logger.error(f"❌ Erreur update_watchers: {e}")
             import traceback
             logger.error(f"Stack trace: {traceback.format_exc()}")
-
+            
+            
     def _clean_startup(self):
         """Nettoie avant de démarrer"""
         try:
