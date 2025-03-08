@@ -149,7 +149,23 @@ class HLSCleaner:
 
         except Exception as e:
             logger.error(f"Erreur nettoyage segments orphelins: {e}")
-
+    
+    def _check_disk_space(self):
+        """Vérifie l'espace disque disponible et nettoie si nécessaire"""
+        try:
+            # Récupère les stats du filesystem
+            stats = shutil.disk_usage(self.hls_dir)
+            free_gb = stats.free / (1024 * 1024 * 1024)
+            
+            # Si l'espace libre est inférieur au seuil
+            if free_gb < self.min_free_space_gb:
+                logger.warning(f"⚠️ Espace disque faible: {free_gb:.2f} GB (seuil: {self.min_free_space_gb} GB)")
+                # Nettoyage agressif
+                self._aggressive_cleanup()
+            
+        except Exception as e:
+            logger.error(f"Erreur vérification espace disque: {e}")
+            
     def _aggressive_cleanup(self):
         """Nettoyage agressif en cas de manque d'espace"""
         try:

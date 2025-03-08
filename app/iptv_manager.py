@@ -139,7 +139,6 @@ class IPTVManager:
             target=self._watchers_loop,
             daemon=True
         )
-        self.watchers_thread.start()
         self.running = True
 
     def _check_client_monitor(self):
@@ -525,7 +524,7 @@ class IPTVManager:
             channel._clean_processes()
 
         logger.info("Nettoyage terminé")
-    
+ 
     def _setup_ready_observer(self):
         """Configure l'observateur pour les dossiers ready_to_stream de chaque chaîne"""
         try:
@@ -547,19 +546,20 @@ class IPTVManager:
         
         except Exception as e:
             logger.error(f"❌ Erreur configuration surveillance ready_to_stream: {e}")
-    
+            
     def run(self):
         try:
             # Démarrer la boucle de surveillance des watchers
-            if hasattr(self, 'watchers_thread') and not self.watchers_thread.is_alive():
+            if not self.watchers_thread.is_alive():
                 self.watchers_thread.start()
-            logger.info("🔄 Boucle de surveillance des watchers démarrée")
+                logger.info("🔄 Boucle de surveillance des watchers démarrée")
             
             logger.debug("📥 Scan initial des chaînes...")
             self.scan_channels()
             
             logger.debug("🕵️ Démarrage de l'observer...")
-            self.observer.start()
+            if not self.observer.is_alive():
+                self.observer.start()
             
             # NOUVEAU: Configurer et démarrer l'observateur pour ready_to_stream
             self._setup_ready_observer()
