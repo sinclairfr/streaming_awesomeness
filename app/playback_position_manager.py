@@ -94,8 +94,8 @@ class PlaybackPositionManager:
                 
         except Exception as e:
             logger.error(f"[{self.channel_name}] ❌ Erreur calcul offset: {e}")
-            return 0.0    
-           
+            return 0.0
+     
     def calculate_durations(self, video_files):
         """
         # Calcule la durée totale à partir d'une liste de fichiers vidéo

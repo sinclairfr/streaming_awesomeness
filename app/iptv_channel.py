@@ -590,8 +590,12 @@ class IPTVChannel:
                 logger.info(f"[{self.name}] ✅ _playlist.txt trouvé")
 
             # Récupération de l'offset basé sur le temps écoulé depuis 01/01/2025
+            # Initialisation de l'offset basé sur la date de référence
             start_offset = self.position_manager.get_start_offset()
-            logger.info(f"[{self.name}] ⏱️ Démarrage à l'offset: {start_offset:.2f}s")
+            self.position_manager.set_playback_offset(start_offset)
+            if hasattr(self, 'process_manager'):
+                self.process_manager.set_playback_offset(start_offset)
+            logger.debug(f"[{self.name}] 🕒 Offset initial basé sur 01/01/2025: {start_offset:.2f}s")
 
             # On passe l'information au process_manager pour la commande ffmpeg
             self.process_manager.set_total_duration(self.position_manager.total_duration)
@@ -723,15 +727,26 @@ class IPTVChannel:
 
             self.last_restart_time = time.time()
 
+            # Arrêt propre du processus actuel
             self.process_manager.stop_process()
             time.sleep(2)
+            
+            # Recalculer l'offset par rapport à la date de référence 2025 à chaque redémarrage
+            # pour s'assurer de la cohérence temporelle
+            if hasattr(self, 'position_manager'):
+                start_offset = self.position_manager.get_start_offset()
+                logger.info(f"[{self.name}] 🔄 Redémarrage avec offset recalculé: {start_offset:.2f}s")
+                
+                # On passe l'information au process_manager pour la commande ffmpeg
+                self.process_manager.set_total_duration(self.position_manager.total_duration)
+                self.process_manager.set_playback_offset(start_offset)
 
             return self.start_stream()
 
         except Exception as e:
             logger.error(f"Erreur lors du redémarrage de {self.name}: {e}")
-            return False    
-       
+            return False
+    
     def stop_stream_if_needed(self):
         """Arrête proprement le stream en utilisant les managers"""
         try:

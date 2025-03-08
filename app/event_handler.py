@@ -428,7 +428,7 @@ class ReadyContentHandler(FileSystemEventHandler):
         
         except Exception as e:
             logger.error(f"❌ Erreur traitement événement ready_to_stream: {e}")
-    
+        
     def _update_channel(self, channel_name):
         """Met à jour les playlists et l'état de la chaîne"""
         try:
@@ -438,11 +438,6 @@ class ReadyContentHandler(FileSystemEventHandler):
                 return
             
             channel = self.manager.channels[channel_name]
-            
-            # Vérifie que la chaîne possède les méthodes nécessaires
-            if not hasattr(channel, '_create_concat_file') or not hasattr(channel, 'refresh_videos'):
-                logger.warning(f"⚠️ Chaîne {channel_name} ne possède pas les méthodes requises")
-                return
             
             # 1. Demande à la chaîne de rafraîchir ses vidéos
             threading.Thread(
@@ -460,7 +455,28 @@ class ReadyContentHandler(FileSystemEventHandler):
                 daemon=True
             ).start()
             
+            # 4. Calcul et mise à jour de la durée totale
+            if hasattr(channel, 'position_manager') and hasattr(channel, '_calculate_total_duration'):
+                def update_duration():
+                    try:
+                        total_duration = channel._calculate_total_duration()
+                        channel.position_manager.set_total_duration(total_duration)
+                        channel.process_manager.set_total_duration(total_duration)
+                        logger.info(f"[{channel_name}] ✅ Durée totale mise à jour: {total_duration:.2f}s")
+                    except Exception as e:
+                        logger.error(f"[{channel_name}] ❌ Erreur mise à jour durée: {e}")
+                
+                threading.Thread(target=update_duration, daemon=True).start()
+            
+            # 5. Mise à jour des offsets si stream en cours d'exécution
+            if hasattr(channel, 'process_manager') and channel.process_manager.is_running():
+                if hasattr(channel, 'position_manager'):
+                    offset = channel.position_manager.get_start_offset()
+                    channel.process_manager.set_playback_offset(offset)
+                    logger.info(f"[{channel_name}] 🔄 Offset de lecture mis à jour: {offset:.2f}s")
+            
             logger.info(f"✅ Mises à jour initiées pour {channel_name} suite à changement dans ready_to_stream")
         
         except Exception as e:
             logger.error(f"❌ Erreur mise à jour chaîne {channel_name}: {e}")
+            

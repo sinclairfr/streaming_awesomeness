@@ -599,6 +599,8 @@ class IPTVManager:
             # Pour chaque chaîne existante
             for name, channel in self.channels.items():
                 ready_dir = Path(channel.video_dir) / "ready_to_stream"
+                ready_dir.mkdir(parents=True, exist_ok=True)  # S'assurer que le dossier existe
+                
                 if ready_dir.exists():
                     self.ready_observer.schedule(
                         self.ready_event_handler, 
@@ -614,7 +616,7 @@ class IPTVManager:
         
         except Exception as e:
             logger.error(f"❌ Erreur configuration surveillance ready_to_stream: {e}")
-   
+    
     def run(self):
         try:
             # Démarrer la boucle de surveillance des watchers
