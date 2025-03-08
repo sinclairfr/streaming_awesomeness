@@ -20,7 +20,7 @@ class FFmpegCommandBuilder:
         
         # Paramètres par défaut
         self.hls_time = 2
-        self.hls_list_size = 10
+        self.hls_list_size = 20
         self.hls_delete_threshold = 1
         self.gop_size = 48
         self.keyint_min = 48
@@ -50,7 +50,7 @@ class FFmpegCommandBuilder:
                 logger.info(f"[{self.channel_name}] 🛠️ Correction du chemin de sortie: {output_file} -> {corrected_path}")
             
             # Log pour debug
-            logger.info(f"[{self.channel_name}] 📝 Commande: {' '.join(command)}")
+            logger.debug(f"[{self.channel_name}] 📝 Commande: {' '.join(command)}")
             
             # Juste avant le return command
             output_path = command[-1]
@@ -99,8 +99,9 @@ class FFmpegCommandBuilder:
         except Exception as e:
             logger.error(f"[{self.name}] Erreur renommage global: {e}")    
    
+
     def build_input_params(self, input_file, playback_offset=0, progress_file=None):
-        """Construit les paramètres d'entrée avec meilleur positionnement initial"""
+        """Construit les paramètres d'entrée avec positionnement précis"""
         params = [
             "ffmpeg",
             "-hide_banner",
@@ -108,24 +109,23 @@ class FFmpegCommandBuilder:
             "-y"
         ]
         
-        # IMPORTANT: Le placement du -ss AVANT l'input permet un positionnement précis
+        # Paramètres de buffer (AVANT le -ss pour une meilleure analyse)
+        params.extend([
+            "-thread_queue_size", "16384",
+            "-analyzeduration", "50M",  # Augmenté pour permettre le seeking distant
+            "-probesize", "50M"         # Pareil
+        ])
+        
+        # Application du -ss AVANT l'input pour un seeking rapide
         if playback_offset > 0:
             params.extend([
                 "-ss", f"{playback_offset:.2f}"
             ])
         
-        # Paramètres de buffer pour stabilité
-        params.extend([
-            "-thread_queue_size", "16384",
-            "-analyzeduration", "20M",
-            "-probesize", "20M"
-        ])
-        
-        # Après le seek, on applique les autres options
         params.extend([
             "-re",
             "-stream_loop", "-1",
-            "-fflags", "+genpts+igndts+discardcorrupt",
+            "-fflags", "+genpts+igndts+discardcorrupt+fastseek",  # Ajout de fastseek
             "-threads", "4",
             "-avoid_negative_ts", "make_zero"
         ])
@@ -139,24 +139,21 @@ class FFmpegCommandBuilder:
             "-i", str(input_file)
         ])
         
-        return params 
+        return params
     
     def build_hls_params(self, output_dir):
-        """Construit les paramètres HLS optimisés pour la stabilité et les changements d'offset"""
+        """Construit des paramètres HLS optimisés et compatibles"""
         return [
             "-f", "hls",
-            "-hls_time", "6",                 # Gardons à 6 secondes
-            "-hls_list_size", "60",           # OK à 60 pour garder assez de segments
-            "-hls_delete_threshold", "20",    # OK pour éviter suppressions trop agressives
-            "-hls_flags", "delete_segments+append_list+program_date_time+independent_segments+split_by_time",
-            # On ajoute split_by_time pour forcer des segments à intervalles réguliers
-            "-hls_allow_cache", "1",
+            "-hls_time", "6",
+            "-hls_list_size", "300",
+            "-hls_delete_threshold", "100",
+            "-hls_flags", "delete_segments+append_list+program_date_time+split_by_time+omit_endlist",
+            "-hls_allow_cache", "0",
             "-start_number", "0",
             "-hls_segment_type", "mpegts",
             "-max_delay", "8000000",
-            "-hls_init_time", "6",
-            "-force_key_frames", "expr:gte(t,n_forced*6)",
-            "-sc_threshold", "0",  # Désactive détection changement de scène
+            "-sc_threshold", "0",       # Garde ça, c'est applicable avec copy
             "-hls_segment_filename", f"{output_dir}/segment_%d.ts",
             f"{output_dir}/playlist.m3u8"
         ]

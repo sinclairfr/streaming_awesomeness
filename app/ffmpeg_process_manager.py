@@ -34,7 +34,8 @@ class FFmpegProcessManager:
         # Registre global des channels pour retrouver le parent depuis n'importe où
         if not hasattr(FFmpegProcessManager, 'all_channels'):
             FFmpegProcessManager.all_channels = {}
-            
+        
+
     def start_process(self, command, hls_dir):
         """
         # Démarre un processus FFmpeg avec la commande fournie
