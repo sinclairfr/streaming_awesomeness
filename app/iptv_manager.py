@@ -226,7 +226,69 @@ class IPTVManager:
             
             # Marque la tâche comme terminée
             self.channel_init_queue.task_done()
+
+    def auto_start_ready_channels(self):
+        """Démarre automatiquement toutes les chaînes prêtes avec un délai entre chaque démarrage"""
+        logger.info("🚀 Démarrage automatique des chaînes prêtes...")
+        
+        # Attendre que plus de chaînes soient prêtes
+        for attempt in range(3):
+            ready_channels = []
+            with self.scan_lock:
+                for name, is_ready in self.channel_ready_status.items():
+                    if is_ready and name in self.channels:
+                        channel = self.channels[name]
+                        if channel.ready_for_streaming:
+                            ready_channels.append(name)
+            
+            if len(ready_channels) >= len(self.channels) * 0.5:  # Au moins 50% des chaînes sont prêtes
+                break
+                
+            logger.info(f"⏳ Seulement {len(ready_channels)}/{len(self.channels)} chaînes prêtes, attente supplémentaire ({attempt+1}/3)...")
+            time.sleep(10)  # 10 secondes d'attente par tentative
+        
+        # Trier pour prévisibilité
+        ready_channels.sort()
+        
+        # Limiter le CPU pour éviter saturation
+        max_parallel = 4
+        groups = [ready_channels[i:i+max_parallel] for i in range(0, len(ready_channels), max_parallel)]
+        
+        for group_idx, group in enumerate(groups):
+            logger.info(f"🚀 Démarrage du groupe {group_idx+1}/{len(groups)} ({len(group)} chaînes)")
+            
+            # Démarrer chaque chaîne du groupe avec un petit délai entre elles
+            for i, channel_name in enumerate(group):
+                delay = i * 3  # 3 secondes entre chaque chaîne du même groupe
+                threading.Timer(delay, self._start_channel, args=[channel_name]).start()
+                logger.info(f"[{channel_name}] ⏱️ Démarrage programmé dans {delay} secondes")
+            
+            # Attendre avant le prochain groupe
+            if group_idx < len(groups) - 1:
+                time.sleep(max_parallel * 5)  # 5 secondes par chaîne entre les groupes
+        
+        if ready_channels:
+            logger.info(f"✅ {len(ready_channels)} chaînes programmées pour démarrage automatique")
+        else:
+            logger.warning("⚠️ Aucune chaîne prête à démarrer")
     
+    def _start_channel(self, channel_name):
+        """Démarre une chaîne spécifique"""
+        try:
+            if channel_name in self.channels:
+                channel = self.channels[channel_name]
+                if channel.ready_for_streaming:
+                    logger.info(f"[{channel_name}] 🚀 Démarrage automatique...")
+                    success = channel.start_stream()
+                    if success:
+                        logger.info(f"[{channel_name}] ✅ Démarrage automatique réussi")
+                    else:
+                        logger.error(f"[{channel_name}] ❌ Échec du démarrage automatique")
+                else:
+                    logger.warning(f"[{channel_name}] ⚠️ Non prête pour le streaming, démarrage ignoré")
+        except Exception as e:
+            logger.error(f"[{channel_name}] ❌ Erreur lors du démarrage automatique: {e}") 
+            
     def _watchers_loop(self):
         """Surveille l'activité des watchers et arrête les streams inutilisés"""
         last_log_time = 0
@@ -356,8 +418,7 @@ class IPTVManager:
             logger.error(f"❌ Erreur update_watchers: {e}")
             import traceback
             logger.error(f"Stack trace: {traceback.format_exc()}")
-            
-            
+                    
     def _clean_startup(self):
         """Nettoie avant de démarrer"""
         try:
@@ -564,7 +625,7 @@ class IPTVManager:
         
         except Exception as e:
             logger.error(f"❌ Erreur configuration surveillance ready_to_stream: {e}")
-            
+   
     def run(self):
         try:
             # Démarrer la boucle de surveillance des watchers
@@ -573,24 +634,22 @@ class IPTVManager:
                 logger.info("🔄 Boucle de surveillance des watchers démarrée")
             
             logger.debug("📥 Scan initial des chaînes...")
-            self.scan_channels()
+            self.scan_channels(initial=True)  # Marquer comme scan initial
             
             logger.debug("🕵️ Démarrage de l'observer...")
             if not self.observer.is_alive():
                 self.observer.start()
             
-            # NOUVEAU: Configurer et démarrer l'observateur pour ready_to_stream
+            # Configurer l'observateur pour ready_to_stream
             self._setup_ready_observer()
             
-            # Debug du client_monitor
-            logger.debug("🚀 Vérification du client_monitor...")
-            if not hasattr(self, 'client_monitor') or not self.client_monitor.is_alive():
-                logger.error("❌ client_monitor n'est pas démarré!")
-            else:
-                logger.info("✅ client_monitor est déjà actif")
-                
-            # Ne pas redémarrer le client_monitor s'il est déjà lancé
-
+            # Attente suffisamment longue pour l'initialisation des chaînes
+            logger.info("⏳ Attente de 45 secondes pour l'initialisation des chaînes...")
+            time.sleep(45)
+            
+            # Démarrage automatique des chaînes prêtes
+            self.auto_start_ready_channels()
+            
             while True:
                 time.sleep(1)
 
