@@ -370,56 +370,45 @@ class IPTVManager:
     def update_watchers(self, channel_name: str, count: int, request_path: str):
         """Met à jour les watchers en fonction des requêtes m3u8 et ts"""
         try:
-            # Log explicite pour débug
-            logger.info(f"🔍 Requête détectée: {channel_name} - {request_path} - count: {count}")
-            
-            # Si la chaîne n'existe pas, on vérifie si on peut la créer
+            # Vérifier si la chaîne existe
             if channel_name not in self.channels:
-                # [code existant inchangé]
-                        
-                # Si la chaîne n'est toujours pas disponible
-                if channel_name not in self.channels:
-                    logger.warning(f"❌ Chaîne inconnue: {channel_name}")
-                    return
+                logger.warning(f"❌ Chaîne inconnue: {channel_name}")
+                return
 
             channel = self.channels[channel_name]
 
-            # Mise à jour SYSTÉMATIQUE du last_watcher_time à chaque requête
+            # Toujours mettre à jour le timestamp de dernière activité
             channel.last_watcher_time = time.time()
 
-            # Si c'est une requête de segment, on met aussi à jour last_segment_time
+            # Pour les requêtes de segments, mettre à jour last_segment_time
             if ".ts" in request_path:
                 channel.last_segment_time = time.time()
 
             old_count = getattr(channel, 'watchers_count', 0)
             
-            # Pas de vérification conditionnelle, on applique toujours la valeur exacte fournie
-            channel.watchers_count = count
-
-            # Log même quand le compte ne change pas, pour débug
-            logger.info(f"[{channel_name}] 👁️ Watchers: {count} (était: {old_count})")
-
+            # IMPORTANT: Ne pas mettre à jour le compteur s'il n'y a pas de changement
+            # Cela évite les conditions de course et réinitialisations inutiles
             if old_count != count:
+                channel.watchers_count = count
+                logger.info(f"[{channel_name}] 👁️ Watchers: {count} (était: {old_count})")
                 logger.info(f"📊 Mise à jour {channel_name}: {count} watchers")
 
-            # Vérifier et démarrer le stream si nécessaire
-            if count > 0:
-                # Vérification si la chaîne est prête
-                if channel_name in self.channel_ready_status and self.channel_ready_status[channel_name]:
-                    if not channel.process_manager.is_running():
-                        logger.info(f"[{channel_name}] 🔥 Watchers actifs mais stream arrêté, redémarrage")
-                        if not channel.start_stream():
-                            logger.error(f"[{channel_name}] ❌ Échec démarrage stream")
-                        else:
-                            logger.info(f"[{channel_name}] ✅ Stream redémarré avec succès")
-                else:
-                    logger.warning(f"[{channel_name}] ⚠️ Chaîne pas encore prête, impossible de démarrer le stream")
-
+                # Démarrer ou arrêter le stream si nécessaire
+                if count > 0 and old_count == 0:
+                    # Si on passe de 0 à 1+ spectateurs, démarrer le stream
+                    if channel_name in self.channel_ready_status and self.channel_ready_status[channel_name]:
+                        if not channel.process_manager.is_running():
+                            logger.info(f"[{channel_name}] 🔥 Premier watcher, démarrage du stream")
+                            channel.start_stream_if_needed()
+            else:
+                # On met quand même à jour le timestamp pour éviter la détection d'inactivité
+                channel.last_watcher_time = time.time()
+                
         except Exception as e:
             logger.error(f"❌ Erreur update_watchers: {e}")
             import traceback
             logger.error(f"Stack trace: {traceback.format_exc()}")
-                        
+ 
     def _clean_startup(self):
         """Nettoie avant de démarrer"""
         try:

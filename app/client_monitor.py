@@ -38,13 +38,13 @@ class ClientMonitor(threading.Thread):
             
  
     def _cleanup_inactive(self):
-        """Nettoie les watchers inactifs"""
+        """Nettoie les watchers inactifs avec un délai plus généreux"""
         now = time.time()
         to_remove = []
 
         with self.lock:
-            # Réduire le seuil d'inactivité à 15 secondes
-            inactivity_threshold = 45
+            # Augmenter significativement le seuil d'inactivité (2 minutes minimum)
+            inactivity_threshold = max(120, self.inactivity_threshold)
 
             for (channel, ip), last_seen in self.watchers.items():
                 if now - last_seen > inactivity_threshold:
@@ -56,19 +56,18 @@ class ClientMonitor(threading.Thread):
                 channel, ip = key
                 del self.watchers[key]
                 affected_channels.add(channel)
-                logger.info(f"🗑️ Watcher supprimé: {ip} -> {channel} (inactif depuis {now - last_seen:.1f}s)")
+                logger.info(f"🗑️ Watcher supprimé: {ip} -> {channel} (inactif depuis {now - self.watchers.get(key, now):.1f}s)")
 
-            # Pour chaque chaîne affectée, recalculer le nombre EXACT de watchers
+            # Pour chaque chaîne affectée, recalculer le nombre exact de watchers
             for channel in affected_channels:
-                count = len([1 for (ch, _), _ in self.watchers.items() if ch == channel])
-                logger.info(f"[{channel}] 🔄 Mise à jour forcée: {count} watchers actifs")
-                self.update_watchers(channel, count, "/hls/")
-
-            # Ne pas faire de mise à jour complète - elle peut être contradictoire
-            # Et supprimer ces lignes qui font un double comptage:
-            # all_channels = set([ch for (ch, _), _ in self.watchers.items()])
-            # all_channels.update(affected_channels)
-
+                # On ne compte que les watchers actifs pour cette chaîne
+                count = sum(1 for (ch, _) in self.watchers if ch == channel)
+                
+                # Mise à jour explicite du compteur
+                if count > 0 or len(to_remove) > 0:  # Seulement si changement
+                    logger.info(f"[{channel}] 🔄 Mise à jour forcée: {count} watchers actifs")
+                    self.update_watchers(channel, count, "/hls/")
+                    
     def _monitor_segment_jumps(self):
         """Surveille les sauts anormaux dans les segments"""
         while True:

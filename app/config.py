@@ -10,7 +10,7 @@ NGINX_ACCESS_LOG = os.getenv('NGINX_ACCESS_LOG', '/var/log/nginx/access.log')
 SERVER_URL = os.getenv('SERVER_URL', '192.168.10.183')
 
 # Configuration des timeouts
-TIMEOUT_NO_VIEWERS = int(os.getenv('TIMEOUT_NO_VIEWERS', '120'))
+TIMEOUT_NO_VIEWERS = int(os.getenv('TIMEOUT_NO_VIEWERS', '3600'))
 RESOURCES_CHECK_INTERVAL = int(os.getenv('RESOURCES_CHECK_INTERVAL', '60'))
 CPU_CHECK_INTERVAL = float(os.getenv('CPU_CHECK_INTERVAL', '1'))
 CPU_THRESHOLD = int(os.getenv('CPU_THRESHOLD', '95'))
