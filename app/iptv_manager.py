@@ -87,7 +87,10 @@ class IPTVManager:
         # Observer
         self.observer = Observer()
         event_handler = ChannelEventHandler(self)
+        
+        # Surveillance du dossier racine en mode récursif
         self.observer.schedule(event_handler, self.content_dir, recursive=True)
+        logger.info(f"👁️ Observer configuré pour surveiller {self.content_dir} en mode récursif")
 
         # NOUVEAU: Observer pour les dossiers ready_to_stream
         self.ready_observer = Observer()
@@ -141,6 +144,14 @@ class IPTVManager:
         )
         self.running = True
 
+        # Thread de scan périodique
+        self.scan_thread_stop = threading.Event()
+        self.scan_thread = threading.Thread(
+            target=self._periodic_scan_thread,
+            daemon=True
+        )
+        self.scan_thread.start()
+        
     def _check_client_monitor(self):
         """Vérifie périodiquement l'état du client_monitor"""
         while True:
@@ -591,61 +602,72 @@ class IPTVManager:
         for name, channel in self.channels.items():
             channel._clean_processes()
 
+        if hasattr(self, 'scan_thread_stop'):
+            self.scan_thread_stop.set()
+            
+        if hasattr(self, 'scan_thread') and self.scan_thread.is_alive():
+            self.scan_thread.join(timeout=5)
+            
         logger.info("Nettoyage terminé")
- 
+
     def _setup_ready_observer(self):
         """Configure l'observateur pour les dossiers ready_to_stream de chaque chaîne"""
         try:
+            # D'abord, arrêter et recréer l'observateur si nécessaire pour éviter les doublons
+            if hasattr(self, 'ready_observer') and self.ready_observer.is_alive():
+                self.ready_observer.stop()
+                self.ready_observer.join(timeout=5)
+                
+            self.ready_observer = Observer()
+            
             # Pour chaque chaîne existante
+            paths_scheduled = set()  # Pour éviter les doublons
+            
             for name, channel in self.channels.items():
                 ready_dir = Path(channel.video_dir) / "ready_to_stream"
                 ready_dir.mkdir(parents=True, exist_ok=True)  # S'assurer que le dossier existe
                 
-                if ready_dir.exists():
+                if ready_dir.exists() and str(ready_dir) not in paths_scheduled:
                     self.ready_observer.schedule(
                         self.ready_event_handler, 
                         str(ready_dir), 
                         recursive=False
                     )
-                    logger.info(f"👁️ Surveillance ready_to_stream configurée pour {name}")
+                    paths_scheduled.add(str(ready_dir))
+                    logger.info(f"👁️ Surveillance ready_to_stream configurée pour {name}: {ready_dir}")
             
-            # Démarrage de l'observateur s'il n'est pas déjà en cours
-            if not self.ready_observer.is_alive():
-                self.ready_observer.start()
-                logger.info("🚀 Démarrage de l'observateur ready_to_stream")
+            # Démarrage de l'observateur
+            self.ready_observer.start()
+            logger.info(f"🚀 Observateur ready_to_stream démarré pour {len(paths_scheduled)} chemins")
         
         except Exception as e:
             logger.error(f"❌ Erreur configuration surveillance ready_to_stream: {e}")
-    
-    def run(self):
-        try:
-            # Démarrer la boucle de surveillance des watchers
-            if not self.watchers_thread.is_alive():
-                self.watchers_thread.start()
-                logger.info("🔄 Boucle de surveillance des watchers démarrée")
-            
-            logger.debug("📥 Scan initial des chaînes...")
-            self.scan_channels(initial=True)  # Marquer comme scan initial
-            
-            logger.debug("🕵️ Démarrage de l'observer...")
-            if not self.observer.is_alive():
-                self.observer.start()
-            
-            # Configurer l'observateur pour ready_to_stream
-            self._setup_ready_observer()
-            
-            # Attente suffisamment longue pour l'initialisation des chaînes
-            logger.info("⏳ Attente de 30 secondes pour l'initialisation des chaînes...")
-            time.sleep(30)
-            
-            # Démarrage automatique des chaînes prêtes
-            self.auto_start_ready_channels()
-            
-            while True:
-                time.sleep(1)
+            import traceback
+            logger.error(traceback.format_exc())
 
-        except KeyboardInterrupt:
-            self.cleanup()
-        except Exception as e:
-            logger.error(f"🔥 Erreur manager : {e}")
-            self.cleanup()
+
+    # Puis ajouter cette méthode:
+    def _periodic_scan_thread(self):
+        """Thread dédié au scan périodique des chaînes"""
+        scan_interval = 60  # 1 minute entre les scans
+        
+        while not self.scan_thread_stop.is_set():
+            try:
+                # On attend d'abord un peu pour ne pas scanner tout de suite après le démarrage
+                time.sleep(30)
+                
+                logger.info("🔄 Scan périodique des chaînes...")
+                self.scan_channels(force=True)
+                
+                # Configuration (ou reconfiguration) de l'observateur ready_to_stream
+                # pour prendre en compte les nouvelles chaînes
+                self._setup_ready_observer()
+                
+                # Et on attend l'intervalle avant le prochain scan
+                self.scan_thread_stop.wait(timeout=scan_interval)
+                
+            except Exception as e:
+                logger.error(f"❌ Erreur dans le thread de scan périodique: {e}")
+                time.sleep(10)  # En cas d'erreur, on attend un peu avant de réessayer
+        
+        logger.info("🛑 Arrêt du thread de scan périodique")

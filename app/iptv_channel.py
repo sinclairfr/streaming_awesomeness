@@ -103,65 +103,6 @@ class IPTVChannel:
         self.last_logged_position = position
         self.position_manager.update_from_progress(self.logger.get_progress_file())
         
-    def _scan_videos(self) -> bool:
-        """Scanne les fichiers vidéos et met à jour processed_videos"""
-        try:
-            source_dir = Path(self.video_dir)
-            ready_to_stream_dir = source_dir / "ready_to_stream"
-            
-            # Création du dossier s'il n'existe pas
-            ready_to_stream_dir.mkdir(exist_ok=True)
-            
-            self._verify_processor()
-            
-            # On réinitialise la liste des vidéos traitées
-            self.processed_videos = []
-            
-            # On scanne d'abord les vidéos dans ready_to_stream
-            mp4_files = list(ready_to_stream_dir.glob("*.mp4"))
-            
-            if not mp4_files:
-                logger.warning(f"[{self.name}] ⚠️ Aucun fichier MP4 dans {ready_to_stream_dir}")
-                
-                # On vérifie s'il y a des fichiers à traiter
-                video_extensions = (".mp4", ".avi", ".mkv", ".mov", "m4v")
-                source_files = []
-                for ext in video_extensions:
-                    source_files.extend(source_dir.glob(f"*{ext}"))
-
-                if not source_files:
-                    logger.warning(f"[{self.name}] ⚠️ Aucun fichier vidéo dans {self.video_dir}")
-                    self.ready_for_streaming = False
-                    return False
-                    
-                logger.info(f"[{self.name}] 🔄 {len(source_files)} fichiers sources à traiter")
-                self.ready_for_streaming = False
-                return False
-                
-            # Vérification que les fichiers sont valides
-            valid_files = []
-            for video_file in mp4_files:
-                if verify_file_ready(video_file):
-                    valid_files.append(video_file)
-                else:
-                    logger.warning(f"[{self.name}] ⚠️ Fichier {video_file.name} ignoré car non valide")
-            
-            if valid_files:
-                self.processed_videos.extend(valid_files)
-                logger.info(f"[{self.name}] ✅ {len(valid_files)} vidéos valides trouvées dans ready_to_stream")
-                
-                # La chaîne est prête si on a des vidéos valides
-                self.ready_for_streaming = True
-                return True
-            else:
-                logger.warning(f"[{self.name}] ⚠️ Aucun fichier MP4 valide trouvé dans ready_to_stream")
-                self.ready_for_streaming = False
-                return False
-
-        except Exception as e:
-            logger.error(f"[{self.name}] ❌ Erreur scan des vidéos: {str(e)}")
-            return False
-
     def _scan_videos_async(self):
         """Scanne les vidéos en tâche de fond pour les mises à jour ultérieures"""
         try:
@@ -748,42 +689,6 @@ class IPTVChannel:
         except Exception as e:
             logger.error(f"[{self.name}] ❌ Erreur arrêt stream: {e}")
     
-    def refresh_videos(self):
-        """Force un nouveau scan des vidéos et notifie le manager"""
-        def scan_and_notify():
-            try:
-                # Exécute le scan
-                self._scan_videos_async()
-                
-                # S'assure que le statut est correctement reporté au manager
-                # Attend un peu que le scan asynchrone progresse
-                time.sleep(2)
-                
-                # Vérification directe si des vidéos ont été traitées
-                ready_files = list((Path(self.video_dir) / "ready_to_stream").glob("*.mp4"))
-                if ready_files:
-                    self.ready_for_streaming = True
-                    
-                    # Trouve le manager parent pour mettre à jour le statut
-                    import inspect
-                    frame = inspect.currentframe()
-                    while frame:
-                        if 'self' in frame.f_locals and hasattr(frame.f_locals['self'], 'channel_ready_status'):
-                            manager = frame.f_locals['self']
-                            with manager.scan_lock:
-                                manager.channel_ready_status[self.name] = True
-                            logger.info(f"[{self.name}] ✅ Statut 'prêt' mis à jour dans le manager")
-                            break
-                        frame = frame.f_back
-                    
-                logger.info(f"[{self.name}] 🔄 Rafraîchissement terminé, prêt: {self.ready_for_streaming}")
-            except Exception as e:
-                logger.error(f"[{self.name}] ❌ Erreur dans scan_and_notify: {e}")
-        
-        # Lance le scan dans un thread séparé
-        threading.Thread(target=scan_and_notify, daemon=True).start()
-        return True  
-    
     def start_stream_if_needed(self):
         """Démarre le stream uniquement s'il n'est pas déjà en cours"""
         if not self.process_manager.is_running():
@@ -917,4 +822,131 @@ class IPTVChannel:
     def refresh_videos(self):
         """Force un nouveau scan des vidéos"""
         threading.Thread(target=self._scan_videos_async, daemon=True).start()
+        return True
+    
+    def _scan_videos(self) -> bool:
+        """Scanne les fichiers vidéos et met à jour processed_videos"""
+        try:
+            source_dir = Path(self.video_dir)
+            ready_to_stream_dir = source_dir / "ready_to_stream"
+            
+            # Création du dossier s'il n'existe pas
+            ready_to_stream_dir.mkdir(exist_ok=True)
+            
+            self._verify_processor()
+            
+            # On réinitialise la liste des vidéos traitées
+            old_processed = self.processed_videos
+            self.processed_videos = []
+            
+            # On scanne d'abord les vidéos dans ready_to_stream
+            mp4_files = list(ready_to_stream_dir.glob("*.mp4"))
+            
+            if not mp4_files:
+                logger.warning(f"[{self.name}] ⚠️ Aucun fichier MP4 dans {ready_to_stream_dir}")
+                
+                # On vérifie s'il y a des fichiers à traiter
+                video_extensions = (".mp4", ".avi", ".mkv", ".mov", ".m4v")
+                source_files = []
+                for ext in video_extensions:
+                    source_files.extend(source_dir.glob(f"*{ext}"))
+
+                if not source_files:
+                    logger.warning(f"[{self.name}] ⚠️ Aucun fichier vidéo dans {self.video_dir}")
+                    self.ready_for_streaming = False
+                    return False
+                    
+                logger.info(f"[{self.name}] 🔄 {len(source_files)} fichiers sources à traiter")
+                self.ready_for_streaming = False
+                return False
+                
+            # Log explicite des fichiers trouvés
+            logger.info(f"[{self.name}] 🔍 {len(mp4_files)} fichiers MP4 trouvés dans ready_to_stream: {[f.name for f in mp4_files]}")
+            
+            # Vérification que les fichiers sont valides
+            valid_files = []
+            for video_file in mp4_files:
+                if verify_file_ready(video_file):
+                    valid_files.append(video_file)
+                else:
+                    logger.warning(f"[{self.name}] ⚠️ Fichier {video_file.name} ignoré car non valide")
+            
+            if valid_files:
+                self.processed_videos.extend(valid_files)
+                logger.info(f"[{self.name}] ✅ {len(valid_files)} vidéos valides trouvées dans ready_to_stream")
+                
+                # Vérifie si la liste a changé
+                old_names = {f.name for f in old_processed}
+                new_names = {f.name for f in valid_files}
+                
+                if old_names != new_names:
+                    logger.info(f"[{self.name}] 🔄 Liste des vidéos modifiée:")
+                    logger.info(f"   - Supprimées: {old_names - new_names}")
+                    logger.info(f"   + Ajoutées: {new_names - old_names}")
+                    
+                    # Mise à jour de la playlist
+                    threading.Thread(target=self._create_concat_file, daemon=True).start()
+                
+                # La chaîne est prête si on a des vidéos valides
+                self.ready_for_streaming = True
+                
+                # Notifier le manager que cette chaîne est prête
+                self._notify_manager_ready()
+                
+                return True
+            else:
+                logger.warning(f"[{self.name}] ⚠️ Aucun fichier MP4 valide trouvé dans ready_to_stream")
+                self.ready_for_streaming = False
+                return False
+
+        except Exception as e:
+            logger.error(f"[{self.name}] ❌ Erreur scan des vidéos: {str(e)}")
+            import traceback
+            logger.error(f"[{self.name}] {traceback.format_exc()}")
+            return False
+
+    def _notify_manager_ready(self):
+        """Notifie le manager que cette chaîne est prête"""
+        try:
+            # Trouve le manager dans les frames
+            import inspect
+            frame = inspect.currentframe()
+            while frame:
+                if 'self' in frame.f_locals:
+                    obj = frame.f_locals['self']
+                    if hasattr(obj, 'channels') and hasattr(obj, 'channel_ready_status'):
+                        manager = obj
+                        with manager.scan_lock:
+                            manager.channel_ready_status[self.name] = True
+                        logger.info(f"[{self.name}] ✅ Statut 'prêt' mis à jour dans le manager")
+                        # Forcer la mise à jour de la playlist
+                        threading.Thread(target=manager._manage_master_playlist, daemon=True).start()
+                        break
+                frame = frame.f_back
+        except Exception as e:
+            logger.error(f"[{self.name}] ❌ Erreur notification manager: {e}")
+
+    def refresh_videos(self):
+        """Force un nouveau scan des vidéos et notifie le manager"""
+        def scan_and_notify():
+            try:
+                # Exécute le scan
+                with self.scan_lock:
+                    success = self._scan_videos()
+                
+                # S'assure que le statut est correctement reporté au manager
+                # Vérification directe si des vidéos ont été traitées
+                if success and self.ready_for_streaming:
+                    # Notification et mise à jour de la playlist
+                    self._notify_manager_ready()
+                    
+                    # Vérification et création du fichier de concaténation
+                    self._create_concat_file()
+                    
+                logger.info(f"[{self.name}] 🔄 Rafraîchissement terminé, prêt: {self.ready_for_streaming}")
+            except Exception as e:
+                logger.error(f"[{self.name}] ❌ Erreur dans scan_and_notify: {e}")
+        
+        # Lance le scan dans un thread séparé
+        threading.Thread(target=scan_and_notify, daemon=True).start()
         return True
