@@ -248,7 +248,8 @@ class ChannelEventHandler(FileSystemEventHandler):
             logger.debug(f"Fichier temporaire ignoré: {path.name}")
             return
             
-        if path.suffix.lower() not in ['.mp4', '.mkv', '.avi', '.mov','m4v']:
+        # Correction:
+        if path.suffix.lower() not in ['.mp4', '.mkv', '.avi', '.mov', '.m4v']:
             return  # On ignore les fichiers non vidéo
 
         # On vérifie si les fichiers sont en cours de copie
@@ -262,7 +263,7 @@ class ChannelEventHandler(FileSystemEventHandler):
             channel_name = self.get_channel_from_path(event.src_path)
             if channel_name:
                 self.channel_changes.add(channel_name)
-            
+        
         # On lance un thread dédié pour surveiller la copie
         threading.Thread(
             target=self._wait_for_copy_completion,

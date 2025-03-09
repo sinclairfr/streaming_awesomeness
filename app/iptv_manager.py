@@ -645,8 +645,6 @@ class IPTVManager:
             import traceback
             logger.error(traceback.format_exc())
 
-
-    # Puis ajouter cette méthode:
     def _periodic_scan_thread(self):
         """Thread dédié au scan périodique des chaînes"""
         scan_interval = 60  # 1 minute entre les scans
@@ -671,3 +669,36 @@ class IPTVManager:
                 time.sleep(10)  # En cas d'erreur, on attend un peu avant de réessayer
         
         logger.info("🛑 Arrêt du thread de scan périodique")
+
+    def run(self):
+        try:
+            # Démarrer la boucle de surveillance des watchers
+            if not self.watchers_thread.is_alive():
+                self.watchers_thread.start()
+                logger.info("🔄 Boucle de surveillance des watchers démarrée")
+            
+            logger.debug("📥 Scan initial des chaînes...")
+            self.scan_channels(initial=True)  # Marquer comme scan initial
+            
+            logger.debug("🕵️ Démarrage de l'observer...")
+            if not self.observer.is_alive():
+                self.observer.start()
+            
+            # Configurer l'observateur pour ready_to_stream
+            self._setup_ready_observer()
+            
+            # Attente suffisamment longue pour l'initialisation des chaînes
+            logger.info("⏳ Attente de 30 secondes pour l'initialisation des chaînes...")
+            time.sleep(30)
+            
+            # Démarrage automatique des chaînes prêtes
+            self.auto_start_ready_channels()
+            
+            while True:
+                time.sleep(1)
+
+        except KeyboardInterrupt:
+            self.cleanup()
+        except Exception as e:
+            logger.error(f"🔥 Erreur manager : {e}")
+            self.cleanup()
