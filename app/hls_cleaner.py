@@ -11,22 +11,23 @@ from config import logger
 # Logger
 logger = logging.getLogger("HLS_CLEANER")
 
+
 class HLSCleaner:
     """Gestionnaire unique de nettoyage des segments HLS"""
 
     def __init__(self, hls_dir: str = "/app/hls/"):
         # On permet de personnaliser le dossier HLS
         self.hls_dir = Path(hls_dir)
-        self.max_hls_age = 14400  
-        self.min_free_space_gb = 2.0  # Abaissé pour conserver plus de segments
-        self.cleanup_interval = 3600  
-        
+        self.max_hls_age = 28800  # Augmenté à 8h (au lieu de 4h)
+        self.min_free_space_gb = 1.0  # Abaissé pour conserver plus de segments
+        self.cleanup_interval = 3600  # Nettoyage toutes les heures
+
         # On crée le dossier HLS s'il n'existe pas
         self.hls_dir.mkdir(parents=True, exist_ok=True)
-        
+
         self.stop_event = threading.Event()
         self.cleanup_thread = threading.Thread(target=self._cleanup_loop, daemon=True)
-        
+
         logger.info(f"HLSCleaner initialisé sur {self.hls_dir}")
 
     def start(self):
@@ -45,7 +46,7 @@ class HLSCleaner:
         try:
             logger.info("🧹 Nettoyage initial...")
             for item in self.hls_dir.glob("**/*"):
-                if item.is_file() and item.suffix in ['.ts', '.m3u8']:
+                if item.is_file() and item.suffix in [".ts", ".m3u8"]:
                     item.unlink()
                     logger.debug(f"Supprimé: {item}")
             logger.info("✨ Nettoyage initial terminé")
@@ -81,34 +82,34 @@ class HLSCleaner:
         try:
             now = time.time()
             deleted_count = 0
-            
+
             # On vérifie chaque dossier de chaîne
             for channel_dir in self.hls_dir.glob("*"):
                 if not channel_dir.is_dir():
                     continue
-                    
+
                 playlist = channel_dir / "playlist.m3u8"
                 if not playlist.exists():
                     continue
-                    
+
                 # On lit la playlist pour identifier les segments actifs
                 active_segments = set()
                 try:
                     with open(playlist) as f:
                         for line in f:
                             line = line.strip()
-                            if line.endswith('.ts'):
+                            if line.endswith(".ts"):
                                 # On prend juste le nom du fichier sans le chemin
                                 segment_name = Path(line).name
                                 active_segments.add(segment_name)
                 except Exception as e:
                     logger.error(f"Erreur lecture playlist {playlist}: {e}")
                     continue
-                    
+
                 # On ne supprime QUE les segments inactifs ET vieux
                 for segment in channel_dir.glob("*.ts"):
                     if (
-                        segment.name not in active_segments 
+                        segment.name not in active_segments
                         and now - segment.stat().st_mtime > self.max_hls_age
                     ):
                         try:
@@ -116,10 +117,10 @@ class HLSCleaner:
                             deleted_count += 1
                             logger.debug(f"Segment supprimé: {segment}")
                         except Exception as e:
-                            logger.error(f"Erreur suppression {segment}: {e}")           
+                            logger.error(f"Erreur suppression {segment}: {e}")
         except Exception as e:
             logger.error(f"Erreur nettoyage segments: {e}")
-         
+
     def _cleanup_orphaned_segments(self):
         """Supprime les segments non référencés"""
         try:
@@ -137,8 +138,7 @@ class HLSCleaner:
                 # On lit la playlist pour trouver les segments référencés
                 with open(playlist) as f:
                     referenced = set(
-                        line.strip() for line in f 
-                        if line.strip().endswith('.ts')
+                        line.strip() for line in f if line.strip().endswith(".ts")
                     )
 
                 # On supprime les segments non référencés
@@ -148,29 +148,30 @@ class HLSCleaner:
 
         except Exception as e:
             logger.error(f"Erreur nettoyage segments orphelins: {e}")
-    
+
     def _check_disk_space(self):
         """Vérifie l'espace disque disponible et nettoie si nécessaire"""
         try:
             # Récupère les stats du filesystem
             stats = shutil.disk_usage(self.hls_dir)
             free_gb = stats.free / (1024 * 1024 * 1024)
-            
+
             # Si l'espace libre est inférieur au seuil
             if free_gb < self.min_free_space_gb:
-                logger.warning(f"⚠️ Espace disque faible: {free_gb:.2f} GB (seuil: {self.min_free_space_gb} GB)")
+                logger.warning(
+                    f"⚠️ Espace disque faible: {free_gb:.2f} GB (seuil: {self.min_free_space_gb} GB)"
+                )
                 # Nettoyage agressif
                 self._aggressive_cleanup()
-            
+
         except Exception as e:
             logger.error(f"Erreur vérification espace disque: {e}")
-            
+
     def _aggressive_cleanup(self):
         """Nettoyage agressif en cas de manque d'espace"""
         try:
             segments = sorted(
-                self.hls_dir.glob("**/*.ts"),
-                key=lambda x: x.stat().st_mtime
+                self.hls_dir.glob("**/*.ts"), key=lambda x: x.stat().st_mtime
             )
             # On supprime la moitié des segments les plus vieux
             to_delete = len(segments) // 2
