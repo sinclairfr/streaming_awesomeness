@@ -633,7 +633,7 @@ class IPTVChannel:
                 
         except Exception as e:
             logger.error(f"[{self.name}] ❌ Erreur dans la boucle de surveillance des segments: {e}")
-            
+
     def _restart_stream(self) -> bool:
         """Redémarre le stream en cas de problème"""
         try:
@@ -648,12 +648,30 @@ class IPTVChannel:
 
             self.last_restart_time = time.time()
 
-            # Arrêt propre du processus actuel
+            # 1. Récupérer les segments existants pour la continuité
+            hls_dir = Path(f"/app/hls/{self.name}")
+            current_segments = []
+            
+            if hls_dir.exists():
+                current_segments = list(hls_dir.glob("segment_*.ts"))
+                
+                # Garde les segments les plus récents pour faciliter la transition
+                # Ne pas tous les supprimer d'un coup
+                if current_segments:
+                    current_segments.sort(key=lambda x: int(x.stem.split('_')[-1]))
+                    # Garder les 10 derniers segments maximum
+                    if len(current_segments) > 10:
+                        for old_segment in current_segments[:-10]:
+                            try:
+                                old_segment.unlink()
+                            except:
+                                pass
+
+            # 2. Arrêt propre du processus actuel
             self.process_manager.stop_process()
             time.sleep(2)
             
-            # Recalculer l'offset par rapport à la date de référence 2025 à chaque redémarrage
-            # pour s'assurer de la cohérence temporelle
+            # 3. Recalculer l'offset de lecture pour maintenir la continuité
             if hasattr(self, 'position_manager'):
                 start_offset = self.position_manager.get_start_offset()
                 logger.info(f"[{self.name}] 🔄 Redémarrage avec offset recalculé: {start_offset:.2f}s")
@@ -662,6 +680,44 @@ class IPTVChannel:
                 self.process_manager.set_total_duration(self.position_manager.total_duration)
                 self.process_manager.set_playback_offset(start_offset)
 
+            # 4. Mise à jour des paramètres FFmpeg pour conserver la continuité
+            # On affecte un attribut dynamique à command_builder pour être utilisé à chaque construction
+            if hasattr(self, 'command_builder'):
+                # Juste avant le démarrage, on modifie la méthode build_hls_params
+                orig_build_hls = self.command_builder.build_hls_params
+                
+                # On détermine le prochain numéro de segment à utiliser
+                next_segment = 0
+                if current_segments:
+                    try:
+                        last_segment = current_segments[-1]
+                        next_segment = int(last_segment.stem.split('_')[-1]) + 1
+                        logger.info(f"[{self.name}] 🔄 Continuité avec le segment #{next_segment}")
+                    except:
+                        pass
+                
+                # On conserve une référence de la méthode originale
+                def patched_build_hls(output_dir):
+                    params = orig_build_hls(output_dir)
+                    # On cherche l'index du paramètre start_number
+                    for i, param in enumerate(params):
+                        if param == "-start_number" and i+1 < len(params):
+                            # On remplace la valeur suivante par notre numéro
+                            params[i+1] = str(next_segment)
+                            break
+                    return params
+                
+                # On remplace temporairement la méthode
+                self.command_builder.build_hls_params = patched_build_hls
+                
+                # On lance le stream
+                result = self.start_stream()
+                
+                # On restaure la méthode originale
+                self.command_builder.build_hls_params = orig_build_hls
+                
+                return result
+            
             return self.start_stream()
 
         except Exception as e:

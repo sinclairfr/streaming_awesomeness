@@ -151,6 +151,7 @@ class IPTVManager:
             daemon=True
         )
         self.scan_thread.start()
+    
         
     def _check_client_monitor(self):
         """Vérifie périodiquement l'état du client_monitor"""

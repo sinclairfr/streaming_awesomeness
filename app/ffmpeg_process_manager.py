@@ -42,7 +42,7 @@ class FFmpegProcessManager:
         # Renvoie True si démarré avec succès, False sinon
         """
         with self.lock:
-            logger.info(f"[{self.channel_name}] 🚀 Démarrage start_process")
+            logger.debug(f"[{self.channel_name}] 🚀 Démarrage start_process")
             # On nettoie d'abord les processus existants
             self._clean_existing_processes()
             

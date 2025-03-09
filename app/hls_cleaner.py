@@ -17,7 +17,7 @@ class HLSCleaner:
     def __init__(self, hls_dir: str = "/app/hls/"):
         # On permet de personnaliser le dossier HLS
         self.hls_dir = Path(hls_dir)
-        self.max_hls_age = 14400  # 2 heures au lieu de 1 heure
+        self.max_hls_age = 14400  
         self.min_free_space_gb = 2.0  # Abaissé pour conserver plus de segments
         self.cleanup_interval = 3600  
         
@@ -77,7 +77,7 @@ class HLSCleaner:
             time.sleep(self.cleanup_interval)
 
     def _cleanup_old_segments(self):
-        """On ne supprime que les segments vraiment obsolètes"""
+        """On ne supprime que les segments vraiment obsolètes et non référencés"""
         try:
             now = time.time()
             deleted_count = 0
@@ -96,13 +96,16 @@ class HLSCleaner:
                 try:
                     with open(playlist) as f:
                         for line in f:
-                            if line.strip().endswith('.ts'):
-                                active_segments.add(line.strip())
+                            line = line.strip()
+                            if line.endswith('.ts'):
+                                # On prend juste le nom du fichier sans le chemin
+                                segment_name = Path(line).name
+                                active_segments.add(segment_name)
                 except Exception as e:
                     logger.error(f"Erreur lecture playlist {playlist}: {e}")
                     continue
                     
-                # On ne supprime que les segments inactifs ET vieux
+                # On ne supprime QUE les segments inactifs ET vieux
                 for segment in channel_dir.glob("*.ts"):
                     if (
                         segment.name not in active_segments 
@@ -116,7 +119,7 @@ class HLSCleaner:
                             logger.error(f"Erreur suppression {segment}: {e}")           
         except Exception as e:
             logger.error(f"Erreur nettoyage segments: {e}")
-            
+         
     def _cleanup_orphaned_segments(self):
         """Supprime les segments non référencés"""
         try:
