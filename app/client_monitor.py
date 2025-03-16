@@ -226,33 +226,35 @@ class ClientMonitor(threading.Thread):
         Retourne (ip, channel, request_type, is_valid_request)
         """
         try:
-            # Format typique: IP - - [date] "GET /hls/channel/playlist.m3u8 HTTP/1.1" 200 ...
-            parts = line.split()
-            if len(parts) < 7:
-                return None, None, None, False
+            logger.info(f"Analyse de la ligne de log: {line}")
 
-            ip = parts[0]
+            if "GET /hls/" in line:
+                # Format typique: IP - - [date] "GET /hls/channel/playlist.m3u8 HTTP/1.1" 200 ...
+                parts = line.split()
+                if (
+                    len(parts) < 9
+                ):  # Ajout d'une vérification plus stricte sur la longueur
+                    return None, None, None, False
+                ip = parts[0]
 
             # Extraire la requête (entre guillemets)
-            request_raw = " ".join(parts[5:8]).strip('"')
-            request_parts = request_raw.split()
-
-            if len(request_parts) < 2 or not "/hls/" in request_parts[1]:
+            request_match = re.search(r'"(GET|HEAD) ([^"]*)', line)
+            if not request_match:
                 return None, None, None, False
 
-            request_path = request_parts[1]
+            request_path = request_match.group(2)
+
+            # Vérification du code de status
             status_code = parts[8] if len(parts) > 8 else "???"
 
             # Déterminer le type de requête
             request_type = "unknown"
-            if request_path.endswith(".m3u8"):
+            if ".m3u8" in request_path:
                 request_type = "playlist"
-            elif request_path.endswith(".ts"):
+            elif ".ts" in request_path:
                 request_type = "segment"
 
             # Extraire le nom de la chaîne
-            import re
-
             match = re.search(r"/hls/([^/]+)/", request_path)
             if not match:
                 return ip, None, request_type, False

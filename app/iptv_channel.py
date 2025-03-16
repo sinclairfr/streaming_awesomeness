@@ -772,9 +772,13 @@ class IPTVChannel:
             )
 
     def _restart_stream(self) -> bool:
-        """Redémarre le stream en cas de problème"""
+        """Redémarre le stream en cas de problème avec une meilleure gestion de la continuité"""
         try:
             logger.info(f"🔄 Redémarrage du stream {self.name}")
+
+            # Ajoute un délai aléatoire pour éviter les redémarrages en cascade
+            jitter = random.uniform(0.5, 2.0)
+            time.sleep(jitter)
 
             elapsed = time.time() - getattr(self, "last_restart_time", 0)
             if elapsed < self.error_handler.restart_cooldown:
@@ -785,30 +789,24 @@ class IPTVChannel:
 
             self.last_restart_time = time.time()
 
-            # 1. Récupérer les segments existants pour la continuité
+            # 1. Récupérer l'état actuel du stream
             hls_dir = Path(f"/app/hls/{self.name}")
-            current_segments = []
-
-            if hls_dir.exists():
-                current_segments = list(hls_dir.glob("segment_*.ts"))
-
-                # Garde les segments les plus récents pour faciliter la transition
-                # Ne pas tous les supprimer d'un coup
-                if current_segments:
-                    current_segments.sort(key=lambda x: int(x.stem.split("_")[-1]))
-                    # Garder les 10 derniers segments maximum
-                    if len(current_segments) > 10:
-                        for old_segment in current_segments[:-10]:
-                            try:
-                                old_segment.unlink()
-                            except:
-                                pass
 
             # 2. Arrêt propre du processus actuel
             self.process_manager.stop_process()
             time.sleep(2)
 
-            # 3. Recalculer l'offset de lecture pour maintenir la continuité
+            # 3. Vérifier si on a un fichier playlist frais
+            playlist_file = Path(self.video_dir) / "_playlist.txt"
+            if (
+                not playlist_file.exists()
+                or time.time() - playlist_file.stat().st_mtime > 3600
+            ):
+                # Recréer le fichier playlist si trop ancien
+                self._create_concat_file()
+                time.sleep(1)  # Attendre que le fichier soit écrit
+
+            # 4. Recalculer l'offset de lecture
             if hasattr(self, "position_manager"):
                 start_offset = self.position_manager.get_start_offset()
                 logger.info(
@@ -821,50 +819,32 @@ class IPTVChannel:
                 )
                 self.process_manager.set_playback_offset(start_offset)
 
-            # 4. Mise à jour des paramètres FFmpeg pour conserver la continuité
-            # On affecte un attribut dynamique à command_builder pour être utilisé à chaque construction
-            if hasattr(self, "command_builder"):
-                # Juste avant le démarrage, on modifie la méthode build_hls_params
-                orig_build_hls = self.command_builder.build_hls_params
-
-                # On détermine le prochain numéro de segment à utiliser
-                next_segment = 0
-                if current_segments:
+            # 5. Nettoyer les anciens segments pour éviter les problèmes
+            if hls_dir.exists():
+                for old_file in hls_dir.glob("*.ts"):
                     try:
-                        last_segment = current_segments[-1]
-                        next_segment = int(last_segment.stem.split("_")[-1]) + 1
-                        logger.info(
-                            f"[{self.name}] 🔄 Continuité avec le segment #{next_segment}"
+                        old_file.unlink()
+                    except Exception as e:
+                        logger.debug(
+                            f"[{self.name}] Impossible de supprimer {old_file}: {e}"
                         )
-                    except:
+
+                # Supprimer aussi l'ancienne playlist
+                old_playlist = hls_dir / "playlist.m3u8"
+                if old_playlist.exists():
+                    try:
+                        old_playlist.unlink()
+                    except Exception:
                         pass
 
-                # On conserve une référence de la méthode originale
-                def patched_build_hls(output_dir):
-                    params = orig_build_hls(output_dir)
-                    # On cherche l'index du paramètre start_number
-                    for i, param in enumerate(params):
-                        if param == "-start_number" and i + 1 < len(params):
-                            # On remplace la valeur suivante par notre numéro
-                            params[i + 1] = str(next_segment)
-                            break
-                    return params
-
-                # On remplace temporairement la méthode
-                self.command_builder.build_hls_params = patched_build_hls
-
-                # On lance le stream
-                result = self.start_stream()
-
-                # On restaure la méthode originale
-                self.command_builder.build_hls_params = orig_build_hls
-
-                return result
-
+            # 6. Lancer un nouveau stream frais
             return self.start_stream()
 
         except Exception as e:
             logger.error(f"Erreur lors du redémarrage de {self.name}: {e}")
+            import traceback
+
+            logger.error(traceback.format_exc())
             return False
 
     def stop_stream_if_needed(self):

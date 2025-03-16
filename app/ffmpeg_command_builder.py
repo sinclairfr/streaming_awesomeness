@@ -129,19 +129,17 @@ class FFmpegCommandBuilder:
         params.extend(
             [
                 "-thread_queue_size",
-                "16384",
+                "32768",  # Augmenté pour plus de stabilité
                 "-analyzeduration",
-                "50M",  # Augmenté pour permettre le seeking distant
+                "60M",  # Augmenté
                 "-probesize",
-                "50M",  # Pareil
+                "60M",  # Augmenté
             ]
         )
 
         # Application du -ss AVANT l'input pour un seeking rapide
         # if playback_offset > 0:
-        #     params.extend([
-        #         "-ss", f"{playback_offset:.2f}"
-        #     ])s
+        #    params.extend(["-ss", f"{playback_offset:.2f}"])
 
         params.extend(
             [
@@ -149,7 +147,7 @@ class FFmpegCommandBuilder:
                 "-stream_loop",
                 "-1",
                 "-fflags",
-                "+genpts+igndts+discardcorrupt+fastseek",  # Ajout de fastseek
+                "+genpts+igndts+discardcorrupt+fastseek",
                 "-threads",
                 "4",
                 "-avoid_negative_ts",
@@ -166,20 +164,20 @@ class FFmpegCommandBuilder:
 
     def build_hls_params(self, output_dir):
         """
-        Construit des paramètres HLS optimisés pour une lecture rapide tout en restant stable
+        Construit des paramètres HLS optimisés pour une lecture fluide sans boucles
         """
         return [
             "-f",
             "hls",
             "-hls_time",
-            "2",  # Durée des segments
+            "4",  # Segments plus longs (4s au lieu de 2s)
             "-hls_list_size",
-            "15",  # Réduit pour accélérer le démarrage initial
+            "30",  # Plus de segments dans la playlist
             "-hls_delete_threshold",
-            "10",  # Équilibré
-            # Flags HLS optimisés pour un démarrage rapide
+            "5",  # Équilibré
+            # Flags HLS optimisés
             "-hls_flags",
-            "append_list+delete_segments+independent_segments+program_date_time",
+            "append_list+delete_segments+independent_segments+program_date_time+discont_start",
             # Cache autorisé
             "-hls_allow_cache",
             "1",
@@ -190,9 +188,9 @@ class FFmpegCommandBuilder:
             "mpegts",
             # Paramètres de latence réduite
             "-max_delay",
-            "2000000",  # Réduit pour diminuer le buffer initial
+            "5000000",  # Buffer plus important
             "-hls_init_time",
-            "2",  # Réduit pour un démarrage plus rapide
+            "4",  # Correspond à hls_time
             # Nom des segments
             "-hls_segment_filename",
             f"{output_dir}/segment_%d.ts",

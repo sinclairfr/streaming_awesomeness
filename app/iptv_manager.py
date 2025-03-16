@@ -225,7 +225,7 @@ class IPTVManager:
                 str(channel_dir),
                 hls_cleaner=self.hls_cleaner,
                 use_gpu=self.use_gpu,
-                stats_collector=self.stats_collector  # Ajout du stats_collector
+                stats_collector=self.stats_collector,  # Ajout du stats_collector
             )
 
             # Ajoute la chaîne au dictionnaire
@@ -426,15 +426,6 @@ class IPTVManager:
             # Pour les requêtes de segments, mettre à jour last_segment_time
             if ".ts" in request_path:
                 channel.last_segment_time = time.time()
-
-                # Récupération de l'ID du segment pour les stats
-                segment_match = re.search(r"segment_(\d+)\.ts", request_path)
-                if segment_match and hasattr(self, "stats_collector"):
-                    segment_id = segment_match.group(1)
-                    # On estime à 4 secondes de visionnage par segment
-                    self.stats_collector.update_segment_stats(
-                        channel_name, segment_id, 0
-                    )
 
             old_count = getattr(channel, "watchers_count", 0)
 
@@ -655,12 +646,12 @@ class IPTVManager:
         logger.info("Début du nettoyage...")
 
         # Arrêt du StatsCollector
-        if hasattr(self, 'stats_collector'):
+        if hasattr(self, "stats_collector"):
             self.stats_collector.stop()
-            
+
         # Arrêt du thread d'initialisation
         self.stop_init_thread.set()
-    
+
         if hasattr(self, "channel_init_thread") and self.channel_init_thread.is_alive():
             self.channel_init_thread.join(timeout=5)
 
