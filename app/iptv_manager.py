@@ -8,16 +8,13 @@ import signal
 import random
 import psutil
 import traceback
-import subprocess 
+import subprocess
 from queue import Queue, Empty
 from pathlib import Path
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 import threading
-from event_handler import (
-    ChannelEventHandler, 
-    ReadyContentHandler
-)
+from event_handler import ChannelEventHandler, ReadyContentHandler
 from hls_cleaner import HLSCleaner
 from client_monitor import ClientMonitor
 from resource_monitor import ResourceMonitor
@@ -32,12 +29,15 @@ from config import (
     logger,
     VIDEO_EXTENSIONS,
     CPU_THRESHOLD,
-    SEGMENT_AGE_THRESHOLD
+    SEGMENT_AGE_THRESHOLD,
 )
-#TODO mkv stream quand meme et sans gpu si condition ok, offset bien géré en premier pour éviter annulation avec lancement stream, 
+from stats_collector import StatsCollector
+
+# TODO mkv stream quand meme et sans gpu si condition ok, offset bien géré en premier pour éviter annulation avec lancement stream,
 # maj watcher et playlist périodique ok mais à la demande en cas d'update chaine
 # verifier kill process
 # statistiques par user dans un json
+
 
 class IPTVManager:
     """
@@ -46,23 +46,28 @@ class IPTVManager:
     - Lancement non bloquant des chaînes
     - Meilleure détection et gestion des fichiers
     """
+
     def __init__(self, content_dir: str, use_gpu: bool = False):
         # Assurons-nous que la valeur de USE_GPU est bien prise de l'environnement
-        use_gpu_env = os.getenv('USE_GPU', 'false').lower() == 'true'
+        use_gpu_env = os.getenv("USE_GPU", "false").lower() == "true"
         if use_gpu != use_gpu_env:
-            logger.warning(f"⚠️ Valeur USE_GPU en paramètre ({use_gpu}) différente de l'environnement ({use_gpu_env}), on utilise celle de l'environnement")
+            logger.warning(
+                f"⚠️ Valeur USE_GPU en paramètre ({use_gpu}) différente de l'environnement ({use_gpu_env}), on utilise celle de l'environnement"
+            )
             use_gpu = use_gpu_env
-        
+
         self.use_gpu = use_gpu
-        logger.info(f"✅ Accélération GPU: {'ACTIVÉE' if self.use_gpu else 'DÉSACTIVÉE'}")
-        
+        logger.info(
+            f"✅ Accélération GPU: {'ACTIVÉE' if self.use_gpu else 'DÉSACTIVÉE'}"
+        )
+
         self.ensure_hls_directory()  # Sans argument pour le dossier principal
 
         self.content_dir = content_dir
         self.use_gpu = use_gpu
         self.channels = {}
         self.channel_ready_status = {}  # Pour suivre l'état de préparation des chaînes
-        
+
         # Queue pour les chaînes à initialiser en parallèle
         self.channel_init_queue = Queue()
         self.max_parallel_inits = 3  # Nombre max d'initialisations parallèles
@@ -83,14 +88,16 @@ class IPTVManager:
 
         logger.info("Initialisation du gestionnaire IPTV amélioré")
         self._clean_startup()
-        
+
         # Observer
         self.observer = Observer()
         event_handler = ChannelEventHandler(self)
-        
+
         # Surveillance du dossier racine en mode récursif
         self.observer.schedule(event_handler, self.content_dir, recursive=True)
-        logger.info(f"👁️ Observer configuré pour surveiller {self.content_dir} en mode récursif")
+        logger.info(
+            f"👁️ Observer configuré pour surveiller {self.content_dir} en mode récursif"
+        )
 
         # NOUVEAU: Observer pour les dossiers ready_to_stream
         self.ready_observer = Observer()
@@ -98,21 +105,27 @@ class IPTVManager:
 
         # Démarrage du thread d'initialisation des chaînes
         self.stop_init_thread = threading.Event()
-        self.channel_init_thread = threading.Thread(target=self._process_channel_init_queue, daemon=True)
+        self.channel_init_thread = threading.Thread(
+            target=self._process_channel_init_queue, daemon=True
+        )
         self.channel_init_thread.start()
 
         # Moniteur clients
         logger.info(f"🚀 Démarrage du client_monitor avec {NGINX_ACCESS_LOG}")
-        self.client_monitor = ClientMonitor(NGINX_ACCESS_LOG, self.update_watchers, self)
+        self.client_monitor = ClientMonitor(
+            NGINX_ACCESS_LOG, self.update_watchers, self
+        )
 
         # Vérification explicite qu'on a bien accès au fichier
         if os.path.exists(NGINX_ACCESS_LOG):
             try:
-                with open(NGINX_ACCESS_LOG, 'r') as f:
+                with open(NGINX_ACCESS_LOG, "r") as f:
                     # On lit juste les dernières lignes pour voir si ça fonctionne
                     f.seek(max(0, os.path.getsize(NGINX_ACCESS_LOG) - 1000))
                     last_lines = f.readlines()
-                    logger.info(f"✅ Lecture réussie du fichier de log, {len(last_lines)} dernières lignes trouvées")
+                    logger.info(
+                        f"✅ Lecture réussie du fichier de log, {len(last_lines)} dernières lignes trouvées"
+                    )
             except Exception as e:
                 logger.error(f"❌ Erreur lors de la lecture du fichier de log: {e}")
 
@@ -121,8 +134,7 @@ class IPTVManager:
 
         # Thread de surveillance du log
         self._log_monitor_thread = threading.Thread(
-            target=self._check_client_monitor, 
-            daemon=True
+            target=self._check_client_monitor, daemon=True
         )
         self._log_monitor_thread.start()
 
@@ -132,41 +144,43 @@ class IPTVManager:
 
         # Thread de mise à jour de la playlist maître
         self.master_playlist_updater = threading.Thread(
-            target=self._manage_master_playlist,
-            daemon=True
+            target=self._manage_master_playlist, daemon=True
         )
         self.master_playlist_updater.start()
 
         # Thread qui vérifie les watchers
-        self.watchers_thread = threading.Thread(
-            target=self._watchers_loop,
-            daemon=True
-        )
+        self.watchers_thread = threading.Thread(target=self._watchers_loop, daemon=True)
         self.running = True
+
+        # statistiques
+        self.stats_collector = StatsCollector()
 
         # Thread de scan périodique
         self.scan_thread_stop = threading.Event()
         self.scan_thread = threading.Thread(
-            target=self._periodic_scan_thread,
-            daemon=True
+            target=self._periodic_scan_thread, daemon=True
         )
         self.scan_thread.start()
-    
-        
+
     def _check_client_monitor(self):
         """Vérifie périodiquement l'état du client_monitor"""
         while True:
             try:
-                if not hasattr(self, 'client_monitor') or not self.client_monitor.is_alive():
+                if (
+                    not hasattr(self, "client_monitor")
+                    or not self.client_monitor.is_alive()
+                ):
                     logger.critical("🚨 client_monitor n'est plus actif!")
                     # Tentative de redémarrage
-                    logger.info("🔄 Tentative de redémarrage du client_monitor...")
-                    self.client_monitor = ClientMonitor(NGINX_ACCESS_LOG, self.update_watchers, self)
+                    logger.info("� Tentative de redémarrage du client_monitor...")
+                    self.client_monitor = ClientMonitor(
+                        NGINX_ACCESS_LOG, self.update_watchers, self
+                    )
                     self.client_monitor.start()
             except Exception as e:
                 logger.error(f"❌ Erreur vérification client_monitor: {e}")
             time.sleep(60)  # Vérification toutes les minutes
-            
+
     def _process_channel_init_queue(self):
         """Traite la queue d'initialisation des chaînes en parallèle"""
         while not self.stop_init_thread.is_set():
@@ -176,73 +190,77 @@ class IPTVManager:
                     if self.active_init_threads >= self.max_parallel_inits:
                         time.sleep(0.5)
                         continue
-                
+
                 # Essaie de récupérer une chaîne de la queue
                 try:
                     channel_data = self.channel_init_queue.get(block=False)
                 except Empty:
                     time.sleep(0.5)
                     continue
-                
+
                 # Incrémente le compteur de threads actifs
                 with self.init_threads_lock:
                     self.active_init_threads += 1
-                
+
                 # Lance un thread pour initialiser cette chaîne
                 threading.Thread(
-                    target=self._init_channel_async,
-                    args=(channel_data,),
-                    daemon=True
+                    target=self._init_channel_async, args=(channel_data,), daemon=True
                 ).start()
-                
+
             except Exception as e:
                 logger.error(f"Erreur dans le thread d'initialisation: {e}")
                 time.sleep(1)
-    
+
     def _init_channel_async(self, channel_data):
         """Initialise une chaîne de manière asynchrone"""
         try:
             channel_name = channel_data["name"]
             channel_dir = channel_data["dir"]
-            
+
             logger.info(f"[{channel_name}] - Initialisation asynchrone de la chaîne: ")
-            
+
             # Crée l'objet chaîne
             channel = IPTVChannel(
                 channel_name,
                 str(channel_dir),
                 hls_cleaner=self.hls_cleaner,
-                use_gpu=self.use_gpu
+                use_gpu=self.use_gpu,
+                stats_collector=self.stats_collector  # Ajout du stats_collector
             )
-            
+
             # Ajoute la chaîne au dictionnaire
             with self.scan_lock:
                 self.channels[channel_name] = channel
                 self.channel_ready_status[channel_name] = False  # Pas encore prête
-            
+
             # Attente que la chaîne soit prête (max 30 secondes)
             for _ in range(30):
-                if hasattr(channel, 'ready_for_streaming') and channel.ready_for_streaming:
+                if (
+                    hasattr(channel, "ready_for_streaming")
+                    and channel.ready_for_streaming
+                ):
                     with self.scan_lock:
                         self.channel_ready_status[channel_name] = True
                     logger.info(f"✅ Chaîne {channel_name} prête pour le streaming")
                     break
                 time.sleep(1)
-            
+
         except Exception as e:
-            logger.error(f"Erreur initialisation de la chaîne {channel_data.get('name')}: {e}")
+            logger.error(
+                f"Erreur initialisation de la chaîne {channel_data.get('name')}: {e}"
+            )
         finally:
             # Décrémente le compteur de threads actifs
             with self.init_threads_lock:
                 self.active_init_threads -= 1
-            
+
             # Marque la tâche comme terminée
             self.channel_init_queue.task_done()
 
     def auto_start_ready_channels(self):
         """Démarre automatiquement toutes les chaînes prêtes avec un délai entre chaque démarrage"""
         logger.info("🚀 Démarrage automatique des chaînes prêtes...")
-        
+
         # Attendre que plus de chaînes soient prêtes
         for attempt in range(3):
             ready_channels = []
@@ -252,38 +270,51 @@ class IPTVManager:
                         channel = self.channels[name]
                         if channel.ready_for_streaming:
                             ready_channels.append(name)
-            
-            if len(ready_channels) >= len(self.channels) * 0.5:  # Au moins 50% des chaînes sont prêtes
+
+            if (
+                len(ready_channels) >= len(self.channels) * 0.5
+            ):  # Au moins 50% des chaînes sont prêtes
                 break
-                
-            logger.info(f"⏳ Seulement {len(ready_channels)}/{len(self.channels)} chaînes prêtes, attente supplémentaire ({attempt+1}/3)...")
+
+            logger.info(
+                f"⏳ Seulement {len(ready_channels)}/{len(self.channels)} chaînes prêtes, attente supplémentaire ({attempt+1}/3)..."
+            )
             time.sleep(10)  # 10 secondes d'attente par tentative
-        
+
         # Trier pour prévisibilité
         ready_channels.sort()
-        
+
         # Limiter le CPU pour éviter saturation
         max_parallel = 4
-        groups = [ready_channels[i:i+max_parallel] for i in range(0, len(ready_channels), max_parallel)]
-        
+        groups = [
+            ready_channels[i : i + max_parallel]
+            for i in range(0, len(ready_channels), max_parallel)
+        ]
+
         for group_idx, group in enumerate(groups):
-            logger.info(f"🚀 Démarrage du groupe {group_idx+1}/{len(groups)} ({len(group)} chaînes)")
-            
+            logger.info(
+                f"🚀 Démarrage du groupe {group_idx+1}/{len(groups)} ({len(group)} chaînes)"
+            )
+
             # Démarrer chaque chaîne du groupe avec un petit délai entre elles
             for i, channel_name in enumerate(group):
                 delay = i * 3  # 3 secondes entre chaque chaîne du même groupe
                 threading.Timer(delay, self._start_channel, args=[channel_name]).start()
-                logger.info(f"[{channel_name}] ⏱️ Démarrage programmé dans {delay} secondes")
-            
+                logger.info(
+                    f"[{channel_name}] ⏱️ Démarrage programmé dans {delay} secondes"
+                )
+
             # Attendre avant le prochain groupe
             if group_idx < len(groups) - 1:
                 time.sleep(max_parallel * 5)  # 5 secondes par chaîne entre les groupes
-        
+
         if ready_channels:
-            logger.info(f"✅ {len(ready_channels)} chaînes programmées pour démarrage automatique")
+            logger.info(
+                f"✅ {len(ready_channels)} chaînes programmées pour démarrage automatique"
+            )
         else:
             logger.warning("⚠️ Aucune chaîne prête à démarrer")
-    
+
     def _start_channel(self, channel_name):
         """Démarre une chaîne spécifique"""
         try:
@@ -295,17 +326,23 @@ class IPTVManager:
                     if success:
                         logger.info(f"[{channel_name}] ✅ Démarrage automatique réussi")
                     else:
-                        logger.error(f"[{channel_name}] ❌ Échec du démarrage automatique")
+                        logger.error(
+                            f"[{channel_name}] ❌ Échec du démarrage automatique"
+                        )
                 else:
-                    logger.warning(f"[{channel_name}] ⚠️ Non prête pour le streaming, démarrage ignoré")
+                    logger.warning(
+                        f"[{channel_name}] ⚠️ Non prête pour le streaming, démarrage ignoré"
+                    )
         except Exception as e:
-            logger.error(f"[{channel_name}] ❌ Erreur lors du démarrage automatique: {e}") 
-            
+            logger.error(
+                f"[{channel_name}] ❌ Erreur lors du démarrage automatique: {e}"
+            )
+
     def _watchers_loop(self):
         """Surveille l'activité des watchers et arrête les streams inutilisés"""
         last_log_time = 0
-        log_cycle = int(os.getenv('WATCHERS_LOG_CYCLE', '10'))
-        
+        log_cycle = int(os.getenv("WATCHERS_LOG_CYCLE", "10"))
+
         while True:
             try:
                 current_time = time.time()
@@ -313,7 +350,7 @@ class IPTVManager:
 
                 # Pour chaque chaîne, on vérifie l'activité
                 for channel_name, channel in self.channels.items():
-                    if not hasattr(channel, 'last_watcher_time'):
+                    if not hasattr(channel, "last_watcher_time"):
                         continue
 
                     # On calcule l'inactivité
@@ -328,16 +365,16 @@ class IPTVManager:
                             channel.stop_stream_if_needed()
 
                     channels_checked.add(channel_name)
-                
+
                 # Log périodique de tous les watchers actifs
                 if current_time - last_log_time > log_cycle:
                     active_watchers = []
                     for name, channel in sorted(self.channels.items()):
-                        if hasattr(channel, 'watchers_count'):
+                        if hasattr(channel, "watchers_count"):
                             count = channel.watchers_count
                             watcher_text = f"{count} watcher{'' if count <= 1 else 's'}"
                             active_watchers.append(f"{name}: {watcher_text}")
-                    
+
                     if active_watchers:
                         logger.info(f"👥 Watchers actifs: {', '.join(active_watchers)}")
                     last_log_time = current_time
@@ -346,16 +383,22 @@ class IPTVManager:
                 for proc in psutil.process_iter(attrs=["pid", "name", "cmdline"]):
                     try:
                         if "ffmpeg" in proc.info["name"].lower():
-                            cmd_str = " ".join(str(arg) for arg in proc.info.get("cmdline", []))
-                            
+                            cmd_str = " ".join(
+                                str(arg) for arg in proc.info.get("cmdline", [])
+                            )
+
                             # Pour chaque chaîne, on vérifie si le process lui appartient
                             for channel_name in self.channels:
                                 if f"/hls/{channel_name}/" in cmd_str:
                                     if channel_name not in channels_checked:
-                                        logger.warning(f"🔥 Process FFmpeg orphelin détecté pour {channel_name}, PID {proc.pid}")
+                                        logger.warning(
+                                            f"🔥 Process FFmpeg orphelin détecté pour {channel_name}, PID {proc.pid}"
+                                        )
                                         try:
                                             os.kill(proc.pid, signal.SIGKILL)
-                                            logger.info(f"✅ Process orphelin {proc.pid} nettoyé")
+                                            logger.info(
+                                                f"✅ Process orphelin {proc.pid} nettoyé"
+                                            )
                                         except:
                                             pass
                     except (psutil.NoSuchProcess, psutil.AccessDenied):
@@ -365,7 +408,7 @@ class IPTVManager:
 
             except Exception as e:
                 logger.error(f"❌ Erreur watchers_loop: {e}")
-                time.sleep(10)   
+                time.sleep(10)
 
     def update_watchers(self, channel_name: str, count: int, request_path: str):
         """Met à jour les watchers en fonction des requêtes m3u8 et ts"""
@@ -384,31 +427,50 @@ class IPTVManager:
             if ".ts" in request_path:
                 channel.last_segment_time = time.time()
 
-            old_count = getattr(channel, 'watchers_count', 0)
-            
-            # IMPORTANT: Ne pas mettre à jour le compteur s'il n'y a pas de changement
-            # Cela évite les conditions de course et réinitialisations inutiles
+                # Récupération de l'ID du segment pour les stats
+                segment_match = re.search(r"segment_(\d+)\.ts", request_path)
+                if segment_match and hasattr(self, "stats_collector"):
+                    segment_id = segment_match.group(1)
+                    # On estime à 4 secondes de visionnage par segment
+                    self.stats_collector.update_segment_stats(
+                        channel_name, segment_id, 0
+                    )
+
+            old_count = getattr(channel, "watchers_count", 0)
+
+            # MAJ du compteur s'il y a changement
             if old_count != count:
                 channel.watchers_count = count
-                logger.info(f"[{channel_name}] 👁️ Watchers: {count} (était: {old_count})")
-                logger.info(f"📊 Mise à jour {channel_name}: {count} watchers")
+                logger.info(
+                    f"[{channel_name}] 👁️ Watchers: {count} (était: {old_count})"
+                )
+
+                # MAJ des stats
+                if hasattr(self, "stats_collector"):
+                    self.stats_collector.update_channel_watchers(channel_name, count)
 
                 # Démarrer ou arrêter le stream si nécessaire
                 if count > 0 and old_count == 0:
                     # Si on passe de 0 à 1+ spectateurs, démarrer le stream
-                    if channel_name in self.channel_ready_status and self.channel_ready_status[channel_name]:
+                    if (
+                        channel_name in self.channel_ready_status
+                        and self.channel_ready_status[channel_name]
+                    ):
                         if not channel.process_manager.is_running():
-                            logger.info(f"[{channel_name}] 🔥 Premier watcher, démarrage du stream")
+                            logger.info(
+                                f"[{channel_name}] 🔥 Premier watcher, démarrage du stream"
+                            )
                             channel.start_stream_if_needed()
             else:
-                # On met quand même à jour le timestamp pour éviter la détection d'inactivité
+                # On met quand même à jour le timestamp pour éviter l'inactivité
                 channel.last_watcher_time = time.time()
-                
+
         except Exception as e:
             logger.error(f"❌ Erreur update_watchers: {e}")
             import traceback
+
             logger.error(f"Stack trace: {traceback.format_exc()}")
- 
+
     def _clean_startup(self):
         """Nettoie avant de démarrer"""
         try:
@@ -443,13 +505,20 @@ class IPTVManager:
         # Limiter la fréquence des scans
         current_time = time.time()
         scan_cooldown = 30  # 30s entre scans complets (sauf si force=True)
-        
-        if not force and not initial and hasattr(self, 'last_scan_time') and current_time - self.last_scan_time < scan_cooldown:
-            logger.debug(f"Scan ignoré: dernier scan il y a {current_time - self.last_scan_time:.1f}s")
+
+        if (
+            not force
+            and not initial
+            and hasattr(self, "last_scan_time")
+            and current_time - self.last_scan_time < scan_cooldown
+        ):
+            logger.debug(
+                f"Scan ignoré: dernier scan il y a {current_time - self.last_scan_time:.1f}s"
+            )
             return
-            
-        setattr(self, 'last_scan_time', current_time)
-        
+
+        setattr(self, "last_scan_time", current_time)
+
         with self.scan_lock:
             try:
                 content_path = Path(self.content_dir)
@@ -466,21 +535,22 @@ class IPTVManager:
                     if channel_name in self.channels:
                         # Si la chaîne existe déjà, on vérifie son état
                         if force:
-                            logger.info(f"🔄 Rafraîchissement de la chaîne {channel_name}")
+                            logger.info(
+                                f"🔄 Rafraîchissement de la chaîne {channel_name}"
+                            )
                             channel = self.channels[channel_name]
-                            if hasattr(channel, 'refresh_videos'):
+                            if hasattr(channel, "refresh_videos"):
                                 channel.refresh_videos()
                         else:
                             logger.info(f"✅ Chaîne existante: {channel_name}")
                         continue
 
                     logger.info(f"✅ Nouvelle chaîne trouvée: {channel_name}")
-                    
+
                     # Ajoute la chaîne à la queue d'initialisation
-                    self.channel_init_queue.put({
-                        "name": channel_name,
-                        "dir": channel_dir
-                    })
+                    self.channel_init_queue.put(
+                        {"name": channel_name, "dir": channel_dir}
+                    )
 
                 logger.info(f"📡 Scan terminé, {len(channel_dirs)} chaînes identifiées")
 
@@ -521,7 +591,7 @@ class IPTVManager:
             except Exception as e:
                 logger.error(f"Erreur mise à jour ponctuelle de la playlist: {e}")
                 return
-                
+
         # Sinon, c'est la boucle normale
         while True:
             try:
@@ -545,46 +615,62 @@ class IPTVManager:
                 for name, channel in self.channels.items():
                     # Vérification directe des fichiers
                     ready_dir = Path(channel.video_dir) / "ready_to_stream"
-                    has_videos = list(ready_dir.glob("*.mp4")) if ready_dir.exists() else []
-                    
+                    has_videos = (
+                        list(ready_dir.glob("*.mp4")) if ready_dir.exists() else []
+                    )
+
                     # Mise à jour du statut si nécessaire
                     if has_videos and not self.channel_ready_status.get(name, False):
-                        logger.info(f"[{name}] 🔄 Mise à jour auto du statut: chaîne prête (vidéos trouvées)")
+                        logger.info(
+                            f"[{name}] 🔄 Mise à jour auto du statut: chaîne prête (vidéos trouvées)"
+                        )
                         self.channel_ready_status[name] = True
                         channel.ready_for_streaming = True
                     elif not has_videos and self.channel_ready_status.get(name, False):
-                        logger.info(f"[{name}] ⚠️ Mise à jour auto du statut: chaîne non prête (aucune vidéo)")
+                        logger.info(
+                            f"[{name}] ⚠️ Mise à jour auto du statut: chaîne non prête (aucune vidéo)"
+                        )
                         self.channel_ready_status[name] = False
                         channel.ready_for_streaming = False
-            
+
             # Ne référence que les chaînes prêtes
             ready_channels = []
             for name, channel in sorted(self.channels.items()):
-                if name in self.channel_ready_status and self.channel_ready_status[name]:
+                if (
+                    name in self.channel_ready_status
+                    and self.channel_ready_status[name]
+                ):
                     ready_channels.append((name, channel))
-            
+
             # Écriture des chaînes prêtes
             for name, channel in ready_channels:
                 f.write(f'#EXTINF:-1 tvg-id="{name}" tvg-name="{name}",{name}\n')
                 f.write(f"http://{SERVER_URL}/hls/{name}/playlist.m3u8\n")
 
-        logger.info(f"Playlist mise à jour ({len(ready_channels)} chaînes prêtes sur {len(self.channels)} totales)")
-    
+        logger.info(
+            f"Playlist mise à jour ({len(ready_channels)} chaînes prêtes sur {len(self.channels)} totales)"
+        )
+
     def cleanup(self):
         logger.info("Début du nettoyage...")
-        
+
+        # Arrêt du StatsCollector
+        if hasattr(self, 'stats_collector'):
+            self.stats_collector.stop()
+            
         # Arrêt du thread d'initialisation
         self.stop_init_thread.set()
+    
         if hasattr(self, "channel_init_thread") and self.channel_init_thread.is_alive():
             self.channel_init_thread.join(timeout=5)
-        
+
         if hasattr(self, "hls_cleaner"):
             self.hls_cleaner.stop()
 
         if hasattr(self, "observer"):
             self.observer.stop()
             self.observer.join()
-        
+
         if hasattr(self, "ready_observer"):
             self.ready_observer.stop()
             self.ready_observer.join()
@@ -592,72 +678,77 @@ class IPTVManager:
         for name, channel in self.channels.items():
             channel._clean_processes()
 
-        if hasattr(self, 'scan_thread_stop'):
+        if hasattr(self, "scan_thread_stop"):
             self.scan_thread_stop.set()
-            
-        if hasattr(self, 'scan_thread') and self.scan_thread.is_alive():
+
+        if hasattr(self, "scan_thread") and self.scan_thread.is_alive():
             self.scan_thread.join(timeout=5)
-            
+
         logger.info("Nettoyage terminé")
 
     def _setup_ready_observer(self):
         """Configure l'observateur pour les dossiers ready_to_stream de chaque chaîne"""
         try:
             # D'abord, arrêter et recréer l'observateur si nécessaire pour éviter les doublons
-            if hasattr(self, 'ready_observer') and self.ready_observer.is_alive():
+            if hasattr(self, "ready_observer") and self.ready_observer.is_alive():
                 self.ready_observer.stop()
                 self.ready_observer.join(timeout=5)
-                
+
             self.ready_observer = Observer()
-            
+
             # Pour chaque chaîne existante
             paths_scheduled = set()  # Pour éviter les doublons
-            
+
             for name, channel in self.channels.items():
                 ready_dir = Path(channel.video_dir) / "ready_to_stream"
-                ready_dir.mkdir(parents=True, exist_ok=True)  # S'assurer que le dossier existe
-                
+                ready_dir.mkdir(
+                    parents=True, exist_ok=True
+                )  # S'assurer que le dossier existe
+
                 if ready_dir.exists() and str(ready_dir) not in paths_scheduled:
                     self.ready_observer.schedule(
-                        self.ready_event_handler, 
-                        str(ready_dir), 
-                        recursive=False
+                        self.ready_event_handler, str(ready_dir), recursive=False
                     )
                     paths_scheduled.add(str(ready_dir))
-                    logger.info(f"👁️ Surveillance ready_to_stream configurée pour {name}: {ready_dir}")
-            
+                    logger.info(
+                        f"👁️ Surveillance ready_to_stream configurée pour {name}: {ready_dir}"
+                    )
+
             # Démarrage de l'observateur
             self.ready_observer.start()
-            logger.info(f"🚀 Observateur ready_to_stream démarré pour {len(paths_scheduled)} chemins")
-        
+            logger.info(
+                f"🚀 Observateur ready_to_stream démarré pour {len(paths_scheduled)} chemins"
+            )
+
         except Exception as e:
             logger.error(f"❌ Erreur configuration surveillance ready_to_stream: {e}")
             import traceback
+
             logger.error(traceback.format_exc())
 
     def _periodic_scan_thread(self):
         """Thread dédié au scan périodique des chaînes"""
         scan_interval = 60  # 1 minute entre les scans
-        
+
         while not self.scan_thread_stop.is_set():
             try:
                 # On attend d'abord un peu pour ne pas scanner tout de suite après le démarrage
                 time.sleep(30)
-                
+
                 logger.info("🔄 Scan périodique des chaînes...")
                 self.scan_channels(force=True)
-                
+
                 # Configuration (ou reconfiguration) de l'observateur ready_to_stream
                 # pour prendre en compte les nouvelles chaînes
                 self._setup_ready_observer()
-                
+
                 # Et on attend l'intervalle avant le prochain scan
                 self.scan_thread_stop.wait(timeout=scan_interval)
-                
+
             except Exception as e:
                 logger.error(f"❌ Erreur dans le thread de scan périodique: {e}")
                 time.sleep(10)  # En cas d'erreur, on attend un peu avant de réessayer
-        
+
         logger.info("🛑 Arrêt du thread de scan périodique")
 
     def run(self):
@@ -666,24 +757,26 @@ class IPTVManager:
             if not self.watchers_thread.is_alive():
                 self.watchers_thread.start()
                 logger.info("🔄 Boucle de surveillance des watchers démarrée")
-            
+
             logger.debug("📥 Scan initial des chaînes...")
             self.scan_channels(initial=True)  # Marquer comme scan initial
-            
+
             logger.debug("🕵️ Démarrage de l'observer...")
             if not self.observer.is_alive():
                 self.observer.start()
-            
+
             # Configurer l'observateur pour ready_to_stream
             self._setup_ready_observer()
-            
+
             # Attente suffisamment longue pour l'initialisation des chaînes
-            logger.info("⏳ Attente de 30 secondes pour l'initialisation des chaînes...")
+            logger.info(
+                "⏳ Attente de 30 secondes pour l'initialisation des chaînes..."
+            )
             time.sleep(30)
-            
+
             # Démarrage automatique des chaînes prêtes
             self.auto_start_ready_channels()
-            
+
             while True:
                 time.sleep(1)
 
