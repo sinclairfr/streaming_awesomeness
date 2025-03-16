@@ -28,7 +28,102 @@ class StatsCollector:
         self.save_thread = threading.Thread(target=self._save_loop, daemon=True)
         self.save_thread.start()
 
+        self.user_stats_file = self.stats_dir / "user_stats.json"
+        self.user_stats = self._load_user_stats()
+
         logger.info(f"📊 StatsCollector initialisé (sauvegarde dans {self.stats_file})")
+
+    def _load_user_stats(self):
+        """Charge les stats utilisateurs ou crée un nouveau fichier"""
+        if self.user_stats_file.exists():
+            try:
+                with open(self.user_stats_file, "r") as f:
+                    return json.load(f)
+            except json.JSONDecodeError:
+                logger.warning(
+                    f"⚠️ Fichier stats utilisateurs corrompu, création d'un nouveau"
+                )
+
+        # Structure initiale
+        return {
+            "users": {},  # Par IP
+            "last_updated": int(time.time()),
+        }
+
+    def save_user_stats(self):
+        """Sauvegarde les statistiques par utilisateur"""
+        with self.lock:
+            try:
+                self.user_stats["last_updated"] = int(time.time())
+
+                with open(self.user_stats_file, "w") as f:
+                    json.dump(self.user_stats, f, indent=2)
+
+                logger.debug(
+                    f"👤 Stats utilisateurs sauvegardées ({len(self.user_stats['users'])} IPs)"
+                )
+                return True
+            except Exception as e:
+                logger.error(f"❌ Erreur sauvegarde stats utilisateurs: {e}")
+                return False
+
+    def _save_loop(self):
+        """Thread de sauvegarde périodique (modifié)"""
+        while not self.stop_save_thread.is_set():
+            try:
+                time.sleep(self.save_interval)
+                self.save_stats()
+                self.save_user_stats()  # Ajout de la sauvegarde des stats utilisateurs
+            except Exception as e:
+                logger.error(f"❌ Erreur sauvegarde périodique: {e}")
+
+    def update_user_stats(self, ip, channel_name, duration, user_agent=None):
+        """Met à jour les stats par utilisateur"""
+        with self.lock:
+            # Init pour cet utilisateur si nécessaire
+            if ip not in self.user_stats["users"]:
+                self.user_stats["users"][ip] = {
+                    "first_seen": int(time.time()),
+                    "last_seen": int(time.time()),
+                    "total_watch_time": 0,
+                    "channels": {},
+                    "user_agent": user_agent,
+                }
+
+            user = self.user_stats["users"][ip]
+            user["last_seen"] = int(time.time())
+            user["total_watch_time"] += duration
+
+            # MAJ de l'user agent si fourni
+            if user_agent:
+                user["user_agent"] = user_agent
+
+            # Init pour cette chaîne si nécessaire
+            if channel_name not in user["channels"]:
+                user["channels"][channel_name] = {
+                    "first_seen": int(time.time()),
+                    "last_seen": int(time.time()),
+                    "total_watch_time": 0,
+                    "favorite": False,
+                }
+
+            # MAJ des stats de la chaîne
+            channel = user["channels"][channel_name]
+            channel["last_seen"] = int(time.time())
+            channel["total_watch_time"] += duration
+
+            # Détermination de la chaîne favorite
+            if len(user["channels"]) > 1:
+                favorite_channel = max(
+                    user["channels"].items(), key=lambda x: x[1]["total_watch_time"]
+                )[0]
+
+                for ch_name, ch_data in user["channels"].items():
+                    ch_data["favorite"] = ch_name == favorite_channel
+
+            # Sauvegarde si changements importants
+            if duration > 300:  # Plus de 5 minutes
+                threading.Thread(target=self.save_user_stats, daemon=True).start()
 
     def _load_stats(self):
         """Charge les stats existantes ou crée un nouveau fichier"""
@@ -204,6 +299,9 @@ class StatsCollector:
             # Mise à jour du temps de visionnage
             channel_stats = self.stats["channels"][channel_name]
             channel_stats["total_watch_time"] += duration
+
+            # Mise à jour des stats utilisateur
+            self.update_user_stats(ip, channel_name, duration)
 
             # Mise à jour du temps de visionnage par IP
             watchlist = channel_stats.get("watchlist", {})

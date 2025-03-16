@@ -222,64 +222,66 @@ class ClientMonitor(threading.Thread):
 
     def _parse_access_log(self, line):
         """
-        Analyse une ligne de log nginx plus précisément pour détecter l'activité
+        Analyse une ligne de log nginx pour détecter l'activité
         Retourne (ip, channel, request_type, is_valid_request)
         """
         try:
-            # Réduire le niveau de log pour éviter de polluer les logs
-            logger.debug(f"Analyse de la ligne de log: {line}")
+            # Ajout de l'extraction de l'user agent
+            user_agent = None
+            ua_match = re.search(r'"([^"]+)"$', line) or re.search(
+                r'"([^"]+)" "-"', line
+            )
+            if ua_match:
+                user_agent = ua_match.group(1)
 
-            # Format typique: 192.168.10.104 - - [16/Mar/2025:13:16:20 +0100] "GET /hls/BruceLee/playlist.m3u8 HTTP/1.1" 200 2701 "-" "TiviMate/5.1.6 (Android 7.1.2)" "-" rt=0.000 ua="-" us="-" ut="-"
-
-            # Extraction directe par regex pour plus de robustesse
+            # Format analysé avec plus de robustesse
+            # Extraction de l'IP (au début de la ligne)
             ip_match = re.match(r"^([0-9.]+)", line)
             if not ip_match:
                 return None, None, None, False
 
             ip = ip_match.group(1)
 
-            # Extraction de la requête
-            req_match = re.search(r'"GET ([^"]+) HTTP', line)
+            # Extraction de la requête avec une regex plus souple
+            req_match = re.search(r'"(?:GET|HEAD) ([^"]+) HTTP', line)
             if not req_match:
                 return None, None, None, False
 
             request_path = req_match.group(1)
 
-            # Extraction du code de statut (généralement après la requête)
+            # Extraction du statut HTTP avec plus de robustesse
             status_match = re.search(r'" (\d{3}) ', line)
             status_code = status_match.group(1) if status_match else "???"
 
-            # Vérification que c'est bien une requête HLS
-            if not "/hls/" in request_path:
+            # Vérification HLS
+            if "/hls/" not in request_path:
                 return None, None, None, False
 
-            # Déterminer le type de requête
+            # Détermination du type de requête
             request_type = "unknown"
             if ".m3u8" in request_path:
                 request_type = "playlist"
             elif ".ts" in request_path:
                 request_type = "segment"
 
-            # Extraire le nom de la chaîne
+            # Extraction du nom de chaîne avec une regex plus robuste
             channel_match = re.search(r"/hls/([^/]+)/", request_path)
             if not channel_match:
                 return ip, None, request_type, False
 
             channel = channel_match.group(1)
 
-            # Considérer valide uniquement les requêtes avec statut 200 ou 206
+            # Valide si 200 ou 206 (partial content)
             is_valid = status_code in ["200", "206"]
 
-            # Debug pour voir ce qui est extrait
+            # Log plus explicite
             if is_valid:
-                logger.info(f"📱 Client détecté: {ip} -> {channel} ({request_type})")
+                logger.info(f"📱 Client actif: {ip} → {channel} ({request_type})")
 
-            return ip, channel, request_type, is_valid
+            return ip, channel, request_type, is_valid, user_agent
 
         except Exception as e:
             logger.error(f"❌ Erreur analyse log: {e}")
-            import traceback
-
             logger.error(traceback.format_exc())
             return None, None, None, False
 
