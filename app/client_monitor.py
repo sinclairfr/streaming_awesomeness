@@ -12,24 +12,34 @@ class ClientMonitor(threading.Thread):
     def __init__(self, log_path, update_watchers_callback, manager):
         super().__init__(daemon=True)
         self.log_path = log_path
+
+        # Callback pour mettre à jour les watchers dans le manager
         self.update_watchers = update_watchers_callback
+        # Manager pour accéder aux segments et aux canaux
         self.manager = manager
+
+        # dictionnaire pour stocker les watchers actifs
         self.watchers = {}  # {(channel, ip): last_seen_time}
+
+        # dictionnaire pour stocker les segments demandés par chaque canal
         self.segments_by_channel = {}  # {channel: {segment_id: last_requested_time}}
+
+        # Pour éviter les accès concurrents
         self.lock = threading.Lock()
 
-        # On augmente le seuil d'inactivité pour éviter les déconnexions trop rapides
         self.inactivity_threshold = TIMEOUT_NO_VIEWERS
+
+        # Pour surveiller les sauts de segments
+        self.segment_monitor_thread = threading.Thread(
+            target=self._monitor_segment_jumps, daemon=True
+        )
+        self.segment_monitor_thread.start()
 
         # Thread de nettoyage
         self.cleanup_thread = threading.Thread(target=self._cleanup_loop, daemon=True)
         self.cleanup_thread.start()
 
-        # Nouveau thread pour surveiller les sauts de segments
-        self.segment_monitor_thread = threading.Thread(
-            target=self._monitor_segment_jumps, daemon=True
-        )
-        self.segment_monitor_thread.start()
+        # self.log_check_thread.start()
 
     def _cleanup_loop(self):
         """Nettoie les watchers inactifs plus fréquemment"""
@@ -38,12 +48,12 @@ class ClientMonitor(threading.Thread):
             self._cleanup_inactive()
 
     def _cleanup_inactive(self):
-        """Nettoie les watchers inactifs avec un délai plus strict"""
+        """Nettoie les watchers inactifs avec un délai"""
         now = time.time()
         to_remove = []
 
         with self.lock:
-            # Critères de nettoyage plus stricts
+            # Critères de nettoyage
             for (channel, ip), data in self.watchers.items():
                 if isinstance(data, dict):
                     watcher_time = data.get("time", 0)
@@ -77,7 +87,7 @@ class ClientMonitor(threading.Thread):
                         f"🗑️ Watcher supprimé: {ip} -> {channel} (inactif depuis {now - watcher_time:.1f}s)"
                     )
 
-            # Pour chaque chaîne affectée, recalculer le nombre exact de watchers
+            # Pour chaque chaîne affectée, on doit recalculer le nombre exact de watchers
             for channel in affected_channels:
                 # Comptage précis par type de requête
                 now = time.time()
@@ -112,7 +122,8 @@ class ClientMonitor(threading.Thread):
                     self.update_watchers(channel, count, "/hls/")
 
     def _monitor_segment_jumps(self):
-        """Surveille les sauts anormaux dans les segments"""
+        """Surveille les sauts anormaux dans les segments et ainsi detectés les bugs"""
+        # Boucle infinie pour surveiller les segments
         while True:
             try:
                 with self.lock:
@@ -156,64 +167,6 @@ class ClientMonitor(threading.Thread):
 
             time.sleep(10)  # Vérification toutes les 10 secondes
 
-    def _check_log_file(self):
-        """Vérifie périodiquement l'état du fichier de log et force une reconnexion si nécessaire"""
-        while True:
-            try:
-                # Vérifier si le fichier existe
-                if not os.path.exists(self.log_path):
-                    logger.error(
-                        f"❌ Log file introuvable lors de la vérification périodique: {self.log_path}"
-                    )
-                    # Forcer la reconnexion
-                    self._force_reconnect = True
-
-                # Vérifier la taille et les permissions
-                try:
-                    file_info = os.stat(self.log_path)
-                    file_size = file_info.st_size
-
-                    # Si le fichier est vide ou trop petit
-                    if file_size < 10:
-                        logger.warning(
-                            f"⚠️ Fichier log anormalement petit: {file_size} bytes"
-                        )
-
-                    # Vérifier les permissions
-                    if not os.access(self.log_path, os.R_OK):
-                        logger.error(f"❌ Permissions insuffisantes sur le fichier log")
-                        self._force_reconnect = True
-
-                except Exception as e:
-                    logger.error(f"❌ Erreur vérification stats fichier log: {e}")
-
-                # Vérifier l'activité Nginx
-                try:
-                    nginx_running = False
-                    for proc in psutil.process_iter(["name"]):
-                        if "nginx" in proc.info["name"]:
-                            nginx_running = True
-                            break
-
-                    if not nginx_running:
-                        logger.critical(
-                            f"🚨 Nginx semble ne pas être en cours d'exécution!"
-                        )
-                        # Tenter de voir si le containeur est en cours d'exécution
-                        result = subprocess.run(
-                            ["docker", "ps", "--filter", "name=iptv-nginx"],
-                            capture_output=True,
-                            text=True,
-                        )
-                        logger.info(f"État containeur Nginx: {result.stdout}")
-                except Exception as e:
-                    logger.error(f"❌ Erreur vérification Nginx: {e}")
-
-            except Exception as e:
-                logger.error(f"❌ Erreur dans _check_log_file: {e}")
-
-            time.sleep(60)  # Vérification toutes les minutes
-
     def get_channel_watchers(self, channel):
         """Récupère le nombre actuel de watchers pour une chaîne"""
         if hasattr(self.manager, "channels") and channel in self.manager.channels:
@@ -223,29 +176,33 @@ class ClientMonitor(threading.Thread):
     def _parse_access_log(self, line):
         """
         Analyse une ligne de log nginx pour détecter l'activité
-        Retourne (ip, channel, request_type, is_valid_request)
+        Retourne (ip, channel, request_type, is_valid, user_agent)
         """
         try:
-            # Ajout de l'extraction de l'user agent
+            # Extraction de l'user agent (format spécifique dans les logs)
             user_agent = None
-            ua_match = re.search(r'"([^"]+)"$', line) or re.search(
-                r'"([^"]+)" "-"', line
-            )
+            ua_match = re.search(r'"([^"]+)"', line)
             if ua_match:
-                user_agent = ua_match.group(1)
+                # On cherche le bon format d'user agent (comme "TiviMate/5.1.6 (Android 7.1.2)")
+                # Il apparaît après le statut HTTP et la taille de la réponse
+                parts = line.split('"')
+                if len(parts) >= 6:  # Au moins 6 parties entre guillemets
+                    user_agent = parts[
+                        5
+                    ]  # L'user agent est généralement la 6ème partie
 
             # Format analysé avec plus de robustesse
             # Extraction de l'IP (au début de la ligne)
             ip_match = re.match(r"^([0-9.]+)", line)
             if not ip_match:
-                return None, None, None, False
+                return None, None, None, False, None
 
             ip = ip_match.group(1)
 
             # Extraction de la requête avec une regex plus souple
             req_match = re.search(r'"(?:GET|HEAD) ([^"]+) HTTP', line)
             if not req_match:
-                return None, None, None, False
+                return None, None, None, False, None
 
             request_path = req_match.group(1)
 
@@ -255,7 +212,7 @@ class ClientMonitor(threading.Thread):
 
             # Vérification HLS
             if "/hls/" not in request_path:
-                return None, None, None, False
+                return None, None, None, False, None
 
             # Détermination du type de requête
             request_type = "unknown"
@@ -267,7 +224,7 @@ class ClientMonitor(threading.Thread):
             # Extraction du nom de chaîne avec une regex plus robuste
             channel_match = re.search(r"/hls/([^/]+)/", request_path)
             if not channel_match:
-                return ip, None, request_type, False
+                return ip, None, request_type, False, user_agent
 
             channel = channel_match.group(1)
 
@@ -282,8 +239,10 @@ class ClientMonitor(threading.Thread):
 
         except Exception as e:
             logger.error(f"❌ Erreur analyse log: {e}")
+            import traceback
+
             logger.error(traceback.format_exc())
-            return None, None, None, False
+            return None, None, None, False, None
 
     def run(self):
         """On surveille les requêtes clients"""
@@ -294,7 +253,7 @@ class ClientMonitor(threading.Thread):
 
         while True:
             try:
-                # Vérifier si le fichier existe
+                # Vérifier si le fichier log existe
                 if not os.path.exists(self.log_path):
                     logger.error(f"❌ Log file introuvable: {self.log_path}")
                     # Attendre et réessayer
@@ -393,15 +352,15 @@ class ClientMonitor(threading.Thread):
                         last_activity_time = current_time
 
                         # Analyse plus précise de la ligne avec la méthode améliorée
-                        ip, channel, request_type, is_valid = self._parse_access_log(
-                            line
+                        ip, channel, request_type, is_valid, user_agent = (
+                            self._parse_access_log(line)
                         )
-
                         if not channel or not is_valid:
+                            logger.error("❌ Requête invalide ou sans chaîne detectée.")
                             continue  # Ignorer les requêtes invalides ou sans chaîne
 
                         # Log détaillé pour debug (niveau info pour voir si ça fonctionne)
-                        logger.debug(
+                        logger.info(
                             f"🔍 [{channel}] {request_type} ({ip}) - Valide: {is_valid}"
                         )
 
@@ -431,8 +390,8 @@ class ClientMonitor(threading.Thread):
 
                                     # Ajouter du temps de visionnage (chaque segment = ~4 secondes)
                                     if hasattr(self.manager, "stats_collector"):
-                                        self.manager.stats_collector.add_watch_time(
-                                            channel, ip, 4
+                                        self.manager.stats_collector.update_user_stats(
+                                            ip, channel_name, duration, user_agent
                                         )
 
                                 # Si c'est une requête de playlist, considérer comme un heartbeat

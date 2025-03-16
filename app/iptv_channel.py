@@ -531,7 +531,7 @@ class IPTVChannel:
             return False
 
     def _create_concat_file(self) -> Optional[Path]:
-        """Crée le fichier de concaténation avec les bons chemins"""
+        """Crée le fichier de concaténation avec les bons chemins et sans doublons"""
         try:
             # Utiliser ready_to_stream au lieu de processed
             ready_to_stream_dir = Path(self.video_dir) / "ready_to_stream"
@@ -546,13 +546,21 @@ class IPTVChannel:
                 )
                 return None
 
+            # Élimination des doublons basée sur le nom du fichier
+            unique_files = {}
+            for file in ready_files:
+                # On utilise le nom comme clé pour remplacer les occurrences multiples
+                unique_files[file.name] = file
+
+            ready_files = list(unique_files.values())
+
             # On mélange les fichiers pour plus de variété
             import random
 
             random.shuffle(ready_files)
 
             logger.info(
-                f"[{self.name}] 🛠️ Création de _playlist.txt avec ordre aléatoire"
+                f"[{self.name}] 🛠️ Création de _playlist.txt avec {len(ready_files)} fichiers uniques"
             )
             concat_file = Path(self.video_dir) / "_playlist.txt"
 
@@ -565,7 +573,7 @@ class IPTVChannel:
                     logger.debug(f"[{self.name}] ✅ Ajout de {video.name}")
 
             logger.info(
-                f"[{self.name}] 🎥 Playlist créée avec {len(ready_files)} fichiers en mode aléatoire"
+                f"[{self.name}] 🎥 Playlist créée avec {len(ready_files)} fichiers uniques en mode aléatoire"
             )
             return concat_file
 

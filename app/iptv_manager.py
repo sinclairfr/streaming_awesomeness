@@ -166,6 +166,7 @@ class IPTVManager:
         """Vérifie périodiquement l'état du client_monitor"""
         while True:
             try:
+                logger.info("🔍 Vérification de l'état du client_monitor...")
                 if (
                     not hasattr(self, "client_monitor")
                     or not self.client_monitor.is_alive()
@@ -701,7 +702,7 @@ class IPTVManager:
                         self.ready_event_handler, str(ready_dir), recursive=False
                     )
                     paths_scheduled.add(str(ready_dir))
-                    logger.info(
+                    logger.debug(
                         f"👁️ Surveillance ready_to_stream configurée pour {name}: {ready_dir}"
                     )
 

@@ -14,7 +14,7 @@ services:
       - ./app/logs:/app/logs:rw
       - ./nginx_logs:/var/log/nginx:rw
       - ./app:/app:rw  # Regroupe tous les fichiers de l'application
-      - ./requirements.txt:/app/requirements.txt:rw
+      #- ./requirements.txt:/app/requirements.txt:rw
       - /mnt/docker_data/streaming_awesomeness:/mnt/videos/streaming_awesomeness
        # For memory management
     devices:
