@@ -42,13 +42,6 @@ class FFmpegProcessManager:
         # Démarre un processus FFmpeg avec la commande fournie
         # Renvoie True si démarré avec succès, False sinon
         """
-        env = os.environ.copy()
-        env["AV_LOG_FORCE_NOCOLOR"] = (
-            "1"  # Évite les problèmes de couleur dans les logs
-        )
-        env["FFREPORT"] = f"file={log_path}:level=32"  # Log détaillé
-        env["TMPDIR"] = "/tmp"  # S'assure que le dossier temporaire est accessible
-
         with self.lock:
             logger.debug(f"[{self.channel_name}] 🚀 Démarrage start_process")
             # On nettoie d'abord les processus existants
@@ -60,11 +53,23 @@ class FFmpegProcessManager:
 
                 # Préparation du log si disponible
                 log_file = None
+                log_path = None  # Initialisation de log_path
                 if self.logger_instance:
                     log_path = self.logger_instance.get_main_log_file()
                     os.makedirs(os.path.dirname(log_path), exist_ok=True)
                     log_file = open(log_path, "a", buffering=1)
                     logger.info(f"[{self.channel_name}] 📝 Logs FFmpeg -> {log_path}")
+
+                # Configuration de l'environnement
+                env = os.environ.copy()
+                env["AV_LOG_FORCE_NOCOLOR"] = (
+                    "1"  # Évite les problèmes de couleur dans les logs
+                )
+                if log_path:  # Vérification que log_path est défini
+                    env["FFREPORT"] = f"file={log_path}:level=32"  # Log détaillé
+                env["TMPDIR"] = (
+                    "/tmp"  # S'assure que le dossier temporaire est accessible
+                )
 
                 # Lancement du processus
                 logger.info(

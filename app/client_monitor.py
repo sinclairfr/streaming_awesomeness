@@ -226,26 +226,32 @@ class ClientMonitor(threading.Thread):
         Retourne (ip, channel, request_type, is_valid_request)
         """
         try:
-            logger.info(f"Analyse de la ligne de log: {line}")
+            # Réduire le niveau de log pour éviter de polluer les logs
+            logger.debug(f"Analyse de la ligne de log: {line}")
 
-            if "GET /hls/" in line:
-                # Format typique: IP - - [date] "GET /hls/channel/playlist.m3u8 HTTP/1.1" 200 ...
-                parts = line.split()
-                if (
-                    len(parts) < 9
-                ):  # Ajout d'une vérification plus stricte sur la longueur
-                    return None, None, None, False
-                ip = parts[0]
+            # Format typique: 192.168.10.104 - - [16/Mar/2025:13:16:20 +0100] "GET /hls/BruceLee/playlist.m3u8 HTTP/1.1" 200 2701 "-" "TiviMate/5.1.6 (Android 7.1.2)" "-" rt=0.000 ua="-" us="-" ut="-"
 
-            # Extraire la requête (entre guillemets)
-            request_match = re.search(r'"(GET|HEAD) ([^"]*)', line)
-            if not request_match:
+            # Extraction directe par regex pour plus de robustesse
+            ip_match = re.match(r"^([0-9.]+)", line)
+            if not ip_match:
                 return None, None, None, False
 
-            request_path = request_match.group(2)
+            ip = ip_match.group(1)
 
-            # Vérification du code de status
-            status_code = parts[8] if len(parts) > 8 else "???"
+            # Extraction de la requête
+            req_match = re.search(r'"GET ([^"]+) HTTP', line)
+            if not req_match:
+                return None, None, None, False
+
+            request_path = req_match.group(1)
+
+            # Extraction du code de statut (généralement après la requête)
+            status_match = re.search(r'" (\d{3}) ', line)
+            status_code = status_match.group(1) if status_match else "???"
+
+            # Vérification que c'est bien une requête HLS
+            if not "/hls/" in request_path:
+                return None, None, None, False
 
             # Déterminer le type de requête
             request_type = "unknown"
@@ -255,18 +261,26 @@ class ClientMonitor(threading.Thread):
                 request_type = "segment"
 
             # Extraire le nom de la chaîne
-            match = re.search(r"/hls/([^/]+)/", request_path)
-            if not match:
+            channel_match = re.search(r"/hls/([^/]+)/", request_path)
+            if not channel_match:
                 return ip, None, request_type, False
 
-            channel = match.group(1)
+            channel = channel_match.group(1)
 
             # Considérer valide uniquement les requêtes avec statut 200 ou 206
             is_valid = status_code in ["200", "206"]
 
+            # Debug pour voir ce qui est extrait
+            if is_valid:
+                logger.info(f"📱 Client détecté: {ip} -> {channel} ({request_type})")
+
             return ip, channel, request_type, is_valid
+
         except Exception as e:
             logger.error(f"❌ Erreur analyse log: {e}")
+            import traceback
+
+            logger.error(traceback.format_exc())
             return None, None, None, False
 
     def run(self):
@@ -376,7 +390,7 @@ class ClientMonitor(threading.Thread):
                         # Une ligne a été lue, mise à jour du temps d'activité
                         last_activity_time = current_time
 
-                        # Analyse plus précise de la ligne
+                        # Analyse plus précise de la ligne avec la méthode améliorée
                         ip, channel, request_type, is_valid = self._parse_access_log(
                             line
                         )
@@ -384,11 +398,7 @@ class ClientMonitor(threading.Thread):
                         if not channel or not is_valid:
                             continue  # Ignorer les requêtes invalides ou sans chaîne
 
-                        request_path = (
-                            request_type  # Pour compatibilité avec le code existant
-                        )
-
-                        # Log détaillé pour debug
+                        # Log détaillé pour debug (niveau info pour voir si ça fonctionne)
                         logger.debug(
                             f"🔍 [{channel}] {request_type} ({ip}) - Valide: {is_valid}"
                         )
@@ -431,49 +441,33 @@ class ClientMonitor(threading.Thread):
                                             channel, ip, 0.5
                                         )
 
-                                # Calcul des watchers vraiment actifs pour ce channel
-                                # Un watcher est considéré actif s'il a demandé un segment dans les 20 dernières secondes
-                                # ou une playlist dans les 10 dernières secondes
-                                active_watchers = 0
-                                now = time.time()
+                                # Calcul SIMPLIFIÉ des watchers par chaîne
+                                # Un watcher est unique par IP pour une chaîne donnée
                                 active_ips = set()
-
                                 for (ch, watcher_ip), data in self.watchers.items():
                                     if ch != channel:
                                         continue
 
+                                    # On considère un watcher actif s'il a une activité récente
                                     watcher_time = (
                                         data["time"] if isinstance(data, dict) else data
                                     )
-                                    watcher_type = (
-                                        data.get("type", "unknown")
-                                        if isinstance(data, dict)
-                                        else "unknown"
-                                    )
-
-                                    # Règles de timeout plus strictes:
-                                    # - Segments: 30s max (un client doit demander un segment au moins toutes les 30s)
-                                    # - Playlist: 15s max (un client demande typiquement la playlist toutes les 2-10s)
                                     if (
-                                        watcher_type == "segment"
-                                        and now - watcher_time < 30
-                                    ) or (
-                                        watcher_type == "playlist"
-                                        and now - watcher_time < 15
-                                    ):
-                                        if watcher_ip not in active_ips:
-                                            active_ips.add(watcher_ip)
-                                            active_watchers += 1
+                                        time.time() - watcher_time < 60
+                                    ):  # 60 secondes max d'inactivité
+                                        active_ips.add(watcher_ip)
+
+                                active_watchers = len(active_ips)
 
                                 # Mise à jour du compteur uniquement si ça a changé
                                 if active_watchers != self.get_channel_watchers(
                                     channel
                                 ):
                                     logger.info(
-                                        f"[{channel}] 👁️ MAJ watchers: {active_watchers} (analyse précise)"
+                                        f"[{channel}] 👁️ MAJ watchers: {active_watchers} (analyse simplifiée)"
                                     )
                                     self.update_watchers(
-                                        channel, active_watchers, request_path
+                                        channel, active_watchers, request_type
                                     )
 
             except Exception as e:
