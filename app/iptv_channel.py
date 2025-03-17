@@ -104,6 +104,75 @@ class IPTVChannel:
             {}
         )  # Pour suivre les créations récentes par chaîne
 
+    def _create_concat_file(self) -> Optional[Path]:
+        """Crée le fichier de concaténation avec les bons chemins et sans doublons"""
+        # Vérifier si on a créé une playlist récemment pour éviter les doublons
+        current_time = time.time()
+        if not hasattr(IPTVChannel, "_playlist_creation_timestamps"):
+            IPTVChannel._playlist_creation_timestamps = {}
+
+        last_creation = IPTVChannel._playlist_creation_timestamps.get(self.name, 0)
+
+        # Si on a créé une playlist dans les 5 dernières secondes, ne pas recréer
+        if current_time - last_creation < 5:
+            logger.debug(
+                f"[{self.name}] ℹ️ Création de playlist ignorée (dernière: il y a {current_time - last_creation:.1f}s)"
+            )
+            concat_file = Path(self.video_dir) / "_playlist.txt"
+            return concat_file if concat_file.exists() else None
+
+        # Mettre à jour le timestamp
+        IPTVChannel._playlist_creation_timestamps[self.name] = current_time
+
+        try:
+            # Utiliser ready_to_stream au lieu de processed
+            ready_to_stream_dir = Path(self.video_dir) / "ready_to_stream"
+            if not ready_to_stream_dir.exists():
+                logger.error(f"[{self.name}] ❌ Dossier ready_to_stream introuvable")
+                return None
+
+            ready_files = list(ready_to_stream_dir.glob("*.mp4"))
+            if not ready_files:
+                logger.error(
+                    f"[{self.name}] ❌ Aucune vidéo dans {ready_to_stream_dir}"
+                )
+                return None
+
+            # Élimination des doublons basée sur le nom du fichier
+            unique_files = {}
+            for file in ready_files:
+                # On utilise le nom comme clé pour remplacer les occurrences multiples
+                unique_files[file.name] = file
+
+            ready_files = list(unique_files.values())
+
+            # On mélange les fichiers pour plus de variété
+            import random
+
+            random.shuffle(ready_files)
+
+            logger.info(
+                f"[{self.name}] 🛠️ Création de _playlist.txt avec {len(ready_files)} fichiers uniques"
+            )
+            concat_file = Path(self.video_dir) / "_playlist.txt"
+
+            logger.debug(f"[{self.name}] 📝 Écriture de _playlist.txt")
+
+            with open(concat_file, "w", encoding="utf-8") as f:
+                for video in ready_files:
+                    escaped_path = str(video.absolute()).replace("'", "'\\''")
+                    f.write(f"file '{escaped_path}'\n")
+                    logger.debug(f"[{self.name}] ✅ Ajout de {video.name}")
+
+            logger.info(
+                f"[{self.name}] 🎥 Playlist créée avec {len(ready_files)} fichiers uniques en mode aléatoire"
+            )
+            return concat_file
+
+        except Exception as e:
+            logger.error(f"[{self.name}] ❌ Erreur _playlist.txt: {e}")
+            return None
+
     def _handle_position_update(self, position):
         """Reçoit les mises à jour de position du ProcessManager"""
         # On se contente de loguer les sauts de position sans redémarrer
@@ -1197,72 +1266,3 @@ class IPTVChannel:
         # Lance le scan dans un thread séparé
         threading.Thread(target=scan_and_notify, daemon=True).start()
         return True
-
-    def _create_concat_file(self) -> Optional[Path]:
-        """Crée le fichier de concaténation avec les bons chemins et sans doublons"""
-        # Vérifier si on a créé une playlist récemment pour éviter les doublons
-        current_time = time.time()
-        if not hasattr(IPTVChannel, "_playlist_creation_timestamps"):
-            IPTVChannel._playlist_creation_timestamps = {}
-
-        last_creation = IPTVChannel._playlist_creation_timestamps.get(self.name, 0)
-
-        # Si on a créé une playlist dans les 5 dernières secondes, ne pas recréer
-        if current_time - last_creation < 5:
-            logger.debug(
-                f"[{self.name}] ℹ️ Création de playlist ignorée (dernière: il y a {current_time - last_creation:.1f}s)"
-            )
-            concat_file = Path(self.video_dir) / "_playlist.txt"
-            return concat_file if concat_file.exists() else None
-
-        # Mettre à jour le timestamp
-        IPTVChannel._playlist_creation_timestamps[self.name] = current_time
-
-        try:
-            # Utiliser ready_to_stream au lieu de processed
-            ready_to_stream_dir = Path(self.video_dir) / "ready_to_stream"
-            if not ready_to_stream_dir.exists():
-                logger.error(f"[{self.name}] ❌ Dossier ready_to_stream introuvable")
-                return None
-
-            ready_files = list(ready_to_stream_dir.glob("*.mp4"))
-            if not ready_files:
-                logger.error(
-                    f"[{self.name}] ❌ Aucune vidéo dans {ready_to_stream_dir}"
-                )
-                return None
-
-            # Élimination des doublons basée sur le nom du fichier
-            unique_files = {}
-            for file in ready_files:
-                # On utilise le nom comme clé pour remplacer les occurrences multiples
-                unique_files[file.name] = file
-
-            ready_files = list(unique_files.values())
-
-            # On mélange les fichiers pour plus de variété
-            import random
-
-            random.shuffle(ready_files)
-
-            logger.info(
-                f"[{self.name}] 🛠️ Création de _playlist.txt avec {len(ready_files)} fichiers uniques"
-            )
-            concat_file = Path(self.video_dir) / "_playlist.txt"
-
-            logger.debug(f"[{self.name}] 📝 Écriture de _playlist.txt")
-
-            with open(concat_file, "w", encoding="utf-8") as f:
-                for video in ready_files:
-                    escaped_path = str(video.absolute()).replace("'", "'\\''")
-                    f.write(f"file '{escaped_path}'\n")
-                    logger.debug(f"[{self.name}] ✅ Ajout de {video.name}")
-
-            logger.info(
-                f"[{self.name}] 🎥 Playlist créée avec {len(ready_files)} fichiers uniques en mode aléatoire"
-            )
-            return concat_file
-
-        except Exception as e:
-            logger.error(f"[{self.name}] ❌ Erreur _playlist.txt: {e}")
-            return None

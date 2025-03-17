@@ -173,6 +173,80 @@ class ClientMonitor(threading.Thread):
 
         return ip, channel, request_type, is_valid, None
 
+    def _follow_log_file_legacy(self):
+        """Version de fallback pour suivre le fichier de log sans pyinotify"""
+        try:
+            with open(self.log_path, "r") as f:
+                # Se positionne à la fin du fichier
+                f.seek(0, 2)
+
+                logger.info(f"👁️ Mode de surveillance legacy actif sur {self.log_path}")
+
+                last_activity_time = time.time()
+                last_heartbeat_time = time.time()
+                last_cleanup_time = time.time()
+
+                while True:
+                    line = f.readline().strip()
+                    current_time = time.time()
+
+                    # Nettoyage périodique des watchers inactifs
+                    if current_time - last_cleanup_time > 10:  # Tous les 10 secondes
+                        self._cleanup_inactive()
+                        last_cleanup_time = current_time
+
+                    # Heartbeat périodique
+                    if current_time - last_heartbeat_time > 60:  # Toutes les minutes
+                        logger.info(
+                            f"💓 ClientMonitor actif (mode legacy), dernière activité il y a {current_time - last_activity_time:.1f}s"
+                        )
+                        last_heartbeat_time = current_time
+
+                        # Vérification du fichier
+                        if not os.path.exists(self.log_path):
+                            logger.error(f"❌ Fichier log disparu: {self.log_path}")
+                            break
+
+                        file_size = os.path.getsize(self.log_path)
+                        if file_size < f.tell():
+                            logger.warning(
+                                f"⚠️ Fichier log tronqué, redémarrage de la lecture"
+                            )
+                            f.seek(0)
+
+                    # Si pas de nouvelle ligne, attendre un peu
+                    if not line:
+                        # Si inactivité prolongée, vérifier le fichier
+                        if current_time - last_activity_time > 300:  # 5 minutes
+                            logger.info(
+                                f"⚠️ Inactivité longue, vérification fichier log"
+                            )
+                            f.seek(
+                                max(0, f.tell() - 10000)
+                            )  # Retour en arrière de 10KB
+                            last_activity_time = current_time
+
+                        time.sleep(0.1)
+                        continue
+
+                    # Une ligne a été lue
+                    last_activity_time = current_time
+
+                    # Traiter la ligne
+                    self._process_log_line(line)
+
+        except Exception as e:
+            logger.error(f"❌ Erreur suivie fichier log mode legacy: {e}")
+            import traceback
+
+            logger.error(traceback.format_exc())
+
+            # On attend un peu avant de retenter
+            time.sleep(10)
+
+            # On retente l'opération
+            self._follow_log_file_legacy()
+
     def _check_log_file_exists(self, retry_count, max_retries):
         """Vérifie si le fichier de log existe et est accessible"""
         if not os.path.exists(self.log_path):
