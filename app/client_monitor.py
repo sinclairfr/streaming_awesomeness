@@ -59,23 +59,15 @@ class ClientMonitor(threading.Thread):
                 time.sleep(30)  # Pause plus longue en cas d'erreur
 
     def _cleanup_inactive(self):
-        """Version améliorée du nettoyage avec plus de logs"""
+        """Version simplifiée du nettoyage avec meilleure gestion du timing"""
         now = time.time()
-        timeout = 60  # Un seul timeout de 60 secondes
+        # Augmentons le timeout pour éviter de perdre des watchers actifs
+        timeout = 120  # 2 minutes, pour être sûr
 
         to_remove = []
         affected_channels = set()
 
         with self.lock:
-            # Debug: afficher tous les watchers actifs
-            active_watchers = {
-                k: now - v
-                for k, v in self.watchers.items()
-                if k[0] != "master_playlist"
-            }
-            if active_watchers:
-                logger.debug(f"👥 Watchers actifs avant nettoyage: {active_watchers}")
-
             # Trouver les watchers inactifs
             for (channel, ip), last_seen in self.watchers.items():
                 if now - last_seen > timeout:
@@ -90,29 +82,26 @@ class ClientMonitor(threading.Thread):
                     if (
                         key[0] != "master_playlist"
                     ):  # Ne log pas les suppressions de master_playlist
-                        logger.info(f"🗑️ Watcher supprimé: {key[1]} → {key[0]}")
+                        logger.info(
+                            f"🗑️ Watcher supprimé: {key[1]} → {key[0]} (inactif depuis {now - self.watchers[key]:.1f}s)"
+                        )
                     del self.watchers[key]
 
             # Recalculer le nombre de watchers pour chaque chaîne affectée
             for channel in affected_channels:
-                # Ignorer master_playlist
-                if channel == "master_playlist":
-                    continue
-
+                # Compter les viewers actifs
                 active_ips = set()
                 for (ch, ip), last_seen in self.watchers.items():
                     if ch == channel and now - last_seen < timeout:
                         active_ips.add(ip)
 
                 count = len(active_ips)
-
-                # Toujours appeler update_watchers, même si count=0
-                self.update_watchers(channel, count, "/hls/")
-
-                # Log pour débug
-                logger.debug(
-                    f"📊 Après nettoyage - {channel}: {count} watchers actifs: {list(active_ips)}"
-                )
+                if count > 0 or channel in self.manager.channels:
+                    # On force la mise à jour, même si count=0
+                    logger.info(
+                        f"[{channel}] 🔄 Mise à jour après nettoyage: {count} watchers actifs"
+                    )
+                    self.update_watchers(channel, count, "/hls/")
 
     def _print_channels_summary(self):
         """Affiche un récapitulatif des chaînes et de leur état"""
