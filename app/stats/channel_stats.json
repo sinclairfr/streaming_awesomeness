@@ -2,29 +2,3932 @@
   "channels": {
     "pagnol": {
       "current_watchers": 1,
-      "peak_watchers": 1,
-      "peak_time": 1742124313,
+      "peak_watchers": 3,
+      "peak_time": 1742185360,
       "total_watch_time": 0,
-      "session_count": 1,
-      "total_segments": 0,
-      "watchlist": {}
+      "session_count": 5,
+      "total_segments": 49,
+      "watchlist": {},
+      "segment_history": [
+        {
+          "segment_id": "0",
+          "size": 2339472,
+          "time": 1742185371
+        },
+        {
+          "segment_id": "1",
+          "size": 1868908,
+          "time": 1742185375
+        },
+        {
+          "segment_id": "2",
+          "size": 3407876,
+          "time": 1742185381
+        },
+        {
+          "segment_id": "3",
+          "size": 1426544,
+          "time": 1742185383
+        },
+        {
+          "segment_id": "4",
+          "size": 1322580,
+          "time": 1742185387
+        },
+        {
+          "segment_id": "5",
+          "size": 3565044,
+          "time": 1742185393
+        },
+        {
+          "segment_id": "6",
+          "size": 4771440,
+          "time": 1742185401
+        },
+        {
+          "segment_id": "7",
+          "size": 2084920,
+          "time": 1742185405
+        },
+        {
+          "segment_id": "8",
+          "size": 5809200,
+          "time": 1742185415
+        },
+        {
+          "segment_id": "9",
+          "size": 2606244,
+          "time": 1742185419
+        },
+        {
+          "segment_id": "10",
+          "size": 4718236,
+          "time": 1742185429
+        },
+        {
+          "segment_id": "11",
+          "size": 5812960,
+          "time": 1742185439
+        },
+        {
+          "segment_id": "12",
+          "size": 2335524,
+          "time": 1742185445
+        },
+        {
+          "segment_id": "13",
+          "size": 5542052,
+          "time": 1742185455
+        },
+        {
+          "segment_id": "14",
+          "size": 4733276,
+          "time": 1742185465
+        },
+        {
+          "segment_id": "15",
+          "size": 4764484,
+          "time": 1742185475
+        },
+        {
+          "segment_id": "16",
+          "size": 4359720,
+          "time": 1742185483
+        },
+        {
+          "segment_id": "17",
+          "size": 4943084,
+          "time": 1742185493
+        },
+        {
+          "segment_id": "18",
+          "size": 5130520,
+          "time": 1742185503
+        },
+        {
+          "segment_id": "19",
+          "size": 4767116,
+          "time": 1742185513
+        },
+        {
+          "segment_id": "20",
+          "size": 5491104,
+          "time": 1742185524
+        },
+        {
+          "segment_id": "21",
+          "size": 5810516,
+          "time": 1742185534
+        },
+        {
+          "segment_id": "22",
+          "size": 992076,
+          "time": 1742185536
+        },
+        {
+          "segment_id": "23",
+          "size": 5323408,
+          "time": 1742185546
+        },
+        {
+          "segment_id": "24",
+          "size": 6192344,
+          "time": 1742185556
+        },
+        {
+          "segment_id": "25",
+          "size": 6241224,
+          "time": 1742185566
+        },
+        {
+          "segment_id": "26",
+          "size": 5306864,
+          "time": 1742185576
+        },
+        {
+          "segment_id": "27",
+          "size": 5404248,
+          "time": 1742185586
+        },
+        {
+          "segment_id": "28",
+          "size": 3342828,
+          "time": 1742185592
+        },
+        {
+          "segment_id": "29",
+          "size": 4986888,
+          "time": 1742185596
+        },
+        {
+          "segment_id": "30",
+          "size": 4750008,
+          "time": 1742185604
+        },
+        {
+          "segment_id": "31",
+          "size": 5690572,
+          "time": 1742185612
+        },
+        {
+          "segment_id": "32",
+          "size": 1063516,
+          "time": 1742185614
+        },
+        {
+          "segment_id": "33",
+          "size": 5532276,
+          "time": 1742185622
+        },
+        {
+          "segment_id": "34",
+          "size": 3278344,
+          "time": 1742185626
+        },
+        {
+          "segment_id": "35",
+          "size": 5348412,
+          "time": 1742185634
+        },
+        {
+          "segment_id": "36",
+          "size": 2193960,
+          "time": 1742185638
+        },
+        {
+          "segment_id": "37",
+          "size": 1525244,
+          "time": 1742185641
+        },
+        {
+          "segment_id": "38",
+          "size": 2223664,
+          "time": 1742185644
+        },
+        {
+          "segment_id": "39",
+          "size": 6168656,
+          "time": 1742185654
+        },
+        {
+          "segment_id": "0",
+          "size": 2339472,
+          "time": 1742187533
+        },
+        {
+          "segment_id": "1",
+          "size": 1868908,
+          "time": 1742187537
+        },
+        {
+          "segment_id": "2",
+          "size": 3407876,
+          "time": 1742187543
+        },
+        {
+          "segment_id": "3",
+          "size": 1426544,
+          "time": 1742187545
+        },
+        {
+          "segment_id": "4",
+          "size": 1322580,
+          "time": 1742187549
+        },
+        {
+          "segment_id": "5",
+          "size": 3565044,
+          "time": 1742187555
+        },
+        {
+          "segment_id": "6",
+          "size": 4771440,
+          "time": 1742187563
+        },
+        {
+          "segment_id": "7",
+          "size": 2084920,
+          "time": 1742187567
+        },
+        {
+          "segment_id": "8",
+          "size": 5809200,
+          "time": 1742187577
+        }
+      ]
     },
     "defunes": {
+      "current_watchers": 0,
+      "peak_watchers": 3,
+      "peak_time": 1742185359,
+      "total_watch_time": 0,
+      "session_count": 3,
+      "total_segments": 45,
+      "watchlist": {},
+      "segment_history": [
+        {
+          "segment_id": "0",
+          "size": 1529192,
+          "time": 1742185366
+        },
+        {
+          "segment_id": "1",
+          "size": 1054116,
+          "time": 1742185370
+        },
+        {
+          "segment_id": "3",
+          "size": 668152,
+          "time": 1742185378
+        },
+        {
+          "segment_id": "4",
+          "size": 680560,
+          "time": 1742185382
+        },
+        {
+          "segment_id": "5",
+          "size": 1020840,
+          "time": 1742185386
+        },
+        {
+          "segment_id": "6",
+          "size": 1126684,
+          "time": 1742185390
+        },
+        {
+          "segment_id": "7",
+          "size": 1300208,
+          "time": 1742185394
+        },
+        {
+          "segment_id": "8",
+          "size": 1120480,
+          "time": 1742185398
+        },
+        {
+          "segment_id": "9",
+          "size": 1154320,
+          "time": 1742185400
+        },
+        {
+          "segment_id": "10",
+          "size": 1131008,
+          "time": 1742185404
+        },
+        {
+          "segment_id": "11",
+          "size": 1026856,
+          "time": 1742185408
+        },
+        {
+          "segment_id": "12",
+          "size": 1327844,
+          "time": 1742185414
+        },
+        {
+          "segment_id": "13",
+          "size": 1297576,
+          "time": 1742185418
+        },
+        {
+          "segment_id": "14",
+          "size": 1298328,
+          "time": 1742185422
+        },
+        {
+          "segment_id": "15",
+          "size": 1101116,
+          "time": 1742185426
+        },
+        {
+          "segment_id": "16",
+          "size": 891872,
+          "time": 1742185430
+        },
+        {
+          "segment_id": "17",
+          "size": 811596,
+          "time": 1742185434
+        },
+        {
+          "segment_id": "18",
+          "size": 1276332,
+          "time": 1742185438
+        },
+        {
+          "segment_id": "19",
+          "size": 1287988,
+          "time": 1742185442
+        },
+        {
+          "segment_id": "20",
+          "size": 1128188,
+          "time": 1742185444
+        },
+        {
+          "segment_id": "21",
+          "size": 1137024,
+          "time": 1742185448
+        },
+        {
+          "segment_id": "22",
+          "size": 1316376,
+          "time": 1742185452
+        },
+        {
+          "segment_id": "23",
+          "size": 999220,
+          "time": 1742185456
+        },
+        {
+          "segment_id": "24",
+          "size": 1408684,
+          "time": 1742185462
+        },
+        {
+          "segment_id": "25",
+          "size": 1015764,
+          "time": 1742185466
+        },
+        {
+          "segment_id": "26",
+          "size": 867620,
+          "time": 1742185470
+        },
+        {
+          "segment_id": "27",
+          "size": 869312,
+          "time": 1742185474
+        },
+        {
+          "segment_id": "28",
+          "size": 1202072,
+          "time": 1742185478
+        },
+        {
+          "segment_id": "29",
+          "size": 1126308,
+          "time": 1742185482
+        },
+        {
+          "segment_id": "30",
+          "size": 1331980,
+          "time": 1742185486
+        },
+        {
+          "segment_id": "31",
+          "size": 1644248,
+          "time": 1742185488
+        },
+        {
+          "segment_id": "32",
+          "size": 1460948,
+          "time": 1742185492
+        },
+        {
+          "segment_id": "33",
+          "size": 827576,
+          "time": 1742185496
+        },
+        {
+          "segment_id": "34",
+          "size": 961996,
+          "time": 1742185500
+        },
+        {
+          "segment_id": "35",
+          "size": 1124616,
+          "time": 1742185504
+        },
+        {
+          "segment_id": "36",
+          "size": 1833564,
+          "time": 1742185510
+        },
+        {
+          "segment_id": "0",
+          "size": 531288,
+          "time": 1742187516
+        },
+        {
+          "segment_id": "1",
+          "size": 844120,
+          "time": 1742187526
+        },
+        {
+          "segment_id": "2",
+          "size": 492560,
+          "time": 1742187532
+        },
+        {
+          "segment_id": "3",
+          "size": 408712,
+          "time": 1742187538
+        },
+        {
+          "segment_id": "4",
+          "size": 211500,
+          "time": 1742187542
+        },
+        {
+          "segment_id": "5",
+          "size": 990572,
+          "time": 1742187552
+        },
+        {
+          "segment_id": "6",
+          "size": 601224,
+          "time": 1742187556
+        },
+        {
+          "segment_id": "7",
+          "size": 405328,
+          "time": 1742187562
+        },
+        {
+          "segment_id": "8",
+          "size": 675484,
+          "time": 1742187572
+        }
+      ]
+    },
+    "rambo": {
       "current_watchers": 1,
+      "peak_watchers": 3,
+      "peak_time": 1742185353,
+      "total_watch_time": 0,
+      "session_count": 8,
+      "total_segments": 113,
+      "watchlist": {},
+      "segment_history": [
+        {
+          "segment_id": "17",
+          "size": 4393560,
+          "time": 1742185419
+        },
+        {
+          "segment_id": "18",
+          "size": 3069476,
+          "time": 1742185421
+        },
+        {
+          "segment_id": "19",
+          "size": 4961696,
+          "time": 1742185427
+        },
+        {
+          "segment_id": "20",
+          "size": 4136752,
+          "time": 1742185431
+        },
+        {
+          "segment_id": "21",
+          "size": 3236420,
+          "time": 1742185435
+        },
+        {
+          "segment_id": "22",
+          "size": 2209188,
+          "time": 1742185439
+        },
+        {
+          "segment_id": "23",
+          "size": 569076,
+          "time": 1742185445
+        },
+        {
+          "segment_id": "24",
+          "size": 186120,
+          "time": 1742185451
+        },
+        {
+          "segment_id": "25",
+          "size": 162996,
+          "time": 1742185457
+        },
+        {
+          "segment_id": "26",
+          "size": 735456,
+          "time": 1742185465
+        },
+        {
+          "segment_id": "27",
+          "size": 4342048,
+          "time": 1742185475
+        },
+        {
+          "segment_id": "28",
+          "size": 4711468,
+          "time": 1742185485
+        },
+        {
+          "segment_id": "29",
+          "size": 2932424,
+          "time": 1742185491
+        },
+        {
+          "segment_id": "30",
+          "size": 1548368,
+          "time": 1742185493
+        },
+        {
+          "segment_id": "31",
+          "size": 4767304,
+          "time": 1742185501
+        },
+        {
+          "segment_id": "32",
+          "size": 3112340,
+          "time": 1742185507
+        },
+        {
+          "segment_id": "33",
+          "size": 1752724,
+          "time": 1742185511
+        },
+        {
+          "segment_id": "35",
+          "size": 865364,
+          "time": 1742185513
+        },
+        {
+          "segment_id": "36",
+          "size": 1757236,
+          "time": 1742185515
+        },
+        {
+          "segment_id": "37",
+          "size": 1311864,
+          "time": 1742185517
+        },
+        {
+          "segment_id": "38",
+          "size": 3789892,
+          "time": 1742185521
+        },
+        {
+          "segment_id": "39",
+          "size": 1952004,
+          "time": 1742185523
+        },
+        {
+          "segment_id": "41",
+          "size": 695976,
+          "time": 1742185525
+        },
+        {
+          "segment_id": "56",
+          "size": 4595712,
+          "time": 1742185603
+        },
+        {
+          "segment_id": "0",
+          "size": 116372,
+          "time": 1742185758
+        },
+        {
+          "segment_id": "1",
+          "size": 481280,
+          "time": 1742185764
+        },
+        {
+          "segment_id": "2",
+          "size": 424128,
+          "time": 1742185772
+        },
+        {
+          "segment_id": "3",
+          "size": 1209216,
+          "time": 1742185782
+        },
+        {
+          "segment_id": "4",
+          "size": 3899496,
+          "time": 1742185792
+        },
+        {
+          "segment_id": "5",
+          "size": 5596760,
+          "time": 1742185802
+        },
+        {
+          "segment_id": "6",
+          "size": 5645076,
+          "time": 1742185812
+        },
+        {
+          "segment_id": "7",
+          "size": 5373792,
+          "time": 1742185822
+        },
+        {
+          "segment_id": "8",
+          "size": 6463440,
+          "time": 1742185830
+        },
+        {
+          "segment_id": "9",
+          "size": 3176448,
+          "time": 1742185834
+        },
+        {
+          "segment_id": "10",
+          "size": 2229492,
+          "time": 1742185838
+        },
+        {
+          "segment_id": "11",
+          "size": 7563616,
+          "time": 1742185848
+        },
+        {
+          "segment_id": "12",
+          "size": 7061468,
+          "time": 1742185858
+        },
+        {
+          "segment_id": "13",
+          "size": 7052632,
+          "time": 1742185869
+        },
+        {
+          "segment_id": "14",
+          "size": 7307936,
+          "time": 1742185879
+        },
+        {
+          "segment_id": "15",
+          "size": 1559084,
+          "time": 1742185881
+        },
+        {
+          "segment_id": "16",
+          "size": 6143088,
+          "time": 1742185891
+        },
+        {
+          "segment_id": "17",
+          "size": 2498520,
+          "time": 1742185895
+        },
+        {
+          "segment_id": "18",
+          "size": 2486864,
+          "time": 1742185901
+        },
+        {
+          "segment_id": "19",
+          "size": 5892860,
+          "time": 1742185907
+        },
+        {
+          "segment_id": "20",
+          "size": 6543904,
+          "time": 1742185917
+        },
+        {
+          "segment_id": "21",
+          "size": 5767168,
+          "time": 1742185927
+        },
+        {
+          "segment_id": "22",
+          "size": 6339924,
+          "time": 1742185937
+        },
+        {
+          "segment_id": "23",
+          "size": 6704268,
+          "time": 1742185947
+        },
+        {
+          "segment_id": "24",
+          "size": 6031792,
+          "time": 1742185957
+        },
+        {
+          "segment_id": "25",
+          "size": 5611424,
+          "time": 1742185967
+        },
+        {
+          "segment_id": "26",
+          "size": 1081000,
+          "time": 1742185969
+        },
+        {
+          "segment_id": "27",
+          "size": 2547588,
+          "time": 1742185971
+        },
+        {
+          "segment_id": "28",
+          "size": 1486892,
+          "time": 1742185975
+        },
+        {
+          "segment_id": "29",
+          "size": 3998196,
+          "time": 1742185979
+        },
+        {
+          "segment_id": "30",
+          "size": 2104660,
+          "time": 1742185983
+        },
+        {
+          "segment_id": "31",
+          "size": 4172848,
+          "time": 1742185987
+        },
+        {
+          "segment_id": "32",
+          "size": 1564348,
+          "time": 1742185991
+        },
+        {
+          "segment_id": "33",
+          "size": 5181656,
+          "time": 1742186001
+        },
+        {
+          "segment_id": "34",
+          "size": 3217432,
+          "time": 1742186007
+        },
+        {
+          "segment_id": "35",
+          "size": 4892324,
+          "time": 1742186017
+        },
+        {
+          "segment_id": "36",
+          "size": 5063404,
+          "time": 1742186027
+        },
+        {
+          "segment_id": "37",
+          "size": 4349756,
+          "time": 1742186037
+        },
+        {
+          "segment_id": "0",
+          "size": 3399040,
+          "time": 1742187161
+        },
+        {
+          "segment_id": "1",
+          "size": 2889748,
+          "time": 1742187169
+        },
+        {
+          "segment_id": "3",
+          "size": 35908,
+          "time": 1742187179
+        },
+        {
+          "segment_id": "4",
+          "size": 1455120,
+          "time": 1742187187
+        },
+        {
+          "segment_id": "5",
+          "size": 1848228,
+          "time": 1742187197
+        },
+        {
+          "segment_id": "6",
+          "size": 1630712,
+          "time": 1742187199
+        },
+        {
+          "segment_id": "7",
+          "size": 10321764,
+          "time": 1742187207
+        },
+        {
+          "segment_id": "8",
+          "size": 3089028,
+          "time": 1742187211
+        },
+        {
+          "segment_id": "10",
+          "size": 1155072,
+          "time": 1742187213
+        },
+        {
+          "segment_id": "11",
+          "size": 5212676,
+          "time": 1742187217
+        },
+        {
+          "segment_id": "13",
+          "size": 1896732,
+          "time": 1742187219
+        },
+        {
+          "segment_id": "14",
+          "size": 1052236,
+          "time": 1742187221
+        },
+        {
+          "segment_id": "15",
+          "size": 979668,
+          "time": 1742187223
+        },
+        {
+          "segment_id": "16",
+          "size": 1796152,
+          "time": 1742187225
+        },
+        {
+          "segment_id": "17",
+          "size": 2132108,
+          "time": 1742187227
+        },
+        {
+          "segment_id": "18",
+          "size": 4387356,
+          "time": 1742187233
+        },
+        {
+          "segment_id": "19",
+          "size": 4365360,
+          "time": 1742187237
+        },
+        {
+          "segment_id": "20",
+          "size": 1675456,
+          "time": 1742187239
+        },
+        {
+          "segment_id": "21",
+          "size": 5308180,
+          "time": 1742187243
+        },
+        {
+          "segment_id": "22",
+          "size": 2314656,
+          "time": 1742187249
+        },
+        {
+          "segment_id": "23",
+          "size": 3521240,
+          "time": 1742187251
+        },
+        {
+          "segment_id": "24",
+          "size": 5513100,
+          "time": 1742187257
+        },
+        {
+          "segment_id": "25",
+          "size": 7960672,
+          "time": 1742187263
+        },
+        {
+          "segment_id": "26",
+          "size": 911424,
+          "time": 1742187265
+        },
+        {
+          "segment_id": "27",
+          "size": 2636888,
+          "time": 1742187267
+        },
+        {
+          "segment_id": "28",
+          "size": 4062304,
+          "time": 1742187271
+        },
+        {
+          "segment_id": "29",
+          "size": 4115132,
+          "time": 1742187277
+        },
+        {
+          "segment_id": "30",
+          "size": 6072588,
+          "time": 1742187282
+        },
+        {
+          "segment_id": "31",
+          "size": 2670728,
+          "time": 1742187286
+        },
+        {
+          "segment_id": "32",
+          "size": 3219124,
+          "time": 1742187288
+        },
+        {
+          "segment_id": "33",
+          "size": 3478940,
+          "time": 1742187292
+        },
+        {
+          "segment_id": "34",
+          "size": 8799904,
+          "time": 1742187298
+        },
+        {
+          "segment_id": "0",
+          "size": 116372,
+          "time": 1742187530
+        },
+        {
+          "segment_id": "1",
+          "size": 481280,
+          "time": 1742187534
+        },
+        {
+          "segment_id": "2",
+          "size": 424128,
+          "time": 1742187544
+        },
+        {
+          "segment_id": "3",
+          "size": 1209216,
+          "time": 1742187554
+        },
+        {
+          "segment_id": "4",
+          "size": 3899496,
+          "time": 1742187564
+        },
+        {
+          "segment_id": "5",
+          "size": 5596760,
+          "time": 1742187574
+        }
+      ]
+    },
+    "BruceLee": {
+      "current_watchers": 1,
+      "peak_watchers": 3,
+      "peak_time": 1742185352,
+      "total_watch_time": 0,
+      "session_count": 4,
+      "total_segments": 119,
+      "watchlist": {},
+      "segment_history": [
+        {
+          "segment_id": "20",
+          "size": 4524032,
+          "time": 1742185432
+        },
+        {
+          "segment_id": "21",
+          "size": 1495916,
+          "time": 1742185434
+        },
+        {
+          "segment_id": "22",
+          "size": 7852572,
+          "time": 1742185444
+        },
+        {
+          "segment_id": "23",
+          "size": 4500344,
+          "time": 1742185450
+        },
+        {
+          "segment_id": "24",
+          "size": 904092,
+          "time": 1742185452
+        },
+        {
+          "segment_id": "25",
+          "size": 3423668,
+          "time": 1742185458
+        },
+        {
+          "segment_id": "26",
+          "size": 4225488,
+          "time": 1742185466
+        },
+        {
+          "segment_id": "27",
+          "size": 2326124,
+          "time": 1742185468
+        },
+        {
+          "segment_id": "28",
+          "size": 3558840,
+          "time": 1742185472
+        },
+        {
+          "segment_id": "29",
+          "size": 1917788,
+          "time": 1742185474
+        },
+        {
+          "segment_id": "30",
+          "size": 2472388,
+          "time": 1742185478
+        },
+        {
+          "segment_id": "31",
+          "size": 1365632,
+          "time": 1742185480
+        },
+        {
+          "segment_id": "32",
+          "size": 4105168,
+          "time": 1742185484
+        },
+        {
+          "segment_id": "33",
+          "size": 7540304,
+          "time": 1742185494
+        },
+        {
+          "segment_id": "34",
+          "size": 5366648,
+          "time": 1742185505
+        },
+        {
+          "segment_id": "35",
+          "size": 4103476,
+          "time": 1742185515
+        },
+        {
+          "segment_id": "0",
+          "size": 2521456,
+          "time": 1742185785
+        },
+        {
+          "segment_id": "1",
+          "size": 1391012,
+          "time": 1742185789
+        },
+        {
+          "segment_id": "2",
+          "size": 1601384,
+          "time": 1742185793
+        },
+        {
+          "segment_id": "3",
+          "size": 1093032,
+          "time": 1742185795
+        },
+        {
+          "segment_id": "4",
+          "size": 3503004,
+          "time": 1742185805
+        },
+        {
+          "segment_id": "5",
+          "size": 375812,
+          "time": 1742185807
+        },
+        {
+          "segment_id": "6",
+          "size": 596900,
+          "time": 1742185811
+        },
+        {
+          "segment_id": "7",
+          "size": 620024,
+          "time": 1742185813
+        },
+        {
+          "segment_id": "8",
+          "size": 399124,
+          "time": 1742185815
+        },
+        {
+          "segment_id": "9",
+          "size": 1218428,
+          "time": 1742185819
+        },
+        {
+          "segment_id": "10",
+          "size": 1990356,
+          "time": 1742185827
+        },
+        {
+          "segment_id": "11",
+          "size": 1651204,
+          "time": 1742185829
+        },
+        {
+          "segment_id": "12",
+          "size": 623220,
+          "time": 1742185831
+        },
+        {
+          "segment_id": "13",
+          "size": 1432748,
+          "time": 1742185833
+        },
+        {
+          "segment_id": "14",
+          "size": 2042620,
+          "time": 1742185837
+        },
+        {
+          "segment_id": "15",
+          "size": 2542700,
+          "time": 1742185841
+        },
+        {
+          "segment_id": "16",
+          "size": 9185304,
+          "time": 1742185853
+        },
+        {
+          "segment_id": "17",
+          "size": 4509180,
+          "time": 1742185859
+        },
+        {
+          "segment_id": "18",
+          "size": 4705264,
+          "time": 1742185869
+        },
+        {
+          "segment_id": "20",
+          "size": 1276708,
+          "time": 1742185873
+        },
+        {
+          "segment_id": "21",
+          "size": 1021592,
+          "time": 1742185875
+        },
+        {
+          "segment_id": "22",
+          "size": 4618784,
+          "time": 1742185885
+        },
+        {
+          "segment_id": "23",
+          "size": 1780736,
+          "time": 1742185889
+        },
+        {
+          "segment_id": "24",
+          "size": 1169172,
+          "time": 1742185891
+        },
+        {
+          "segment_id": "25",
+          "size": 5781000,
+          "time": 1742185901
+        },
+        {
+          "segment_id": "26",
+          "size": 2834852,
+          "time": 1742185907
+        },
+        {
+          "segment_id": "27",
+          "size": 1770020,
+          "time": 1742185909
+        },
+        {
+          "segment_id": "28",
+          "size": 908228,
+          "time": 1742185911
+        },
+        {
+          "segment_id": "29",
+          "size": 2326312,
+          "time": 1742185913
+        },
+        {
+          "segment_id": "30",
+          "size": 2410536,
+          "time": 1742185919
+        },
+        {
+          "segment_id": "31",
+          "size": 4969216,
+          "time": 1742185925
+        },
+        {
+          "segment_id": "32",
+          "size": 2131356,
+          "time": 1742185929
+        },
+        {
+          "segment_id": "33",
+          "size": 3108204,
+          "time": 1742185931
+        },
+        {
+          "segment_id": "34",
+          "size": 5820104,
+          "time": 1742185939
+        },
+        {
+          "segment_id": "0",
+          "size": 2521456,
+          "time": 1742187154
+        },
+        {
+          "segment_id": "1",
+          "size": 1391012,
+          "time": 1742187158
+        },
+        {
+          "segment_id": "2",
+          "size": 1601384,
+          "time": 1742187164
+        },
+        {
+          "segment_id": "3",
+          "size": 1093032,
+          "time": 1742187166
+        },
+        {
+          "segment_id": "4",
+          "size": 3503004,
+          "time": 1742187176
+        },
+        {
+          "segment_id": "5",
+          "size": 375812,
+          "time": 1742187178
+        },
+        {
+          "segment_id": "6",
+          "size": 596900,
+          "time": 1742187180
+        },
+        {
+          "segment_id": "8",
+          "size": 399124,
+          "time": 1742187184
+        },
+        {
+          "segment_id": "9",
+          "size": 1218428,
+          "time": 1742187190
+        },
+        {
+          "segment_id": "10",
+          "size": 1990356,
+          "time": 1742187196
+        },
+        {
+          "segment_id": "11",
+          "size": 1651204,
+          "time": 1742187200
+        },
+        {
+          "segment_id": "12",
+          "size": 623220,
+          "time": 1742187202
+        },
+        {
+          "segment_id": "13",
+          "size": 1432748,
+          "time": 1742187204
+        },
+        {
+          "segment_id": "14",
+          "size": 2042620,
+          "time": 1742187206
+        },
+        {
+          "segment_id": "15",
+          "size": 2542700,
+          "time": 1742187210
+        },
+        {
+          "segment_id": "16",
+          "size": 9185304,
+          "time": 1742187224
+        },
+        {
+          "segment_id": "17",
+          "size": 4509180,
+          "time": 1742187230
+        },
+        {
+          "segment_id": "18",
+          "size": 4705264,
+          "time": 1742187238
+        },
+        {
+          "segment_id": "19",
+          "size": 2269160,
+          "time": 1742187242
+        },
+        {
+          "segment_id": "20",
+          "size": 1276708,
+          "time": 1742187244
+        },
+        {
+          "segment_id": "21",
+          "size": 1021592,
+          "time": 1742187246
+        },
+        {
+          "segment_id": "22",
+          "size": 4618784,
+          "time": 1742187256
+        },
+        {
+          "segment_id": "23",
+          "size": 1780736,
+          "time": 1742187260
+        },
+        {
+          "segment_id": "24",
+          "size": 1169172,
+          "time": 1742187262
+        },
+        {
+          "segment_id": "25",
+          "size": 5781000,
+          "time": 1742187272
+        },
+        {
+          "segment_id": "26",
+          "size": 2834852,
+          "time": 1742187278
+        },
+        {
+          "segment_id": "27",
+          "size": 1770020,
+          "time": 1742187280
+        },
+        {
+          "segment_id": "28",
+          "size": 908228,
+          "time": 1742187282
+        },
+        {
+          "segment_id": "29",
+          "size": 2326312,
+          "time": 1742187284
+        },
+        {
+          "segment_id": "30",
+          "size": 2410536,
+          "time": 1742187290
+        },
+        {
+          "segment_id": "31",
+          "size": 4969216,
+          "time": 1742187296
+        },
+        {
+          "segment_id": "32",
+          "size": 2131356,
+          "time": 1742187298
+        },
+        {
+          "segment_id": "33",
+          "size": 3108204,
+          "time": 1742187302
+        },
+        {
+          "segment_id": "35",
+          "size": 1036068,
+          "time": 1742187310
+        },
+        {
+          "segment_id": "0",
+          "size": 2521456,
+          "time": 1742187510
+        },
+        {
+          "segment_id": "1",
+          "size": 1391012,
+          "time": 1742187514
+        },
+        {
+          "segment_id": "2",
+          "size": 1601384,
+          "time": 1742187518
+        },
+        {
+          "segment_id": "3",
+          "size": 1093032,
+          "time": 1742187520
+        },
+        {
+          "segment_id": "4",
+          "size": 3503004,
+          "time": 1742187530
+        },
+        {
+          "segment_id": "5",
+          "size": 375812,
+          "time": 1742187532
+        },
+        {
+          "segment_id": "6",
+          "size": 596900,
+          "time": 1742187534
+        },
+        {
+          "segment_id": "7",
+          "size": 620024,
+          "time": 1742187538
+        },
+        {
+          "segment_id": "8",
+          "size": 399124,
+          "time": 1742187540
+        },
+        {
+          "segment_id": "9",
+          "size": 1218428,
+          "time": 1742187544
+        },
+        {
+          "segment_id": "10",
+          "size": 1990356,
+          "time": 1742187552
+        },
+        {
+          "segment_id": "11",
+          "size": 1651204,
+          "time": 1742187554
+        },
+        {
+          "segment_id": "12",
+          "size": 623220,
+          "time": 1742187556
+        },
+        {
+          "segment_id": "13",
+          "size": 1432748,
+          "time": 1742187558
+        },
+        {
+          "segment_id": "14",
+          "size": 2042620,
+          "time": 1742187562
+        },
+        {
+          "segment_id": "15",
+          "size": 2542700,
+          "time": 1742187566
+        }
+      ]
+    },
+    "western": {
+      "current_watchers": 0,
+      "peak_watchers": 3,
+      "peak_time": 1742185353,
+      "total_watch_time": 0,
+      "session_count": 6,
+      "total_segments": 119,
+      "watchlist": {},
+      "segment_history": [
+        {
+          "segment_id": "20",
+          "size": 1377100,
+          "time": 1742185439
+        },
+        {
+          "segment_id": "21",
+          "size": 2345300,
+          "time": 1742185445
+        },
+        {
+          "segment_id": "22",
+          "size": 676612,
+          "time": 1742185447
+        },
+        {
+          "segment_id": "23",
+          "size": 2576540,
+          "time": 1742185457
+        },
+        {
+          "segment_id": "24",
+          "size": 2001636,
+          "time": 1742185463
+        },
+        {
+          "segment_id": "25",
+          "size": 3527068,
+          "time": 1742185469
+        },
+        {
+          "segment_id": "26",
+          "size": 1287048,
+          "time": 1742185473
+        },
+        {
+          "segment_id": "27",
+          "size": 3602268,
+          "time": 1742185481
+        },
+        {
+          "segment_id": "28",
+          "size": 2965136,
+          "time": 1742185489
+        },
+        {
+          "segment_id": "29",
+          "size": 2938816,
+          "time": 1742185493
+        },
+        {
+          "segment_id": "30",
+          "size": 1482944,
+          "time": 1742185495
+        },
+        {
+          "segment_id": "31",
+          "size": 3425924,
+          "time": 1742185504
+        },
+        {
+          "segment_id": "33",
+          "size": 1344388,
+          "time": 1742185506
+        },
+        {
+          "segment_id": "35",
+          "size": 872320,
+          "time": 1742185508
+        },
+        {
+          "segment_id": "37",
+          "size": 501772,
+          "time": 1742185510
+        },
+        {
+          "segment_id": "38",
+          "size": 1213352,
+          "time": 1742185512
+        },
+        {
+          "segment_id": "39",
+          "size": 1587096,
+          "time": 1742185514
+        },
+        {
+          "segment_id": "40",
+          "size": 1756672,
+          "time": 1742185516
+        },
+        {
+          "segment_id": "41",
+          "size": 3586852,
+          "time": 1742185526
+        },
+        {
+          "segment_id": "42",
+          "size": 262824,
+          "time": 1742185530
+        },
+        {
+          "segment_id": "43",
+          "size": 4785540,
+          "time": 1742185540
+        },
+        {
+          "segment_id": "44",
+          "size": 4013424,
+          "time": 1742185550
+        },
+        {
+          "segment_id": "45",
+          "size": 2031340,
+          "time": 1742185554
+        },
+        {
+          "segment_id": "46",
+          "size": 1517160,
+          "time": 1742185560
+        },
+        {
+          "segment_id": "47",
+          "size": 3824672,
+          "time": 1742185568
+        },
+        {
+          "segment_id": "48",
+          "size": 885856,
+          "time": 1742185572
+        },
+        {
+          "segment_id": "61",
+          "size": 1990656,
+          "time": 1742185646
+        },
+        {
+          "segment_id": "0",
+          "size": 1589164,
+          "time": 1742185765
+        },
+        {
+          "segment_id": "1",
+          "size": 123516,
+          "time": 1742185767
+        },
+        {
+          "segment_id": "2",
+          "size": 2387976,
+          "time": 1742185775
+        },
+        {
+          "segment_id": "3",
+          "size": 667776,
+          "time": 1742185777
+        },
+        {
+          "segment_id": "4",
+          "size": 713272,
+          "time": 1742185779
+        },
+        {
+          "segment_id": "6",
+          "size": 2906292,
+          "time": 1742185789
+        },
+        {
+          "segment_id": "7",
+          "size": 920824,
+          "time": 1742185791
+        },
+        {
+          "segment_id": "8",
+          "size": 6255512,
+          "time": 1742185801
+        },
+        {
+          "segment_id": "9",
+          "size": 1872104,
+          "time": 1742185803
+        },
+        {
+          "segment_id": "11",
+          "size": 1022156,
+          "time": 1742185807
+        },
+        {
+          "segment_id": "12",
+          "size": 993392,
+          "time": 1742185809
+        },
+        {
+          "segment_id": "13",
+          "size": 2499836,
+          "time": 1742185811
+        },
+        {
+          "segment_id": "14",
+          "size": 3104632,
+          "time": 1742185821
+        },
+        {
+          "segment_id": "15",
+          "size": 1091528,
+          "time": 1742185825
+        },
+        {
+          "segment_id": "17",
+          "size": 1105816,
+          "time": 1742185827
+        },
+        {
+          "segment_id": "18",
+          "size": 1113336,
+          "time": 1742185831
+        },
+        {
+          "segment_id": "19",
+          "size": 3734056,
+          "time": 1742185839
+        },
+        {
+          "segment_id": "20",
+          "size": 1377100,
+          "time": 1742185843
+        },
+        {
+          "segment_id": "21",
+          "size": 2345300,
+          "time": 1742185847
+        },
+        {
+          "segment_id": "22",
+          "size": 676612,
+          "time": 1742185851
+        },
+        {
+          "segment_id": "23",
+          "size": 2576540,
+          "time": 1742185861
+        },
+        {
+          "segment_id": "24",
+          "size": 2001636,
+          "time": 1742185869
+        },
+        {
+          "segment_id": "25",
+          "size": 3527068,
+          "time": 1742185873
+        },
+        {
+          "segment_id": "26",
+          "size": 1287048,
+          "time": 1742185877
+        },
+        {
+          "segment_id": "27",
+          "size": 3602268,
+          "time": 1742185885
+        },
+        {
+          "segment_id": "28",
+          "size": 2965136,
+          "time": 1742185892
+        },
+        {
+          "segment_id": "29",
+          "size": 2938816,
+          "time": 1742185898
+        },
+        {
+          "segment_id": "30",
+          "size": 1482944,
+          "time": 1742185900
+        },
+        {
+          "segment_id": "32",
+          "size": 1692188,
+          "time": 1742185908
+        },
+        {
+          "segment_id": "34",
+          "size": 781704,
+          "time": 1742185910
+        },
+        {
+          "segment_id": "36",
+          "size": 1710800,
+          "time": 1742185912
+        },
+        {
+          "segment_id": "37",
+          "size": 501772,
+          "time": 1742185914
+        },
+        {
+          "segment_id": "39",
+          "size": 1587096,
+          "time": 1742185916
+        },
+        {
+          "segment_id": "40",
+          "size": 1756672,
+          "time": 1742185920
+        },
+        {
+          "segment_id": "0",
+          "size": 1589164,
+          "time": 1742187181
+        },
+        {
+          "segment_id": "1",
+          "size": 123516,
+          "time": 1742187183
+        },
+        {
+          "segment_id": "2",
+          "size": 2387976,
+          "time": 1742187191
+        },
+        {
+          "segment_id": "3",
+          "size": 667776,
+          "time": 1742187193
+        },
+        {
+          "segment_id": "4",
+          "size": 713272,
+          "time": 1742187195
+        },
+        {
+          "segment_id": "5",
+          "size": 780764,
+          "time": 1742187199
+        },
+        {
+          "segment_id": "6",
+          "size": 2906292,
+          "time": 1742187205
+        },
+        {
+          "segment_id": "7",
+          "size": 920824,
+          "time": 1742187207
+        },
+        {
+          "segment_id": "8",
+          "size": 6255512,
+          "time": 1742187217
+        },
+        {
+          "segment_id": "9",
+          "size": 1872104,
+          "time": 1742187219
+        },
+        {
+          "segment_id": "10",
+          "size": 1419024,
+          "time": 1742187223
+        },
+        {
+          "segment_id": "12",
+          "size": 993392,
+          "time": 1742187225
+        },
+        {
+          "segment_id": "13",
+          "size": 2499836,
+          "time": 1742187227
+        },
+        {
+          "segment_id": "14",
+          "size": 3104632,
+          "time": 1742187237
+        },
+        {
+          "segment_id": "15",
+          "size": 1091528,
+          "time": 1742187241
+        },
+        {
+          "segment_id": "16",
+          "size": 887736,
+          "time": 1742187243
+        },
+        {
+          "segment_id": "17",
+          "size": 1105816,
+          "time": 1742187245
+        },
+        {
+          "segment_id": "18",
+          "size": 1113336,
+          "time": 1742187247
+        },
+        {
+          "segment_id": "19",
+          "size": 3734056,
+          "time": 1742187255
+        },
+        {
+          "segment_id": "20",
+          "size": 1377100,
+          "time": 1742187259
+        },
+        {
+          "segment_id": "21",
+          "size": 2345300,
+          "time": 1742187265
+        },
+        {
+          "segment_id": "22",
+          "size": 676612,
+          "time": 1742187267
+        },
+        {
+          "segment_id": "23",
+          "size": 2576540,
+          "time": 1742187278
+        },
+        {
+          "segment_id": "24",
+          "size": 2001636,
+          "time": 1742187284
+        },
+        {
+          "segment_id": "25",
+          "size": 3527068,
+          "time": 1742187290
+        },
+        {
+          "segment_id": "26",
+          "size": 1287048,
+          "time": 1742187294
+        },
+        {
+          "segment_id": "27",
+          "size": 3602268,
+          "time": 1742187302
+        },
+        {
+          "segment_id": "28",
+          "size": 2965136,
+          "time": 1742187310
+        },
+        {
+          "segment_id": "29",
+          "size": 2938816,
+          "time": 1742187314
+        },
+        {
+          "segment_id": "30",
+          "size": 1482944,
+          "time": 1742187316
+        },
+        {
+          "segment_id": "32",
+          "size": 1692188,
+          "time": 1742187324
+        },
+        {
+          "segment_id": "34",
+          "size": 781704,
+          "time": 1742187326
+        },
+        {
+          "segment_id": "0",
+          "size": 1589164,
+          "time": 1742187552
+        },
+        {
+          "segment_id": "1",
+          "size": 123516,
+          "time": 1742187554
+        },
+        {
+          "segment_id": "2",
+          "size": 2387976,
+          "time": 1742187562
+        },
+        {
+          "segment_id": "3",
+          "size": 667776,
+          "time": 1742187564
+        },
+        {
+          "segment_id": "4",
+          "size": 713272,
+          "time": 1742187566
+        },
+        {
+          "segment_id": "5",
+          "size": 780764,
+          "time": 1742187570
+        },
+        {
+          "segment_id": "6",
+          "size": 2906292,
+          "time": 1742187574
+        }
+      ]
+    },
+    "belmondo": {
+      "current_watchers": 0,
       "peak_watchers": 1,
-      "peak_time": 1742125851,
+      "peak_time": 1742185355,
       "total_watch_time": 0,
       "session_count": 1,
-      "total_segments": 0,
-      "watchlist": {}
+      "total_segments": 117,
+      "watchlist": {},
+      "segment_history": [
+        {
+          "segment_id": "17",
+          "size": 5475124,
+          "time": 1742185467
+        },
+        {
+          "segment_id": "18",
+          "size": 632808,
+          "time": 1742185471
+        },
+        {
+          "segment_id": "19",
+          "size": 1504940,
+          "time": 1742185475
+        },
+        {
+          "segment_id": "20",
+          "size": 4640592,
+          "time": 1742185485
+        },
+        {
+          "segment_id": "21",
+          "size": 3244128,
+          "time": 1742185491
+        },
+        {
+          "segment_id": "22",
+          "size": 2056720,
+          "time": 1742185497
+        },
+        {
+          "segment_id": "23",
+          "size": 1723772,
+          "time": 1742185501
+        },
+        {
+          "segment_id": "25",
+          "size": 967260,
+          "time": 1742185509
+        },
+        {
+          "segment_id": "26",
+          "size": 1569424,
+          "time": 1742185513
+        },
+        {
+          "segment_id": "27",
+          "size": 1882256,
+          "time": 1742185517
+        },
+        {
+          "segment_id": "28",
+          "size": 3428368,
+          "time": 1742185523
+        },
+        {
+          "segment_id": "29",
+          "size": 3857948,
+          "time": 1742185529
+        },
+        {
+          "segment_id": "30",
+          "size": 8320692,
+          "time": 1742185539
+        },
+        {
+          "segment_id": "31",
+          "size": 8746512,
+          "time": 1742185549
+        },
+        {
+          "segment_id": "32",
+          "size": 1674516,
+          "time": 1742185551
+        },
+        {
+          "segment_id": "33",
+          "size": 1685608,
+          "time": 1742185555
+        },
+        {
+          "segment_id": "34",
+          "size": 386716,
+          "time": 1742185557
+        },
+        {
+          "segment_id": "35",
+          "size": 1215420,
+          "time": 1742185561
+        },
+        {
+          "segment_id": "37",
+          "size": 505532,
+          "time": 1742185563
+        },
+        {
+          "segment_id": "0",
+          "size": 2836168,
+          "time": 1742185786
+        },
+        {
+          "segment_id": "1",
+          "size": 1055432,
+          "time": 1742185790
+        },
+        {
+          "segment_id": "2",
+          "size": 1721328,
+          "time": 1742185794
+        },
+        {
+          "segment_id": "3",
+          "size": 9225912,
+          "time": 1742185804
+        },
+        {
+          "segment_id": "4",
+          "size": 7305492,
+          "time": 1742185812
+        },
+        {
+          "segment_id": "5",
+          "size": 9542692,
+          "time": 1742185822
+        },
+        {
+          "segment_id": "6",
+          "size": 9449256,
+          "time": 1742185830
+        },
+        {
+          "segment_id": "7",
+          "size": 3990300,
+          "time": 1742185836
+        },
+        {
+          "segment_id": "8",
+          "size": 6011488,
+          "time": 1742185842
+        },
+        {
+          "segment_id": "9",
+          "size": 2106352,
+          "time": 1742185846
+        },
+        {
+          "segment_id": "10",
+          "size": 3061392,
+          "time": 1742185850
+        },
+        {
+          "segment_id": "11",
+          "size": 5503324,
+          "time": 1742185860
+        },
+        {
+          "segment_id": "12",
+          "size": 3024732,
+          "time": 1742185864
+        },
+        {
+          "segment_id": "13",
+          "size": 507788,
+          "time": 1742185868
+        },
+        {
+          "segment_id": "14",
+          "size": 6047208,
+          "time": 1742185878
+        },
+        {
+          "segment_id": "15",
+          "size": 4865628,
+          "time": 1742185882
+        },
+        {
+          "segment_id": "16",
+          "size": 307944,
+          "time": 1742185884
+        },
+        {
+          "segment_id": "17",
+          "size": 5475124,
+          "time": 1742185890
+        },
+        {
+          "segment_id": "18",
+          "size": 632808,
+          "time": 1742185894
+        },
+        {
+          "segment_id": "19",
+          "size": 1504940,
+          "time": 1742185896
+        },
+        {
+          "segment_id": "20",
+          "size": 4640592,
+          "time": 1742185906
+        },
+        {
+          "segment_id": "21",
+          "size": 3244128,
+          "time": 1742185912
+        },
+        {
+          "segment_id": "22",
+          "size": 2056720,
+          "time": 1742185918
+        },
+        {
+          "segment_id": "23",
+          "size": 1723772,
+          "time": 1742185922
+        },
+        {
+          "segment_id": "24",
+          "size": 4014740,
+          "time": 1742185930
+        },
+        {
+          "segment_id": "25",
+          "size": 967260,
+          "time": 1742185932
+        },
+        {
+          "segment_id": "26",
+          "size": 1569424,
+          "time": 1742185934
+        },
+        {
+          "segment_id": "27",
+          "size": 1882256,
+          "time": 1742185938
+        },
+        {
+          "segment_id": "28",
+          "size": 3428368,
+          "time": 1742185944
+        },
+        {
+          "segment_id": "29",
+          "size": 3857948,
+          "time": 1742185950
+        },
+        {
+          "segment_id": "30",
+          "size": 8320692,
+          "time": 1742185960
+        },
+        {
+          "segment_id": "31",
+          "size": 8746512,
+          "time": 1742185970
+        },
+        {
+          "segment_id": "32",
+          "size": 1674516,
+          "time": 1742185972
+        },
+        {
+          "segment_id": "33",
+          "size": 1685608,
+          "time": 1742185976
+        },
+        {
+          "segment_id": "34",
+          "size": 386716,
+          "time": 1742185978
+        },
+        {
+          "segment_id": "0",
+          "size": 2836168,
+          "time": 1742187157
+        },
+        {
+          "segment_id": "1",
+          "size": 1055432,
+          "time": 1742187161
+        },
+        {
+          "segment_id": "2",
+          "size": 1721328,
+          "time": 1742187165
+        },
+        {
+          "segment_id": "3",
+          "size": 9225912,
+          "time": 1742187175
+        },
+        {
+          "segment_id": "4",
+          "size": 7305492,
+          "time": 1742187183
+        },
+        {
+          "segment_id": "5",
+          "size": 9542692,
+          "time": 1742187193
+        },
+        {
+          "segment_id": "6",
+          "size": 9449256,
+          "time": 1742187201
+        },
+        {
+          "segment_id": "7",
+          "size": 3990300,
+          "time": 1742187207
+        },
+        {
+          "segment_id": "8",
+          "size": 6011488,
+          "time": 1742187213
+        },
+        {
+          "segment_id": "9",
+          "size": 2106352,
+          "time": 1742187217
+        },
+        {
+          "segment_id": "10",
+          "size": 3061392,
+          "time": 1742187221
+        },
+        {
+          "segment_id": "11",
+          "size": 5503324,
+          "time": 1742187231
+        },
+        {
+          "segment_id": "12",
+          "size": 3024732,
+          "time": 1742187235
+        },
+        {
+          "segment_id": "13",
+          "size": 507788,
+          "time": 1742187239
+        },
+        {
+          "segment_id": "14",
+          "size": 6047208,
+          "time": 1742187249
+        },
+        {
+          "segment_id": "15",
+          "size": 4865628,
+          "time": 1742187253
+        },
+        {
+          "segment_id": "16",
+          "size": 307944,
+          "time": 1742187255
+        },
+        {
+          "segment_id": "17",
+          "size": 5475124,
+          "time": 1742187261
+        },
+        {
+          "segment_id": "18",
+          "size": 632808,
+          "time": 1742187263
+        },
+        {
+          "segment_id": "19",
+          "size": 1504940,
+          "time": 1742187267
+        },
+        {
+          "segment_id": "20",
+          "size": 4640592,
+          "time": 1742187277
+        },
+        {
+          "segment_id": "21",
+          "size": 3244128,
+          "time": 1742187283
+        },
+        {
+          "segment_id": "22",
+          "size": 2056720,
+          "time": 1742187289
+        },
+        {
+          "segment_id": "23",
+          "size": 1723772,
+          "time": 1742187293
+        },
+        {
+          "segment_id": "24",
+          "size": 4014740,
+          "time": 1742187301
+        },
+        {
+          "segment_id": "25",
+          "size": 967260,
+          "time": 1742187303
+        },
+        {
+          "segment_id": "26",
+          "size": 1569424,
+          "time": 1742187305
+        },
+        {
+          "segment_id": "27",
+          "size": 1882256,
+          "time": 1742187309
+        },
+        {
+          "segment_id": "28",
+          "size": 3428368,
+          "time": 1742187315
+        },
+        {
+          "segment_id": "29",
+          "size": 3857948,
+          "time": 1742187321
+        },
+        {
+          "segment_id": "30",
+          "size": 8320692,
+          "time": 1742187331
+        },
+        {
+          "segment_id": "31",
+          "size": 8746512,
+          "time": 1742187341
+        },
+        {
+          "segment_id": "32",
+          "size": 1674516,
+          "time": 1742187343
+        },
+        {
+          "segment_id": "33",
+          "size": 1685608,
+          "time": 1742187347
+        },
+        {
+          "segment_id": "34",
+          "size": 386716,
+          "time": 1742187349
+        },
+        {
+          "segment_id": "0",
+          "size": 2836168,
+          "time": 1742187513
+        },
+        {
+          "segment_id": "1",
+          "size": 1055432,
+          "time": 1742187515
+        },
+        {
+          "segment_id": "2",
+          "size": 1721328,
+          "time": 1742187521
+        },
+        {
+          "segment_id": "3",
+          "size": 9225912,
+          "time": 1742187531
+        },
+        {
+          "segment_id": "4",
+          "size": 7305492,
+          "time": 1742187537
+        },
+        {
+          "segment_id": "5",
+          "size": 9542692,
+          "time": 1742187547
+        },
+        {
+          "segment_id": "6",
+          "size": 9449256,
+          "time": 1742187557
+        },
+        {
+          "segment_id": "7",
+          "size": 3990300,
+          "time": 1742187561
+        },
+        {
+          "segment_id": "8",
+          "size": 6011488,
+          "time": 1742187569
+        },
+        {
+          "segment_id": "9",
+          "size": 2106352,
+          "time": 1742187571
+        },
+        {
+          "segment_id": "10",
+          "size": 2621440,
+          "time": 1742187575
+        }
+      ]
+    },
+    "fela": {
+      "current_watchers": 0,
+      "peak_watchers": 3,
+      "peak_time": 1742185357,
+      "total_watch_time": 0,
+      "session_count": 3,
+      "total_segments": 72,
+      "watchlist": {},
+      "segment_history": [
+        {
+          "segment_id": "0",
+          "size": 2471072,
+          "time": 1742185366
+        },
+        {
+          "segment_id": "2",
+          "size": 1548368,
+          "time": 1742185382
+        },
+        {
+          "segment_id": "3",
+          "size": 1870036,
+          "time": 1742185388
+        },
+        {
+          "segment_id": "4",
+          "size": 2834852,
+          "time": 1742185398
+        },
+        {
+          "segment_id": "5",
+          "size": 2419936,
+          "time": 1742185408
+        },
+        {
+          "segment_id": "6",
+          "size": 2627864,
+          "time": 1742185418
+        },
+        {
+          "segment_id": "7",
+          "size": 2693476,
+          "time": 1742185428
+        },
+        {
+          "segment_id": "8",
+          "size": 2734460,
+          "time": 1742185438
+        },
+        {
+          "segment_id": "9",
+          "size": 1167480,
+          "time": 1742185442
+        },
+        {
+          "segment_id": "10",
+          "size": 696728,
+          "time": 1742185444
+        },
+        {
+          "segment_id": "11",
+          "size": 833216,
+          "time": 1742185448
+        },
+        {
+          "segment_id": "12",
+          "size": 2003516,
+          "time": 1742185452
+        },
+        {
+          "segment_id": "13",
+          "size": 2443248,
+          "time": 1742185460
+        },
+        {
+          "segment_id": "14",
+          "size": 2742168,
+          "time": 1742185470
+        },
+        {
+          "segment_id": "15",
+          "size": 1446660,
+          "time": 1742185478
+        },
+        {
+          "segment_id": "16",
+          "size": 202852,
+          "time": 1742185480
+        },
+        {
+          "segment_id": "17",
+          "size": 3136780,
+          "time": 1742185490
+        },
+        {
+          "segment_id": "18",
+          "size": 2183432,
+          "time": 1742185498
+        },
+        {
+          "segment_id": "19",
+          "size": 1690496,
+          "time": 1742185508
+        },
+        {
+          "segment_id": "20",
+          "size": 1855936,
+          "time": 1742185514
+        },
+        {
+          "segment_id": "21",
+          "size": 2108984,
+          "time": 1742185520
+        },
+        {
+          "segment_id": "22",
+          "size": 2512620,
+          "time": 1742185526
+        },
+        {
+          "segment_id": "23",
+          "size": 714400,
+          "time": 1742185530
+        },
+        {
+          "segment_id": "24",
+          "size": 1168796,
+          "time": 1742185534
+        },
+        {
+          "segment_id": "25",
+          "size": 1049980,
+          "time": 1742185538
+        },
+        {
+          "segment_id": "26",
+          "size": 1259412,
+          "time": 1742185542
+        },
+        {
+          "segment_id": "27",
+          "size": 737148,
+          "time": 1742185546
+        },
+        {
+          "segment_id": "28",
+          "size": 2016864,
+          "time": 1742185554
+        },
+        {
+          "segment_id": "29",
+          "size": 1816644,
+          "time": 1742185558
+        },
+        {
+          "segment_id": "30",
+          "size": 1293252,
+          "time": 1742185564
+        },
+        {
+          "segment_id": "31",
+          "size": 3089968,
+          "time": 1742185574
+        },
+        {
+          "segment_id": "32",
+          "size": 1643684,
+          "time": 1742185580
+        },
+        {
+          "segment_id": "33",
+          "size": 1446848,
+          "time": 1742185586
+        },
+        {
+          "segment_id": "34",
+          "size": 1586156,
+          "time": 1742185590
+        },
+        {
+          "segment_id": "35",
+          "size": 1896168,
+          "time": 1742185596
+        },
+        {
+          "segment_id": "0",
+          "size": 2770744,
+          "time": 1742187164
+        },
+        {
+          "segment_id": "1",
+          "size": 2950472,
+          "time": 1742187174
+        },
+        {
+          "segment_id": "2",
+          "size": 155648,
+          "time": 1742187182
+        },
+        {
+          "segment_id": "3",
+          "size": 1258848,
+          "time": 1742187192
+        },
+        {
+          "segment_id": "4",
+          "size": 2089056,
+          "time": 1742187202
+        },
+        {
+          "segment_id": "5",
+          "size": 2511868,
+          "time": 1742187212
+        },
+        {
+          "segment_id": "6",
+          "size": 2971528,
+          "time": 1742187222
+        },
+        {
+          "segment_id": "7",
+          "size": 2880536,
+          "time": 1742187232
+        },
+        {
+          "segment_id": "8",
+          "size": 3294512,
+          "time": 1742187242
+        },
+        {
+          "segment_id": "9",
+          "size": 3394152,
+          "time": 1742187252
+        },
+        {
+          "segment_id": "10",
+          "size": 2655688,
+          "time": 1742187262
+        },
+        {
+          "segment_id": "11",
+          "size": 3455252,
+          "time": 1742187272
+        },
+        {
+          "segment_id": "12",
+          "size": 2238140,
+          "time": 1742187282
+        },
+        {
+          "segment_id": "13",
+          "size": 3339820,
+          "time": 1742187292
+        },
+        {
+          "segment_id": "14",
+          "size": 2552664,
+          "time": 1742187302
+        },
+        {
+          "segment_id": "15",
+          "size": 2823196,
+          "time": 1742187312
+        },
+        {
+          "segment_id": "16",
+          "size": 2963632,
+          "time": 1742187322
+        },
+        {
+          "segment_id": "17",
+          "size": 2172528,
+          "time": 1742187332
+        },
+        {
+          "segment_id": "18",
+          "size": 2865120,
+          "time": 1742187342
+        },
+        {
+          "segment_id": "19",
+          "size": 2631624,
+          "time": 1742187352
+        },
+        {
+          "segment_id": "20",
+          "size": 3631032,
+          "time": 1742187362
+        },
+        {
+          "segment_id": "21",
+          "size": 2792176,
+          "time": 1742187372
+        },
+        {
+          "segment_id": "22",
+          "size": 3064776,
+          "time": 1742187383
+        },
+        {
+          "segment_id": "23",
+          "size": 2441180,
+          "time": 1742187393
+        },
+        {
+          "segment_id": "24",
+          "size": 2466560,
+          "time": 1742187403
+        },
+        {
+          "segment_id": "25",
+          "size": 2547588,
+          "time": 1742187413
+        },
+        {
+          "segment_id": "26",
+          "size": 2970588,
+          "time": 1742187423
+        },
+        {
+          "segment_id": "27",
+          "size": 3482324,
+          "time": 1742187433
+        },
+        {
+          "segment_id": "28",
+          "size": 2113120,
+          "time": 1742187443
+        },
+        {
+          "segment_id": "29",
+          "size": 2408092,
+          "time": 1742187453
+        },
+        {
+          "segment_id": "0",
+          "size": 2471072,
+          "time": 1742187519
+        },
+        {
+          "segment_id": "1",
+          "size": 2814172,
+          "time": 1742187529
+        },
+        {
+          "segment_id": "2",
+          "size": 1548368,
+          "time": 1742187533
+        },
+        {
+          "segment_id": "3",
+          "size": 1870036,
+          "time": 1742187541
+        },
+        {
+          "segment_id": "4",
+          "size": 2834852,
+          "time": 1742187551
+        },
+        {
+          "segment_id": "5",
+          "size": 2419936,
+          "time": 1742187561
+        },
+        {
+          "segment_id": "6",
+          "size": 2627864,
+          "time": 1742187569
+        }
+      ]
+    },
+    "vandamme": {
+      "current_watchers": 0,
+      "peak_watchers": 3,
+      "peak_time": 1742185358,
+      "total_watch_time": 0,
+      "session_count": 3,
+      "total_segments": 79,
+      "watchlist": {},
+      "segment_history": [
+        {
+          "segment_id": "0",
+          "size": 368480,
+          "time": 1742185365
+        },
+        {
+          "segment_id": "1",
+          "size": 1021028,
+          "time": 1742185375
+        },
+        {
+          "segment_id": "3",
+          "size": 350056,
+          "time": 1742185381
+        },
+        {
+          "segment_id": "4",
+          "size": 1328408,
+          "time": 1742185385
+        },
+        {
+          "segment_id": "5",
+          "size": 1526748,
+          "time": 1742185389
+        },
+        {
+          "segment_id": "6",
+          "size": 791856,
+          "time": 1742185391
+        },
+        {
+          "segment_id": "7",
+          "size": 694660,
+          "time": 1742185393
+        },
+        {
+          "segment_id": "9",
+          "size": 4887060,
+          "time": 1742185409
+        },
+        {
+          "segment_id": "11",
+          "size": 301176,
+          "time": 1742185411
+        },
+        {
+          "segment_id": "12",
+          "size": 569076,
+          "time": 1742185413
+        },
+        {
+          "segment_id": "13",
+          "size": 1396276,
+          "time": 1742185417
+        },
+        {
+          "segment_id": "14",
+          "size": 1527876,
+          "time": 1742185421
+        },
+        {
+          "segment_id": "15",
+          "size": 1736744,
+          "time": 1742185427
+        },
+        {
+          "segment_id": "16",
+          "size": 668340,
+          "time": 1742185429
+        },
+        {
+          "segment_id": "17",
+          "size": 1491592,
+          "time": 1742185433
+        },
+        {
+          "segment_id": "18",
+          "size": 1747460,
+          "time": 1742185437
+        },
+        {
+          "segment_id": "19",
+          "size": 1687300,
+          "time": 1742185441
+        },
+        {
+          "segment_id": "20",
+          "size": 1150372,
+          "time": 1742185445
+        },
+        {
+          "segment_id": "21",
+          "size": 1116156,
+          "time": 1742185449
+        },
+        {
+          "segment_id": "22",
+          "size": 1810440,
+          "time": 1742185453
+        },
+        {
+          "segment_id": "23",
+          "size": 1396464,
+          "time": 1742185459
+        },
+        {
+          "segment_id": "24",
+          "size": 1550060,
+          "time": 1742185461
+        },
+        {
+          "segment_id": "25",
+          "size": 958800,
+          "time": 1742185465
+        },
+        {
+          "segment_id": "26",
+          "size": 2099020,
+          "time": 1742185471
+        },
+        {
+          "segment_id": "27",
+          "size": 1077428,
+          "time": 1742185475
+        },
+        {
+          "segment_id": "28",
+          "size": 986812,
+          "time": 1742185477
+        },
+        {
+          "segment_id": "29",
+          "size": 1342508,
+          "time": 1742185481
+        },
+        {
+          "segment_id": "30",
+          "size": 1715876,
+          "time": 1742185487
+        },
+        {
+          "segment_id": "31",
+          "size": 874388,
+          "time": 1742185489
+        },
+        {
+          "segment_id": "32",
+          "size": 1179136,
+          "time": 1742185493
+        },
+        {
+          "segment_id": "33",
+          "size": 1899928,
+          "time": 1742185497
+        },
+        {
+          "segment_id": "34",
+          "size": 1946928,
+          "time": 1742185501
+        },
+        {
+          "segment_id": "35",
+          "size": 2115752,
+          "time": 1742185505
+        },
+        {
+          "segment_id": "36",
+          "size": 2380644,
+          "time": 1742185509
+        },
+        {
+          "segment_id": "37",
+          "size": 1295320,
+          "time": 1742185513
+        },
+        {
+          "segment_id": "38",
+          "size": 2464304,
+          "time": 1742185517
+        },
+        {
+          "segment_id": "39",
+          "size": 1432372,
+          "time": 1742185521
+        },
+        {
+          "segment_id": "40",
+          "size": 2563192,
+          "time": 1742185525
+        },
+        {
+          "segment_id": "41",
+          "size": 2267468,
+          "time": 1742185529
+        },
+        {
+          "segment_id": "42",
+          "size": 2109172,
+          "time": 1742185535
+        },
+        {
+          "segment_id": "0",
+          "size": 368480,
+          "time": 1742187172
+        },
+        {
+          "segment_id": "1",
+          "size": 1021028,
+          "time": 1742187182
+        },
+        {
+          "segment_id": "2",
+          "size": 143068,
+          "time": 1742187186
+        },
+        {
+          "segment_id": "3",
+          "size": 350056,
+          "time": 1742187188
+        },
+        {
+          "segment_id": "4",
+          "size": 1328408,
+          "time": 1742187192
+        },
+        {
+          "segment_id": "5",
+          "size": 1526748,
+          "time": 1742187196
+        },
+        {
+          "segment_id": "6",
+          "size": 791856,
+          "time": 1742187198
+        },
+        {
+          "segment_id": "7",
+          "size": 694660,
+          "time": 1742187200
+        },
+        {
+          "segment_id": "8",
+          "size": 1879248,
+          "time": 1742187204
+        },
+        {
+          "segment_id": "10",
+          "size": 657436,
+          "time": 1742187216
+        },
+        {
+          "segment_id": "11",
+          "size": 301176,
+          "time": 1742187218
+        },
+        {
+          "segment_id": "12",
+          "size": 569076,
+          "time": 1742187220
+        },
+        {
+          "segment_id": "13",
+          "size": 1396276,
+          "time": 1742187224
+        },
+        {
+          "segment_id": "14",
+          "size": 1527876,
+          "time": 1742187228
+        },
+        {
+          "segment_id": "15",
+          "size": 1736744,
+          "time": 1742187234
+        },
+        {
+          "segment_id": "16",
+          "size": 668340,
+          "time": 1742187236
+        },
+        {
+          "segment_id": "17",
+          "size": 1491592,
+          "time": 1742187240
+        },
+        {
+          "segment_id": "18",
+          "size": 1747460,
+          "time": 1742187244
+        },
+        {
+          "segment_id": "19",
+          "size": 1687300,
+          "time": 1742187248
+        },
+        {
+          "segment_id": "20",
+          "size": 1150372,
+          "time": 1742187252
+        },
+        {
+          "segment_id": "21",
+          "size": 1116156,
+          "time": 1742187256
+        },
+        {
+          "segment_id": "22",
+          "size": 1810440,
+          "time": 1742187260
+        },
+        {
+          "segment_id": "23",
+          "size": 1396464,
+          "time": 1742187264
+        },
+        {
+          "segment_id": "24",
+          "size": 1550060,
+          "time": 1742187268
+        },
+        {
+          "segment_id": "25",
+          "size": 958800,
+          "time": 1742187270
+        },
+        {
+          "segment_id": "26",
+          "size": 2099020,
+          "time": 1742187278
+        },
+        {
+          "segment_id": "27",
+          "size": 1077428,
+          "time": 1742187280
+        },
+        {
+          "segment_id": "28",
+          "size": 986812,
+          "time": 1742187284
+        },
+        {
+          "segment_id": "29",
+          "size": 1342508,
+          "time": 1742187288
+        },
+        {
+          "segment_id": "30",
+          "size": 1715876,
+          "time": 1742187292
+        },
+        {
+          "segment_id": "31",
+          "size": 874388,
+          "time": 1742187296
+        },
+        {
+          "segment_id": "32",
+          "size": 1179136,
+          "time": 1742187298
+        },
+        {
+          "segment_id": "33",
+          "size": 1899928,
+          "time": 1742187304
+        },
+        {
+          "segment_id": "34",
+          "size": 1946928,
+          "time": 1742187308
+        },
+        {
+          "segment_id": "0",
+          "size": 2768112,
+          "time": 1742187543
+        },
+        {
+          "segment_id": "1",
+          "size": 1969488,
+          "time": 1742187551
+        },
+        {
+          "segment_id": "2",
+          "size": 286888,
+          "time": 1742187559
+        },
+        {
+          "segment_id": "3",
+          "size": 921576,
+          "time": 1742187569
+        },
+        {
+          "segment_id": "4",
+          "size": 1144732,
+          "time": 1742187577
+        }
+      ]
+    },
+    "gendarme": {
+      "current_watchers": 0,
+      "peak_watchers": 3,
+      "peak_time": 1742185361,
+      "total_watch_time": 0,
+      "session_count": 3,
+      "total_segments": 46,
+      "watchlist": {},
+      "segment_history": [
+        {
+          "segment_id": "0",
+          "size": 7109032,
+          "time": 1742185372
+        },
+        {
+          "segment_id": "1",
+          "size": 2487804,
+          "time": 1742185376
+        },
+        {
+          "segment_id": "2",
+          "size": 1021780,
+          "time": 1742185378
+        },
+        {
+          "segment_id": "4",
+          "size": 2354888,
+          "time": 1742185390
+        },
+        {
+          "segment_id": "5",
+          "size": 1739940,
+          "time": 1742185394
+        },
+        {
+          "segment_id": "6",
+          "size": 885104,
+          "time": 1742185396
+        },
+        {
+          "segment_id": "7",
+          "size": 5643760,
+          "time": 1742185406
+        },
+        {
+          "segment_id": "8",
+          "size": 5958472,
+          "time": 1742185416
+        },
+        {
+          "segment_id": "9",
+          "size": 1478808,
+          "time": 1742185418
+        },
+        {
+          "segment_id": "10",
+          "size": 4325692,
+          "time": 1742185426
+        },
+        {
+          "segment_id": "11",
+          "size": 1166916,
+          "time": 1742185428
+        },
+        {
+          "segment_id": "12",
+          "size": 922328,
+          "time": 1742185431
+        },
+        {
+          "segment_id": "13",
+          "size": 747300,
+          "time": 1742185433
+        },
+        {
+          "segment_id": "14",
+          "size": 4718988,
+          "time": 1742185443
+        },
+        {
+          "segment_id": "15",
+          "size": 668716,
+          "time": 1742185445
+        },
+        {
+          "segment_id": "16",
+          "size": 5192184,
+          "time": 1742185455
+        },
+        {
+          "segment_id": "18",
+          "size": 552532,
+          "time": 1742185457
+        },
+        {
+          "segment_id": "19",
+          "size": 1996748,
+          "time": 1742185463
+        },
+        {
+          "segment_id": "20",
+          "size": 4749068,
+          "time": 1742185469
+        },
+        {
+          "segment_id": "21",
+          "size": 3319892,
+          "time": 1742185475
+        },
+        {
+          "segment_id": "22",
+          "size": 5206660,
+          "time": 1742185485
+        },
+        {
+          "segment_id": "23",
+          "size": 4294296,
+          "time": 1742185495
+        },
+        {
+          "segment_id": "24",
+          "size": 3857384,
+          "time": 1742185505
+        },
+        {
+          "segment_id": "25",
+          "size": 3613360,
+          "time": 1742185515
+        },
+        {
+          "segment_id": "26",
+          "size": 4092760,
+          "time": 1742185525
+        },
+        {
+          "segment_id": "27",
+          "size": 3395092,
+          "time": 1742185533
+        },
+        {
+          "segment_id": "28",
+          "size": 5129204,
+          "time": 1742185543
+        },
+        {
+          "segment_id": "29",
+          "size": 5355180,
+          "time": 1742185553
+        },
+        {
+          "segment_id": "30",
+          "size": 5065472,
+          "time": 1742185563
+        },
+        {
+          "segment_id": "31",
+          "size": 6854856,
+          "time": 1742185573
+        },
+        {
+          "segment_id": "32",
+          "size": 8346448,
+          "time": 1742185583
+        },
+        {
+          "segment_id": "33",
+          "size": 8040196,
+          "time": 1742185593
+        },
+        {
+          "segment_id": "34",
+          "size": 2024948,
+          "time": 1742185595
+        },
+        {
+          "segment_id": "35",
+          "size": 6687912,
+          "time": 1742185605
+        },
+        {
+          "segment_id": "36",
+          "size": 6849968,
+          "time": 1742185615
+        },
+        {
+          "segment_id": "37",
+          "size": 8559640,
+          "time": 1742185625
+        },
+        {
+          "segment_id": "38",
+          "size": 8742940,
+          "time": 1742185635
+        },
+        {
+          "segment_id": "0",
+          "size": 1783556,
+          "time": 1742187530
+        },
+        {
+          "segment_id": "1",
+          "size": 1852364,
+          "time": 1742187540
+        },
+        {
+          "segment_id": "2",
+          "size": 270156,
+          "time": 1742187542
+        },
+        {
+          "segment_id": "3",
+          "size": 9880528,
+          "time": 1742187552
+        },
+        {
+          "segment_id": "4",
+          "size": 2988636,
+          "time": 1742187554
+        },
+        {
+          "segment_id": "5",
+          "size": 3053684,
+          "time": 1742187558
+        },
+        {
+          "segment_id": "6",
+          "size": 4157808,
+          "time": 1742187566
+        },
+        {
+          "segment_id": "7",
+          "size": 1382928,
+          "time": 1742187570
+        },
+        {
+          "segment_id": "8",
+          "size": 2295292,
+          "time": 1742187574
+        }
+      ]
+    },
+    "verite": {
+      "current_watchers": 0,
+      "peak_watchers": 1,
+      "peak_time": 1742185413,
+      "total_watch_time": 0,
+      "session_count": 1,
+      "total_segments": 35,
+      "watchlist": {},
+      "segment_history": [
+        {
+          "segment_id": "0",
+          "size": 882096,
+          "time": 1742185413
+        },
+        {
+          "segment_id": "1",
+          "size": 1198688,
+          "time": 1742185421
+        },
+        {
+          "segment_id": "2",
+          "size": 344228,
+          "time": 1742185429
+        },
+        {
+          "segment_id": "3",
+          "size": 354568,
+          "time": 1742185441
+        },
+        {
+          "segment_id": "4",
+          "size": 1313368,
+          "time": 1742185451
+        },
+        {
+          "segment_id": "5",
+          "size": 936992,
+          "time": 1742185461
+        },
+        {
+          "segment_id": "6",
+          "size": 1466588,
+          "time": 1742185471
+        },
+        {
+          "segment_id": "7",
+          "size": 515308,
+          "time": 1742185473
+        },
+        {
+          "segment_id": "8",
+          "size": 884164,
+          "time": 1742185483
+        },
+        {
+          "segment_id": "9",
+          "size": 182736,
+          "time": 1742185485
+        },
+        {
+          "segment_id": "10",
+          "size": 1143040,
+          "time": 1742185495
+        },
+        {
+          "segment_id": "11",
+          "size": 936240,
+          "time": 1742185505
+        },
+        {
+          "segment_id": "12",
+          "size": 1072164,
+          "time": 1742185515
+        },
+        {
+          "segment_id": "13",
+          "size": 1197748,
+          "time": 1742185525
+        },
+        {
+          "segment_id": "14",
+          "size": 1210908,
+          "time": 1742185535
+        },
+        {
+          "segment_id": "15",
+          "size": 1248320,
+          "time": 1742185545
+        },
+        {
+          "segment_id": "16",
+          "size": 1706664,
+          "time": 1742185555
+        },
+        {
+          "segment_id": "17",
+          "size": 1867216,
+          "time": 1742185565
+        },
+        {
+          "segment_id": "18",
+          "size": 1483132,
+          "time": 1742185573
+        },
+        {
+          "segment_id": "19",
+          "size": 1564348,
+          "time": 1742185583
+        },
+        {
+          "segment_id": "20",
+          "size": 445936,
+          "time": 1742185587
+        },
+        {
+          "segment_id": "21",
+          "size": 375436,
+          "time": 1742185589
+        },
+        {
+          "segment_id": "22",
+          "size": 1150748,
+          "time": 1742185595
+        },
+        {
+          "segment_id": "23",
+          "size": 152468,
+          "time": 1742185597
+        },
+        {
+          "segment_id": "24",
+          "size": 734328,
+          "time": 1742185601
+        },
+        {
+          "segment_id": "25",
+          "size": 174088,
+          "time": 1742185603
+        },
+        {
+          "segment_id": "26",
+          "size": 313396,
+          "time": 1742185605
+        },
+        {
+          "segment_id": "27",
+          "size": 304936,
+          "time": 1742185607
+        },
+        {
+          "segment_id": "28",
+          "size": 323924,
+          "time": 1742185609
+        },
+        {
+          "segment_id": "29",
+          "size": 495756,
+          "time": 1742185611
+        },
+        {
+          "segment_id": "30",
+          "size": 504592,
+          "time": 1742185615
+        },
+        {
+          "segment_id": "31",
+          "size": 426760,
+          "time": 1742185619
+        },
+        {
+          "segment_id": "32",
+          "size": 892060,
+          "time": 1742185623
+        },
+        {
+          "segment_id": "33",
+          "size": 423000,
+          "time": 1742185627
+        },
+        {
+          "segment_id": "34",
+          "size": 241204,
+          "time": 1742185629
+        }
+      ]
+    },
+    "visiteurs": {
+      "current_watchers": 0,
+      "peak_watchers": 1,
+      "peak_time": 1742185413,
+      "total_watch_time": 0,
+      "session_count": 1,
+      "total_segments": 34,
+      "watchlist": {},
+      "segment_history": [
+        {
+          "segment_id": "0",
+          "size": 491620,
+          "time": 1742185420
+        },
+        {
+          "segment_id": "1",
+          "size": 1036256,
+          "time": 1742185430
+        },
+        {
+          "segment_id": "2",
+          "size": 474888,
+          "time": 1742185434
+        },
+        {
+          "segment_id": "3",
+          "size": 1157140,
+          "time": 1742185442
+        },
+        {
+          "segment_id": "4",
+          "size": 1462076,
+          "time": 1742185452
+        },
+        {
+          "segment_id": "5",
+          "size": 465676,
+          "time": 1742185456
+        },
+        {
+          "segment_id": "6",
+          "size": 284820,
+          "time": 1742185458
+        },
+        {
+          "segment_id": "7",
+          "size": 460036,
+          "time": 1742185460
+        },
+        {
+          "segment_id": "9",
+          "size": 208868,
+          "time": 1742185462
+        },
+        {
+          "segment_id": "10",
+          "size": 339340,
+          "time": 1742185464
+        },
+        {
+          "segment_id": "11",
+          "size": 238948,
+          "time": 1742185466
+        },
+        {
+          "segment_id": "12",
+          "size": 432588,
+          "time": 1742185470
+        },
+        {
+          "segment_id": "13",
+          "size": 758956,
+          "time": 1742185478
+        },
+        {
+          "segment_id": "14",
+          "size": 267712,
+          "time": 1742185480
+        },
+        {
+          "segment_id": "15",
+          "size": 425632,
+          "time": 1742185482
+        },
+        {
+          "segment_id": "16",
+          "size": 420744,
+          "time": 1742185484
+        },
+        {
+          "segment_id": "17",
+          "size": 338588,
+          "time": 1742185486
+        },
+        {
+          "segment_id": "18",
+          "size": 380512,
+          "time": 1742185488
+        },
+        {
+          "segment_id": "19",
+          "size": 996212,
+          "time": 1742185494
+        },
+        {
+          "segment_id": "20",
+          "size": 360960,
+          "time": 1742185496
+        },
+        {
+          "segment_id": "21",
+          "size": 999032,
+          "time": 1742185504
+        },
+        {
+          "segment_id": "22",
+          "size": 235000,
+          "time": 1742185506
+        },
+        {
+          "segment_id": "23",
+          "size": 318096,
+          "time": 1742185510
+        },
+        {
+          "segment_id": "24",
+          "size": 347800,
+          "time": 1742185512
+        },
+        {
+          "segment_id": "25",
+          "size": 779072,
+          "time": 1742185516
+        },
+        {
+          "segment_id": "26",
+          "size": 245340,
+          "time": 1742185518
+        },
+        {
+          "segment_id": "27",
+          "size": 648976,
+          "time": 1742185524
+        },
+        {
+          "segment_id": "28",
+          "size": 556292,
+          "time": 1742185530
+        },
+        {
+          "segment_id": "29",
+          "size": 532228,
+          "time": 1742185534
+        },
+        {
+          "segment_id": "30",
+          "size": 462856,
+          "time": 1742185536
+        },
+        {
+          "segment_id": "31",
+          "size": 528092,
+          "time": 1742185540
+        },
+        {
+          "segment_id": "32",
+          "size": 575656,
+          "time": 1742185542
+        },
+        {
+          "segment_id": "33",
+          "size": 1245688,
+          "time": 1742185548
+        },
+        {
+          "segment_id": "34",
+          "size": 826636,
+          "time": 1742185554
+        }
+      ]
     }
   },
   "global": {
-    "total_watchers": 2,
-    "peak_watchers": 2,
-    "peak_time": 1742125851,
+    "total_watchers": 3,
+    "peak_watchers": 25,
+    "peak_time": 1742185361,
     "total_watch_time": 0,
-    "last_updated": 1742182170
+    "last_updated": 1742187577
   },
   "daily": {
     "2025-03-16": {
@@ -36,6 +3939,56 @@
           "total_watch_time": 0
         },
         "defunes": {
+          "peak_watchers": 1,
+          "total_watch_time": 0
+        }
+      }
+    },
+    "2025-03-17": {
+      "peak_watchers": 25,
+      "total_watch_time": 0,
+      "channels": {
+        "rambo": {
+          "peak_watchers": 3,
+          "total_watch_time": 0
+        },
+        "BruceLee": {
+          "peak_watchers": 3,
+          "total_watch_time": 0
+        },
+        "western": {
+          "peak_watchers": 3,
+          "total_watch_time": 0
+        },
+        "belmondo": {
+          "peak_watchers": 1,
+          "total_watch_time": 0
+        },
+        "fela": {
+          "peak_watchers": 3,
+          "total_watch_time": 0
+        },
+        "vandamme": {
+          "peak_watchers": 3,
+          "total_watch_time": 0
+        },
+        "defunes": {
+          "peak_watchers": 3,
+          "total_watch_time": 0
+        },
+        "pagnol": {
+          "peak_watchers": 3,
+          "total_watch_time": 0
+        },
+        "gendarme": {
+          "peak_watchers": 3,
+          "total_watch_time": 0
+        },
+        "verite": {
+          "peak_watchers": 1,
+          "total_watch_time": 0
+        },
+        "visiteurs": {
           "peak_watchers": 1,
           "total_watch_time": 0
         }

@@ -131,20 +131,13 @@ class IPTVChannel:
                 logger.error(f"[{self.name}] ❌ Dossier ready_to_stream introuvable")
                 return None
 
-            ready_files = list(ready_to_stream_dir.glob("*.mp4"))
-            if not ready_files:
-                logger.error(
-                    f"[{self.name}] ❌ Aucune vidéo dans {ready_to_stream_dir}"
-                )
+            # MODIFICATION: Utiliser self.processed_videos au lieu de scanner tous les fichiers
+            # Car processed_videos contient déjà uniquement les fichiers validés
+            if not self.processed_videos:
+                logger.error(f"[{self.name}] ❌ Aucune vidéo validée disponible")
                 return None
 
-            # Élimination des doublons basée sur le nom du fichier
-            unique_files = {}
-            for file in ready_files:
-                # On utilise le nom comme clé pour remplacer les occurrences multiples
-                unique_files[file.name] = file
-
-            ready_files = list(unique_files.values())
+            ready_files = self.processed_videos.copy()
 
             # On mélange les fichiers pour plus de variété
             import random

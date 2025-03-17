@@ -60,16 +60,25 @@ class ClientMonitor(threading.Thread):
             for (channel, ip), last_seen in self.watchers.items():
                 if now - last_seen > timeout:
                     to_remove.append((channel, ip))
-                    affected_channels.add(channel)
+                    # N'ajoute pas master_playlist aux chaînes affectées
+                    if channel != "master_playlist":
+                        affected_channels.add(channel)
 
             # Supprimer les watchers inactifs
             for key in to_remove:
                 if key in self.watchers:
-                    logger.info(f"🗑️ Watcher supprimé: {key[1]} → {key[0]}")
+                    if (
+                        key[0] != "master_playlist"
+                    ):  # Ne log pas les suppressions de master_playlist
+                        logger.info(f"🗑️ Watcher supprimé: {key[1]} → {key[0]}")
                     del self.watchers[key]
 
             # Recalculer le nombre de watchers pour chaque chaîne affectée
             for channel in affected_channels:
+                # Ignorer master_playlist
+                if channel == "master_playlist":
+                    continue
+
                 active_ips = set()
                 for (ch, ip), last_seen in self.watchers.items():
                     if ch == channel and now - last_seen < timeout:
@@ -143,18 +152,27 @@ class ClientMonitor(threading.Thread):
         # Extraction IP (en début de ligne)
         ip = line.split(" ")[0]
 
-        # Extraction du canal (format: /hls/CHANNEL/...)
-        channel = None
-        parts = line.split("/hls/")
-        if len(parts) > 1:
-            channel_part = parts[1].split("/")[0]
-            if channel_part:
-                channel = channel_part
+        # Détection spéciale pour la playlist principale
+        if "/hls/playlist.m3u" in line:
+            # C'est un accès à la playlist principale, pas une chaîne spécifique
+            channel = "master_playlist"
+            request_type = "playlist"
+        else:
+            # Extraction du canal pour les autres requêtes (format: /hls/CHANNEL/...)
+            channel = None
+            parts = line.split("/hls/")
+            if len(parts) > 1:
+                channel_part = parts[1].split("/")[0]
+                # Vérification supplémentaire pour éviter les mauvaises extractions
+                if channel_part and not channel_part.endswith(".m3u"):
+                    channel = channel_part
 
-        # Type de requête
-        request_type = (
-            "playlist" if ".m3u8" in line else "segment" if ".ts" in line else "unknown"
-        )
+            # Type de requête
+            request_type = (
+                "playlist"
+                if ".m3u8" in line
+                else "segment" if ".ts" in line else "unknown"
+            )
 
         # Statut HTTP (format: " 200 ")
         status_code = "???"
@@ -165,86 +183,113 @@ class ClientMonitor(threading.Thread):
         # Validité
         is_valid = status_code in ["200", "206"]
 
-        # Log plus détaillé pour debug
-        if channel and is_valid:
-            logger.info(
-                f"📱 Client actif: {ip} → {channel} ({request_type}) - Status: {status_code}"
-            )
-
         return ip, channel, request_type, is_valid, None
 
     def _follow_log_file_legacy(self):
-        """Version de fallback pour suivre le fichier de log sans pyinotify"""
+        """Version robuste pour suivre le fichier de log sans pyinotify"""
         try:
-            with open(self.log_path, "r") as f:
-                # Se positionne à la fin du fichier
-                f.seek(0, 2)
+            # Position initiale
+            position = 0
 
-                logger.info(f"👁️ Mode de surveillance legacy actif sur {self.log_path}")
+            logger.info(f"👁️ Mode surveillance legacy actif sur {self.log_path}")
 
-                last_activity_time = time.time()
-                last_heartbeat_time = time.time()
-                last_cleanup_time = time.time()
+            # Variables pour le heartbeat et les nettoyages
+            last_activity_time = time.time()
+            last_heartbeat_time = time.time()
+            last_cleanup_time = time.time()
+            last_update_time = time.time()
 
-                while True:
-                    line = f.readline().strip()
-                    current_time = time.time()
+            while True:
+                # Vérifier que le fichier existe toujours
+                if not os.path.exists(self.log_path):
+                    logger.error(f"❌ Fichier log disparu: {self.log_path}")
+                    time.sleep(5)
+                    continue
 
-                    # Nettoyage périodique des watchers inactifs
-                    if current_time - last_cleanup_time > 10:  # Tous les 10 secondes
-                        self._cleanup_inactive()
-                        last_cleanup_time = current_time
+                # Taille actuelle du fichier
+                current_size = os.path.getsize(self.log_path)
 
-                    # Heartbeat périodique
-                    if current_time - last_heartbeat_time > 60:  # Toutes les minutes
-                        logger.info(
-                            f"💓 ClientMonitor actif (mode legacy), dernière activité il y a {current_time - last_activity_time:.1f}s"
-                        )
-                        last_heartbeat_time = current_time
+                # Si le fichier a grandi, lire les nouvelles lignes
+                if current_size > position:
+                    with open(self.log_path, "r") as f:
+                        f.seek(position)
+                        new_lines = f.readlines()
+                        position = f.tell()  # Nouvelle position
 
-                        # Vérification du fichier
-                        if not os.path.exists(self.log_path):
-                            logger.error(f"❌ Fichier log disparu: {self.log_path}")
-                            break
+                        # Regrouper par chaîne pour traiter d'un coup
+                        channel_updates = {}
 
-                        file_size = os.path.getsize(self.log_path)
-                        if file_size < f.tell():
-                            logger.warning(
-                                f"⚠️ Fichier log tronqué, redémarrage de la lecture"
-                            )
-                            f.seek(0)
+                        # Traitement des nouvelles lignes en batch
+                        for line in new_lines:
+                            if line.strip():
+                                # Pré-traitement
+                                ip, channel, request_type, is_valid, _ = (
+                                    self._parse_access_log(line.strip())
+                                )
 
-                    # Si pas de nouvelle ligne, attendre un peu
-                    if not line:
-                        # Si inactivité prolongée, vérifier le fichier
-                        if current_time - last_activity_time > 300:  # 5 minutes
-                            logger.info(
-                                f"⚠️ Inactivité longue, vérification fichier log"
-                            )
-                            f.seek(
-                                max(0, f.tell() - 10000)
-                            )  # Retour en arrière de 10KB
-                            last_activity_time = current_time
+                                # Si valide, ajouter à notre dictionnaire de chaînes
+                                if is_valid and channel:
+                                    self.watchers[(channel, ip)] = time.time()
+                                    if channel not in channel_updates:
+                                        channel_updates[channel] = set()
+                                    channel_updates[channel].add(ip)
 
-                        time.sleep(0.1)
-                        continue
+                                # On marque l'activité
+                                last_activity_time = time.time()
 
-                    # Une ligne a été lue
-                    last_activity_time = current_time
+                        # Une fois toutes les lignes traitées, mettre à jour les chaînes
+                        current_time = time.time()
+                        if (
+                            current_time - last_update_time > 2
+                        ):  # Au moins 2 secondes entre les mises à jour
+                            # Mise à jour groupée par chaîne
+                            for channel, ips in channel_updates.items():
+                                if channel == "master_playlist":
+                                    continue
+                                count = len(ips)
+                                # Vérifier changement réel avant de loguer
+                                old_count = self.get_channel_watchers(channel)
+                                if count != old_count:
+                                    logger.info(
+                                        f"[{channel}] 👁️ MAJ watchers: {count} actifs - {list(ips)}"
+                                    )
+                                    self.update_watchers(channel, count, "/hls/")
 
-                    # Traiter la ligne
-                    self._process_log_line(line)
+                            # Réinitialiser le temps de dernière mise à jour
+                            last_update_time = current_time
+
+                # Si le fichier a été tronqué (rotation de logs)
+                elif current_size < position:
+                    logger.warning(f"⚠️ Fichier log tronqué, redémarrage lecture")
+                    position = 0
+                    continue
+
+                current_time = time.time()
+
+                # Nettoyage périodique des watchers inactifs
+                if current_time - last_cleanup_time > 10:
+                    self._cleanup_inactive()
+                    last_cleanup_time = current_time
+
+                # Heartbeat périodique
+                if current_time - last_heartbeat_time > 60:
+                    active_count = len(set(ch for (ch, _), _ in self.watchers.items()))
+                    logger.info(
+                        f"💓 ClientMonitor actif (pos: {position}/{current_size}), {active_count} chaînes actives"
+                    )
+                    last_heartbeat_time = current_time
+
+                # Pause courte avant la prochaine vérification
+                time.sleep(0.5)
 
         except Exception as e:
-            logger.error(f"❌ Erreur suivie fichier log mode legacy: {e}")
+            logger.error(f"❌ Erreur mode legacy: {e}")
             import traceback
 
             logger.error(traceback.format_exc())
 
-            # On attend un peu avant de retenter
+            # Tentative de récupération après pause
             time.sleep(10)
-
-            # On retente l'opération
             self._follow_log_file_legacy()
 
     def _check_log_file_exists(self, retry_count, max_retries):
@@ -341,8 +386,77 @@ class ClientMonitor(threading.Thread):
                 # Traiter la ligne
                 self._process_log_line(line)
 
+    def process_new_log_lines(self):
+        """Traite les nouvelles lignes ajoutées au fichier de log nginx"""
+        try:
+            # Vérification de l'existence du fichier
+            if not os.path.exists(self.log_path):
+                logger.error(f"❌ Fichier log introuvable: {self.log_path}")
+                return False
+
+            # Initialisation de la position si c'est la première exécution
+            if not hasattr(self, "last_position"):
+                # On se met à la fin du fichier pour ne traiter que les nouvelles lignes
+                with open(self.log_path, "r") as f:
+                    f.seek(0, 2)  # Positionnement à la fin
+                    self.last_position = f.tell()
+                return True
+
+            file_size = os.path.getsize(self.log_path)
+
+            # Si le fichier a été rotaté (taille plus petite qu'avant)
+            if file_size < self.last_position:
+                logger.warning(f"⚠️ Détection rotation log: {self.log_path}")
+                self.last_position = 0  # On repart du début
+
+            # Lecture des nouvelles lignes
+            with open(self.log_path, "r") as f:
+                f.seek(self.last_position)
+                new_lines = f.readlines()
+
+                # Mise à jour de la position
+                self.last_position = f.tell()
+
+                # Traitement des nouvelles lignes
+                channel_updates = {}  # {channel_name: count}
+                for line in new_lines:
+                    if not line.strip():
+                        continue
+
+                    # Traiter la ligne
+                    ip, channel, request_type, is_valid, _ = self._parse_access_log(
+                        line
+                    )
+
+                    if is_valid and channel:
+                        # On met à jour le timestamp pour ce watcher
+                        current_time = time.time()
+                        self.watchers[(channel, ip)] = current_time
+
+                        # Regrouper par chaîne pour ne faire qu'une mise à jour
+                        if channel not in channel_updates:
+                            channel_updates[channel] = set()
+                        channel_updates[channel].add(ip)
+
+                # Mise à jour groupée par chaîne
+                for channel, ips in channel_updates.items():
+                    count = len(ips)
+                    logger.info(
+                        f"[{channel}] 👁️ MAJ watchers: {count} actifs - {list(ips)}"
+                    )
+                    self.update_watchers(channel, count, "/hls/")
+
+                return True
+
+        except Exception as e:
+            logger.error(f"❌ Erreur traitement nouvelles lignes: {e}")
+            import traceback
+
+            logger.error(traceback.format_exc())
+            return False
+
     def _process_log_line(self, line):
-        """Traite une ligne du log de façon simple et brutale"""
+        """Traite une ligne du log sans déclencher de mise à jour immédiate"""
         # Parse la ligne
         ip, channel, request_type, is_valid, _ = self._parse_access_log(line)
 
@@ -350,16 +464,44 @@ class ClientMonitor(threading.Thread):
         if not is_valid or not channel:
             return
 
-        # MAJ du compteur directement
+        # MAJ du timestamp uniquement
         try:
-            # On stocke simplement l'heure actuelle
             current_time = time.time()
 
             with self.lock:
-                # On stocke l'heure pour ce watcher
+                # On stocke juste l'heure pour ce watcher
                 self.watchers[(channel, ip)] = current_time
 
-                # Pour chaque chaîne, on compte les watchers actifs (dernier accès < 60 secondes)
+                # On signale que cette chaîne a été modifiée (sans faire de mise à jour)
+                if not hasattr(self, "modified_channels"):
+                    self.modified_channels = set()
+                self.modified_channels.add(channel)
+
+        except Exception as e:
+            logger.error(f"❌ Erreur traitement ligne: {e}")
+
+    def _apply_pending_updates(self):
+        """Applique les mises à jour en attente pour éviter les doublons"""
+        if not hasattr(self, "modified_channels") or not self.modified_channels:
+            return
+
+        current_time = time.time()
+
+        # Pour éviter les mises à jour trop fréquentes
+        if hasattr(self, "last_update_time"):
+            elapsed = current_time - self.last_update_time
+            if elapsed < 2:  # Au moins 2 secondes entre les mises à jour
+                return
+
+        channels_updated = 0
+
+        with self.lock:
+            for channel in list(self.modified_channels):
+                # IMPORTANT: Ignorer la playlist principale
+                if channel == "master_playlist":
+                    continue
+
+                # Calcule les watchers actifs pour cette chaîne
                 active_ips = set()
                 for (ch, watcher_ip), last_seen in self.watchers.items():
                     if ch == channel and current_time - last_seen < 60:
@@ -368,14 +510,21 @@ class ClientMonitor(threading.Thread):
                 # Nombre de watchers pour cette chaîne
                 count = len(active_ips)
 
-                # MAJ forcée du compteur de watchers
-                logger.info(
-                    f"[{channel}] 👁️ MAJ watchers: {count} watchers actifs - {list(active_ips)}"
-                )
-                self.update_watchers(channel, count, "/hls/")
+                # Évite les logs si aucun changement réel
+                old_count = self.get_channel_watchers(channel)
+                if count != old_count:
+                    logger.info(
+                        f"[{channel}] 👁️ MAJ watchers: {count} actifs - {list(active_ips)}"
+                    )
+                    self.update_watchers(channel, count, "/hls/")
+                    channels_updated += 1
 
-        except Exception as e:
-            logger.error(f"❌ Erreur traitement ligne: {e}")
+            # Réinitialise les chaînes modifiées
+            self.modified_channels.clear()
+            self.last_update_time = current_time
+
+        if channels_updated > 0:
+            logger.debug(f"🔄 {channels_updated} chaînes mises à jour en mode groupé")
 
     def _handle_periodic_tasks(
         self,
@@ -671,55 +820,8 @@ class ClientMonitor(threading.Thread):
         self.update_watchers(channel, watcher_count, "/hls/")
 
     def run(self):
-        """Démarre le monitoring basé sur inotify plutôt que des vérifications périodiques"""
-        logger.info("👀 Démarrage de la surveillance des requêtes en temps réel...")
+        """Démarre le monitoring en mode direct (legacy)"""
+        logger.info("👀 Démarrage de la surveillance des requêtes...")
 
-        try:
-            # Vérification du fichier log
-            if not self._prepare_log_file():
-                logger.error(
-                    "❌ Impossible d'accéder au fichier log, utilisation du mode fallback"
-                )
-                self._follow_log_file_legacy()
-                return
-
-            # Si pyinotify est disponible, on l'utilise
-            try:
-                import pyinotify
-
-                # On initialise le watcher sur le fichier
-                wm = pyinotify.WatchManager()
-
-                class LogHandler(pyinotify.ProcessEvent):
-                    def __init__(self, monitor):
-                        self.monitor = monitor
-
-                    def process_IN_MODIFY(self, event):
-                        # Fichier modifié, on traite les nouvelles lignes
-                        self.monitor.process_new_log_lines()
-
-                # Démarrage du monitoring
-                handler = LogHandler(self)
-                notifier = pyinotify.Notifier(wm, handler)
-
-                # Ajout du fichier à surveiller
-                wm.add_watch(self.log_path, pyinotify.IN_MODIFY)
-
-                logger.info(
-                    f"📡 Surveillance en temps réel activée sur {self.log_path}"
-                )
-
-                # Boucle de surveillance (bloquante)
-                notifier.loop()
-
-            except ImportError:
-                logger.warning(
-                    "⚠️ Module pyinotify non disponible, utilisation du mode traditionnel"
-                )
-                self._follow_log_file_legacy()
-
-        except Exception as e:
-            logger.error(f"❌ Erreur fatale dans client_monitor: {e}")
-            import traceback
-
-            logger.error(traceback.format_exc())
+        # Utilisation directe du mode legacy (plus fiable)
+        self._follow_log_file_legacy()
