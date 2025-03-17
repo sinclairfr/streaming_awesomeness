@@ -199,6 +199,27 @@ class ClientMonitor(threading.Thread):
 
         return True
 
+    def _periodic_scan_thread(self):
+        """Thread dédié au scan initial uniquement"""
+        try:
+            # Attente initiale pour laisser le système démarrer
+            time.sleep(20)
+
+            # Un seul scan complet au démarrage
+            logger.info("🔄 Scan initial des chaînes...")
+            self.scan_channels(force=True)
+
+            # Configuration unique de l'observateur ready_to_stream
+            self._setup_ready_observer()
+
+            # Ensuite, on bloque jusqu'à l'arrêt
+            self.scan_thread_stop.wait()
+
+        except Exception as e:
+            logger.error(f"❌ Erreur dans le thread de scan: {e}")
+
+        logger.info("🛑 Thread de scan arrêté")
+
     def _monitor_log_file(self):
         """Lit et traite le fichier de log ligne par ligne"""
         with open(self.log_path, "r") as f:
@@ -576,20 +597,55 @@ class ClientMonitor(threading.Thread):
         self.update_watchers(channel, watcher_count, "/hls/")
 
     def run(self):
-        """On surveille les requêtes clients"""
-        logger.info("👀 Démarrage de la surveillance des requêtes...")
+        """Démarre le monitoring basé sur inotify plutôt que des vérifications périodiques"""
+        logger.info("👀 Démarrage de la surveillance des requêtes en temps réel...")
 
         try:
-            # Vérifier si le fichier log existe et est accessible
+            # Vérification du fichier log
             if not self._prepare_log_file():
+                logger.error(
+                    "❌ Impossible d'accéder au fichier log, utilisation du mode fallback"
+                )
+                self._follow_log_file_legacy()
                 return
 
-            # Ouvrir et suivre le fichier de log
-            self._follow_log_file()
+            # Si pyinotify est disponible, on l'utilise
+            try:
+                import pyinotify
+
+                # On initialise le watcher sur le fichier
+                wm = pyinotify.WatchManager()
+
+                class LogHandler(pyinotify.ProcessEvent):
+                    def __init__(self, monitor):
+                        self.monitor = monitor
+
+                    def process_IN_MODIFY(self, event):
+                        # Fichier modifié, on traite les nouvelles lignes
+                        self.monitor.process_new_log_lines()
+
+                # Démarrage du monitoring
+                handler = LogHandler(self)
+                notifier = pyinotify.Notifier(wm, handler)
+
+                # Ajout du fichier à surveiller
+                wm.add_watch(self.log_path, pyinotify.IN_MODIFY)
+
+                logger.info(
+                    f"📡 Surveillance en temps réel activée sur {self.log_path}"
+                )
+
+                # Boucle de surveillance (bloquante)
+                notifier.loop()
+
+            except ImportError:
+                logger.warning(
+                    "⚠️ Module pyinotify non disponible, utilisation du mode traditionnel"
+                )
+                self._follow_log_file_legacy()
 
         except Exception as e:
             logger.error(f"❌ Erreur fatale dans client_monitor: {e}")
             import traceback
 
             logger.error(traceback.format_exc())
-            time.sleep(10)  # Attente avant de réessayer

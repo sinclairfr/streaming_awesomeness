@@ -155,13 +155,6 @@ class IPTVManager:
         # statistiques
         self.stats_collector = StatsCollector()
 
-        # Thread de scan périodique
-        self.scan_thread_stop = threading.Event()
-        self.scan_thread = threading.Thread(
-            target=self._periodic_scan_thread, daemon=True
-        )
-        self.scan_thread.start()
-
     def _check_client_monitor(self):
         """Vérifie périodiquement l'état du client_monitor"""
         while True:
@@ -342,14 +335,16 @@ class IPTVManager:
     def _watchers_loop(self):
         """Surveille l'activité des watchers et arrête les streams inutilisés"""
         last_log_time = 0
-        log_cycle = int(os.getenv("WATCHERS_LOG_CYCLE", "10"))
+        log_cycle = int(
+            os.getenv("WATCHERS_LOG_CYCLE", "60")
+        )  # Augmenter à 60s au lieu de 10s
 
         while True:
             try:
                 current_time = time.time()
-                channels_checked = set()
+                channels_to_stop = []
 
-                # Pour chaque chaîne, on vérifie l'activité
+                # Pour chaque chaîne, on vérifie l'inactivité
                 for channel_name, channel in self.channels.items():
                     if not hasattr(channel, "last_watcher_time"):
                         continue
@@ -357,53 +352,35 @@ class IPTVManager:
                     # On calcule l'inactivité
                     inactivity_duration = current_time - channel.last_watcher_time
 
-                    # Si inactif depuis plus de TIMEOUT_NO_VIEWERS (120s par défaut)
+                    # Si inactif depuis plus de TIMEOUT_NO_VIEWERS
                     if inactivity_duration > TIMEOUT_NO_VIEWERS:
                         if channel.process_manager.is_running():
                             logger.warning(
-                                f"[{channel_name}] ⚠️ Stream inactif depuis {inactivity_duration:.1f}s, on arrête FFmpeg"
+                                f"[{channel_name}] ⚠️ Stream inactif depuis {inactivity_duration:.1f}s, arrêt programmé"
                             )
-                            channel.stop_stream_if_needed()
+                            channels_to_stop.append(channel)
 
-                    channels_checked.add(channel_name)
+                # Arrêt des chaînes sans watchers (avec un délai pour éviter les cascades)
+                for i, channel in enumerate(channels_to_stop):
+                    # Ajout d'un petit délai entre les arrêts (0.5s entre chaque)
+                    time.sleep(i * 0.5)
+                    channel.stop_stream_if_needed()
 
-                # Log périodique de tous les watchers actifs
+                # Log périodique des watchers actifs (moins fréquent)
                 if current_time - last_log_time > log_cycle:
-                    active_watchers = []
+                    active_channels = []
                     for name, channel in sorted(self.channels.items()):
-                        if hasattr(channel, "watchers_count"):
-                            count = channel.watchers_count
-                            watcher_text = f"{count} watcher{'' if count <= 1 else 's'}"
-                            active_watchers.append(f"{name}: {watcher_text}")
+                        if (
+                            hasattr(channel, "watchers_count")
+                            and channel.watchers_count > 0
+                        ):
+                            active_channels.append(f"{name}: {channel.watchers_count}")
 
-                    if active_watchers:
-                        logger.info(f"👥 Watchers actifs: {', '.join(active_watchers)}")
+                    if active_channels:
+                        logger.info(
+                            f"👥 Chaînes avec viewers: {', '.join(active_channels)}"
+                        )
                     last_log_time = current_time
-
-                # On vérifie les processus FFmpeg orphelins
-                for proc in psutil.process_iter(attrs=["pid", "name", "cmdline"]):
-                    try:
-                        if "ffmpeg" in proc.info["name"].lower():
-                            cmd_str = " ".join(
-                                str(arg) for arg in proc.info.get("cmdline", [])
-                            )
-
-                            # Pour chaque chaîne, on vérifie si le process lui appartient
-                            for channel_name in self.channels:
-                                if f"/hls/{channel_name}/" in cmd_str:
-                                    if channel_name not in channels_checked:
-                                        logger.warning(
-                                            f"🔥 Process FFmpeg orphelin détecté pour {channel_name}, PID {proc.pid}"
-                                        )
-                                        try:
-                                            os.kill(proc.pid, signal.SIGKILL)
-                                            logger.info(
-                                                f"✅ Process orphelin {proc.pid} nettoyé"
-                                            )
-                                        except:
-                                            pass
-                    except (psutil.NoSuchProcess, psutil.AccessDenied):
-                        continue
 
                 time.sleep(10)  # Vérification toutes les 10s
 
@@ -718,30 +695,116 @@ class IPTVManager:
 
             logger.error(traceback.format_exc())
 
-    def _periodic_scan_thread(self):
-        """Thread dédié au scan périodique des chaînes"""
-        scan_interval = 60  # 1 minute entre les scans
+    def process_new_log_lines(self):
+        """Traite les nouvelles lignes ajoutées au fichier de log nginx"""
+        try:
+            # Vérification de l'existence du fichier
+            if not os.path.exists(self.log_path):
+                logger.error(f"❌ Fichier log introuvable: {self.log_path}")
+                return False
 
-        while not self.scan_thread_stop.is_set():
-            try:
-                # On attend d'abord un peu pour ne pas scanner tout de suite après le démarrage
-                time.sleep(30)
+            # Initialisation de la position si c'est la première exécution
+            if not hasattr(self, "last_position"):
+                # On se met à la fin du fichier pour ne traiter que les nouvelles lignes
+                with open(self.log_path, "r") as f:
+                    f.seek(0, 2)  # Positionnement à la fin
+                    self.last_position = f.tell()
+                return True
 
-                logger.info("🔄 Scan périodique des chaînes...")
-                self.scan_channels(force=True)
+            file_size = os.path.getsize(self.log_path)
 
-                # Configuration (ou reconfiguration) de l'observateur ready_to_stream
-                # pour prendre en compte les nouvelles chaînes
-                self._setup_ready_observer()
+            # Si le fichier a été rotaté (taille plus petite qu'avant)
+            if file_size < self.last_position:
+                logger.warning(f"⚠️ Détection rotation log: {self.log_path}")
+                self.last_position = 0  # On repart du début
 
-                # Et on attend l'intervalle avant le prochain scan
-                self.scan_thread_stop.wait(timeout=scan_interval)
+            # Lecture des nouvelles lignes
+            with open(self.log_path, "r") as f:
+                f.seek(self.last_position)
+                new_lines = f.readlines()
 
-            except Exception as e:
-                logger.error(f"❌ Erreur dans le thread de scan périodique: {e}")
-                time.sleep(10)  # En cas d'erreur, on attend un peu avant de réessayer
+                # Mise à jour de la position
+                self.last_position = f.tell()
 
-        logger.info("🛑 Arrêt du thread de scan périodique")
+                # Traitement des nouvelles lignes
+                channel_updates = {}  # {channel_name: count}
+                for line in new_lines:
+                    if not line.strip():
+                        continue
+
+                    # Traiter la ligne
+                    ip, channel, request_type, is_valid, _ = self._parse_access_log(
+                        line
+                    )
+
+                    if is_valid and channel:
+                        # On met à jour le timestamp pour ce watcher
+                        current_time = time.time()
+                        self.watchers[(channel, ip)] = current_time
+
+                        # Regrouper par chaîne pour ne faire qu'une mise à jour
+                        if channel not in channel_updates:
+                            channel_updates[channel] = set()
+                        channel_updates[channel].add(ip)
+
+                # Mise à jour groupée par chaîne
+                for channel, ips in channel_updates.items():
+                    count = len(ips)
+                    logger.info(
+                        f"[{channel}] 👁️ MAJ watchers: {count} actifs - {list(ips)}"
+                    )
+                    self.update_watchers(channel, count, "/hls/")
+
+                return True
+
+        except Exception as e:
+            logger.error(f"❌ Erreur traitement nouvelles lignes: {e}")
+            import traceback
+
+            logger.error(traceback.format_exc())
+            return False
+
+    def _monitor_nginx_logs(self):
+        """Surveillance des logs nginx en temps réel avec inotify"""
+        try:
+            import pyinotify  # Il faudra ajouter cette dépendance
+
+            # Chemin du log
+            log_path = NGINX_ACCESS_LOG
+
+            # Configuration de l'événement
+            class LogHandler(pyinotify.ProcessEvent):
+                def __init__(self, manager):
+                    self.manager = manager
+                    self.client_monitor = manager.client_monitor
+
+                def process_IN_MODIFY(self, event):
+                    # Le fichier a été modifié, traiter les nouvelles lignes
+                    self.client_monitor.process_new_log_lines()
+
+            # Initialiser le watcher
+            wm = pyinotify.WatchManager()
+            handler = LogHandler(self)
+            notifier = pyinotify.Notifier(wm, handler)
+
+            # Ajouter le fichier à surveiller
+            wm.add_watch(log_path, pyinotify.IN_MODIFY)
+
+            logger.info(f"🔍 Surveillance en temps réel des logs nginx: {log_path}")
+
+            # Boucle de surveillance (bloquante)
+            notifier.loop()
+
+        except ImportError:
+            logger.error(
+                "❌ Module pyinotify manquant, fallback au mode de surveillance legacy"
+            )
+            # Fallback à l'ancien système
+            self._legacy_watchers_loop()
+        except Exception as e:
+            logger.error(f"❌ Erreur surveillance logs: {e}")
+            # Fallback à l'ancien système
+            self._legacy_watchers_loop()
 
     def run(self):
         try:
