@@ -6,7 +6,7 @@ from pathlib import Path
 from config import logger
 import os
 import signal
-from config import TIMEOUT_NO_VIEWERS, FFMPEG_LOG_LEVEL, logger
+from config import TIMEOUT_NO_VIEWERS, FFMPEG_LOG_LEVEL, logger, WATCHERS_LOG_CYCLE
 import random
 
 
@@ -105,7 +105,7 @@ class FFmpegMonitor(threading.Thread):
     def _watchers_loop(self):
         """Surveille l'activité des watchers et arrête les streams inutilisés"""
         last_log_time = 0
-        log_cycle = int(os.getenv("WATCHERS_LOG_CYCLE", "60"))  # Augmenté à 60s
+        log_cycle = WATCHERS_LOG_CYCLE
 
         while True:
             try:

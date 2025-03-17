@@ -16,14 +16,13 @@ TIMEOUT_NO_VIEWERS = int(os.getenv("TIMEOUT_NO_VIEWERS", "3600"))
 RESOURCES_CHECK_INTERVAL = int(os.getenv("RESOURCES_CHECK_INTERVAL", "60"))
 CPU_CHECK_INTERVAL = float(os.getenv("CPU_CHECK_INTERVAL", "1"))
 CPU_THRESHOLD = int(os.getenv("CPU_THRESHOLD", "95"))
-
 FFMPEG_LOG_LEVEL = os.getenv("FFMPEG_LOG_LEVEL", "info")
 FFMPEG_LOGS_DIR = os.getenv("FFMPEG_LOGS_DIR", "/app/logs/ffmpeg")
-
 USE_GPU = os.getenv("USE_GPU", "false")
-
 VIDEO_EXTENSIONS = os.getenv("VIDEO_EXTENSIONS", ".mp4,.avi,.mkv,.mov, .m4v").split(",")
 SEGMENT_AGE_THRESHOLD = int(os.getenv("SEGMENT_AGE_THRESHOLD", "120"))
+WATCHERS_LOG_CYCLE = int(os.getenv("WATCHERS_LOG_CYCLE", "300"))  # 5 minutes par défaut
+SUMMARY_CYCLE = int(os.getenv("SUMMARY_CYCLE", "300"))  # 5 minutes par défaut
 
 
 def get_log_level(level_str: str) -> int:

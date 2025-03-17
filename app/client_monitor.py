@@ -59,7 +59,7 @@ class ClientMonitor(threading.Thread):
                 time.sleep(30)  # Pause plus longue en cas d'erreur
 
     def _cleanup_inactive(self):
-        """Version simplifiée du nettoyage avec meilleures logs"""
+        """Version améliorée du nettoyage avec plus de logs"""
         now = time.time()
         timeout = 60  # Un seul timeout de 60 secondes
 
@@ -67,6 +67,15 @@ class ClientMonitor(threading.Thread):
         affected_channels = set()
 
         with self.lock:
+            # Debug: afficher tous les watchers actifs
+            active_watchers = {
+                k: now - v
+                for k, v in self.watchers.items()
+                if k[0] != "master_playlist"
+            }
+            if active_watchers:
+                logger.debug(f"👥 Watchers actifs avant nettoyage: {active_watchers}")
+
             # Trouver les watchers inactifs
             for (channel, ip), last_seen in self.watchers.items():
                 if now - last_seen > timeout:
@@ -81,9 +90,7 @@ class ClientMonitor(threading.Thread):
                     if (
                         key[0] != "master_playlist"
                     ):  # Ne log pas les suppressions de master_playlist
-                        logger.info(
-                            f"🗑️ Watcher supprimé: {key[1]} → {key[0]} (inactif depuis {now - self.watchers[key]:.1f}s)"
-                        )
+                        logger.info(f"🗑️ Watcher supprimé: {key[1]} → {key[0]}")
                     del self.watchers[key]
 
             # Recalculer le nombre de watchers pour chaque chaîne affectée
@@ -98,7 +105,57 @@ class ClientMonitor(threading.Thread):
                         active_ips.add(ip)
 
                 count = len(active_ips)
+
+                # Toujours appeler update_watchers, même si count=0
                 self.update_watchers(channel, count, "/hls/")
+
+                # Log pour débug
+                logger.debug(
+                    f"📊 Après nettoyage - {channel}: {count} watchers actifs: {list(active_ips)}"
+                )
+
+    def _print_channels_summary(self):
+        """Affiche un récapitulatif des chaînes et de leur état"""
+        try:
+            active_channels = []
+            stopped_channels = []
+            total_viewers = 0
+
+            for name, channel in self.channels.items():
+                process_running = channel.process_manager.is_running()
+                viewers = getattr(channel, "watchers_count", 0)
+
+                # Debug: afficher les valeurs exactes des attributs
+                logger.debug(
+                    f"[{name}] État: {'actif' if process_running else 'arrêté'}, "
+                    f"watchers_count={viewers}, "
+                    f"last_watcher_time={getattr(channel, 'last_watcher_time', 0)}"
+                )
+
+                if process_running:
+                    active_channels.append((name, viewers))
+                    total_viewers += viewers
+                else:
+                    stopped_channels.append(name)
+
+            # Affichage formaté avec couleurs
+            logger.info("📊 RÉCAPITULATIF DES CHAÎNES:")
+
+            if active_channels:
+                active_str = ", ".join(
+                    [f"{name} ({viewers}👁️)" for name, viewers in active_channels]
+                )
+                logger.info(f"CHAÎNES ACTIVES: {active_str}")
+            else:
+                logger.info("CHAÎNES ACTIVES: Aucune")
+
+            logger.info(f"CHAÎNES ARRÊTÉES: {len(stopped_channels)}")
+            logger.info(
+                f"TOTAL: {total_viewers} viewers sur {len(active_channels)} streams actifs ({len(self.channels)} chaînes)"
+            )
+
+        except Exception as e:
+            logger.error(f"❌ Erreur récapitulatif: {e}")
 
     def _monitor_segment_jumps(self):
         """Surveille les sauts anormaux dans les segments pour détecter les bugs"""
@@ -152,10 +209,15 @@ class ClientMonitor(threading.Thread):
         return 0
 
     def _parse_access_log(self, line):
-        """Version simplifiée qui extrait seulement l'essentiel avec debug amélioré"""
+        """Version améliorée qui extrait plus d'infos et ajoute des logs"""
         # Si pas de /hls/ dans la ligne, on ignore direct
         if "/hls/" not in line:
             return None, None, None, False, None
+
+        # Log pour debug
+        logger.debug(
+            f"🔍 Analyse ligne: {line[:100]}..."
+        )  # Limite la taille pour éviter des logs trop longs
 
         # Si pas un GET ou un HEAD, on ignore
         if not ("GET /hls/" in line or "HEAD /hls/" in line):
@@ -164,14 +226,21 @@ class ClientMonitor(threading.Thread):
         # Extraction IP (en début de ligne)
         ip = line.split(" ")[0]
 
-        # Détection spéciale pour la playlist principale
+        # Extraction du code HTTP
+        status_code = "???"
+        status_match = re.search(r'" (\d{3}) ', line)
+        if status_match:
+            status_code = status_match.group(1)
+
+        # Extraction du canal spécifique
+        channel = None
         if "/hls/playlist.m3u" in line:
             # C'est un accès à la playlist principale, pas une chaîne spécifique
             channel = "master_playlist"
             request_type = "playlist"
+            logger.debug(f"📋 Détecté accès playlist principale par {ip}")
         else:
-            # Extraction du canal pour les autres requêtes (format: /hls/CHANNEL/...)
-            channel = None
+            # Format attendu: /hls/CHANNEL/...
             parts = line.split("/hls/")
             if len(parts) > 1:
                 channel_part = parts[1].split("/")[0]
@@ -179,33 +248,50 @@ class ClientMonitor(threading.Thread):
                 if channel_part and not channel_part.endswith(".m3u"):
                     channel = channel_part
 
-            # Type de requête - IMPORTANT: rechercher .ts avant .m3u8 pour priorité
-            if ".ts" in line:
-                request_type = "segment"
-            elif ".m3u8" in line:
-                request_type = "playlist"
-            else:
-                request_type = "unknown"
+                    # Type de requête
+                    request_type = (
+                        "playlist"
+                        if ".m3u8" in line
+                        else "segment" if ".ts" in line else "unknown"
+                    )
 
-        # Statut HTTP (format: " 200 ")
-        status_code = "???"
-        status_match = re.search(r'" (\d{3}) ', line)
-        if status_match:
-            status_code = status_match.group(1)
+                    # Log plus détaillé pour debug
+                    if request_type == "playlist":
+                        logger.debug(
+                            f"📋 Détecté accès playlist pour chaîne '{channel}' par {ip}, status: {status_code}"
+                        )
+                    elif request_type == "segment":
+                        segment_match = re.search(r"segment_(\d+)\.ts", line)
+                        segment_id = segment_match.group(1) if segment_match else "?"
+                        logger.debug(
+                            f"🎬 Détecté accès segment {segment_id} pour chaîne '{channel}' par {ip}"
+                        )
 
-        # Validité
-        is_valid = status_code in ["200", "206"]
+        # Validité - note que 404 est valide pour le suivi même si le contenu n'existe pas
+        is_valid = status_code in [
+            "200",
+            "206",
+            "404",
+        ]  # Ajout du 404 pour détecter les demandes de playlists manquantes
 
-        # Retour des informations avec plus de contexte pour debug
+        # Pour les erreurs 404 sur les playlists, on veut les traiter spécialement
+        if status_code == "404" and ".m3u8" in line and channel != "master_playlist":
+            logger.info(
+                f"🔴 Requête 404 détectée pour {channel}/playlist.m3u8 par {ip}"
+            )
+            # Ce sera traité plus tard dans update_watchers
+
         return ip, channel, request_type, is_valid, None
 
     def _follow_log_file_legacy(self):
         """Version robuste pour suivre le fichier de log sans pyinotify"""
         try:
-            # Position initiale
-            position = 0
+            # Position initiale - SE PLACER À LA FIN DU FICHIER, PAS AU DÉBUT
+            position = os.path.getsize(self.log_path)  # <-- Correction ici
 
-            logger.info(f"👁️ Mode surveillance legacy actif sur {self.log_path}")
+            logger.info(
+                f"👁️ Mode surveillance legacy actif sur {self.log_path} (démarrage à position {position})"
+            )
 
             # Variables pour le heartbeat et les nettoyages
             last_activity_time = time.time()
@@ -230,6 +316,12 @@ class ClientMonitor(threading.Thread):
                         new_lines = f.readlines()
                         position = f.tell()  # Nouvelle position
 
+                        # Log pour debug - montre la différence de taille
+                        if new_lines:
+                            logger.debug(
+                                f"📝 Traitement de {len(new_lines)} nouvelles lignes (pos: {position}/{current_size})"
+                            )
+
                         # Regrouper par chaîne pour traiter d'un coup
                         channel_updates = {}
 
@@ -243,6 +335,7 @@ class ClientMonitor(threading.Thread):
 
                                 # Si valide, ajouter à notre dictionnaire de chaînes
                                 if is_valid and channel:
+                                    # On stocke l'heure ACTUELLE, pas celle du log
                                     self.watchers[(channel, ip)] = time.time()
                                     if channel not in channel_updates:
                                         channel_updates[channel] = set()
@@ -263,11 +356,12 @@ class ClientMonitor(threading.Thread):
                                 count = len(ips)
                                 # Vérifier changement réel avant de loguer
                                 old_count = self.get_channel_watchers(channel)
-                                if count != old_count:
-                                    logger.info(
-                                        f"[{channel}] 👁️ MAJ watchers: {count} actifs - {list(ips)}"
-                                    )
-                                    self.update_watchers(channel, count, "/hls/")
+
+                                # On force à update même si pas de changement
+                                logger.info(
+                                    f"[{channel}] 👁️ MAJ watchers: {count} actifs - {list(ips)}"
+                                )
+                                self.update_watchers(channel, count, "/hls/")
 
                             # Réinitialiser le temps de dernière mise à jour
                             last_update_time = current_time
