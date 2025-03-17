@@ -1013,5 +1013,35 @@ class ClientMonitor(threading.Thread):
         """Démarre le monitoring en mode direct (legacy)"""
         logger.info("👀 Démarrage de la surveillance des requêtes...")
 
-        # Utilisation directe du mode legacy (plus fiable)
-        self._follow_log_file_legacy()
+        try:
+            # Vérification du fichier de log
+            if not os.path.exists(self.log_path):
+                logger.error(f"❌ Fichier log introuvable: {self.log_path}")
+                time.sleep(5)
+                return self.run()
+
+            # Important: initialiser la position à la fin du fichier, pas au début
+            with open(self.log_path, "r") as f:
+                f.seek(0, 2)  # Se positionner à la fin du fichier
+                position = f.tell()
+                logger.info(
+                    f"📝 Positionnement initial à la fin du fichier: {position} bytes"
+                )
+
+                # Afficher les dernières lignes du fichier pour vérification
+                last_pos = max(0, position - 500)  # Remonter de 500 bytes
+                f.seek(last_pos)
+                last_lines = f.readlines()
+                if last_lines:
+                    logger.info(f"📋 Dernière ligne du log: {last_lines[-1][:100]}")
+
+            # Utilisation directe du mode legacy
+            self._follow_log_file_legacy()
+
+        except Exception as e:
+            logger.error(f"❌ Erreur démarrage surveillance: {e}")
+            import traceback
+
+            logger.error(traceback.format_exc())
+            time.sleep(10)
+            self.run()

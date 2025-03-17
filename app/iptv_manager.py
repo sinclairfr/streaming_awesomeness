@@ -913,38 +913,36 @@ class IPTVManager:
             self._legacy_watchers_loop()
 
     def run(self):
-        """Démarre le monitoring en mode direct (legacy)"""
-        logger.info("👀 Démarrage de la surveillance des requêtes...")
-
         try:
-            # Vérification du fichier de log
-            if not os.path.exists(self.log_path):
-                logger.error(f"❌ Fichier log introuvable: {self.log_path}")
-                time.sleep(5)
-                return self.run()
+            # Démarrer la boucle de surveillance des watchers
+            if not self.watchers_thread.is_alive():
+                self.watchers_thread.start()
+                logger.info("🔄 Boucle de surveillance des watchers démarrée")
 
-            # Important: initialiser la position à la fin du fichier, pas au début
-            with open(self.log_path, "r") as f:
-                f.seek(0, 2)  # Se positionner à la fin du fichier
-                position = f.tell()
-                logger.info(
-                    f"📝 Positionnement initial à la fin du fichier: {position} bytes"
-                )
+            logger.debug("📥 Scan initial des chaînes...")
+            self.scan_channels(initial=True)  # Marquer comme scan initial
 
-                # Afficher les dernières lignes du fichier pour vérification
-                last_pos = max(0, position - 500)  # Remonter de 500 bytes
-                f.seek(last_pos)
-                last_lines = f.readlines()
-                if last_lines:
-                    logger.info(f"📋 Dernière ligne du log: {last_lines[-1][:100]}")
+            logger.debug("🕵️ Démarrage de l'observer...")
+            if not self.observer.is_alive():
+                self.observer.start()
 
-            # Utilisation directe du mode legacy
-            self._follow_log_file_legacy()
+            # Configurer l'observateur pour ready_to_stream
+            self._setup_ready_observer()
 
+            # Attente suffisamment longue pour l'initialisation des chaînes
+            logger.info(
+                "⏳ Attente de 30 secondes pour l'initialisation des chaînes..."
+            )
+            time.sleep(30)
+
+            # Démarrage automatique des chaînes prêtes
+            self.auto_start_ready_channels()
+
+            while True:
+                time.sleep(1)
+
+        except KeyboardInterrupt:
+            self.cleanup()
         except Exception as e:
-            logger.error(f"❌ Erreur démarrage surveillance: {e}")
-            import traceback
-
-            logger.error(traceback.format_exc())
-            time.sleep(10)
-            self.run()
+            logger.error(f"🔥 Erreur manager : {e}")
+            self.cleanup()
