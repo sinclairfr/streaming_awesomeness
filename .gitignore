@@ -22,9 +22,13 @@ Dockerfile
 # Ignore Nginx logs
 nginx_logs/
 
+
 # Ignore FFmpeg logs
 logs/ffmpeg/
 app/state/
+app/stats
+
+# Ignore some non-relevant files
 app/deploy_improvements.sh
 app/migration.py
 app/update.sh

@@ -902,9 +902,143 @@ class IPTVChannel:
 
     def start_stream_if_needed(self):
         """Démarre le stream uniquement s'il n'est pas déjà en cours"""
-        if not self.process_manager.is_running():
+        try:
+            if self.process_manager.is_running():
+                logger.info(f"[{self.name}] ✓ Stream déjà actif, aucune action requise")
+                return True
+
+            # Vérifier si la chaîne est prête avant de démarrer
+            if not self.ready_for_streaming:
+                # Vérifier si des vidéos sont disponibles même si ready_for_streaming est False
+                ready_dir = Path(self.video_dir) / "ready_to_stream"
+                has_videos = False
+
+                if ready_dir.exists():
+                    video_files = list(ready_dir.glob("*.mp4"))
+                    has_videos = len(video_files) > 0
+
+                    if has_videos:
+                        logger.info(
+                            f"[{self.name}] 🔍 Vidéos détectées dans ready_to_stream mais ready_for_streaming=False, tentative d'activation"
+                        )
+                        self.ready_for_streaming = True
+                        # Recalcul de la durée totale en arrière-plan
+                        threading.Thread(
+                            target=self._calculate_total_duration, daemon=True
+                        ).start()
+                    else:
+                        logger.warning(
+                            f"[{self.name}] ⚠️ Aucune vidéo disponible, démarrage impossible"
+                        )
+                        return False
+                else:
+                    logger.warning(
+                        f"[{self.name}] ⚠️ Dossier ready_to_stream inexistant, démarrage impossible"
+                    )
+                    return False
+
+            # Vérifier si nous avons un fichier playlist.txt
+            playlist_file = Path(self.video_dir) / "_playlist.txt"
+            if not playlist_file.exists():
+                logger.info(
+                    f"[{self.name}] 🔄 Fichier playlist manquant, création automatique"
+                )
+                self._create_concat_file()
+                # Vérifier si la création a réussi
+                if not playlist_file.exists():
+                    logger.error(f"[{self.name}] ❌ Échec création fichier playlist")
+                    return False
+
+            # Tout est bon, on démarre le stream
+            logger.info(f"[{self.name}] 🚀 Démarrage automatique du stream")
             return self.start_stream()
-        return True
+        except Exception as e:
+            logger.error(f"[{self.name}] ❌ Erreur start_stream_if_needed: {str(e)}")
+            import traceback
+
+            logger.error(traceback.format_exc())
+            return False
+
+    def channel_health_check(self):
+        """Vérifie l'état de santé de la chaîne et effectue des actions correctives si nécessaire"""
+        try:
+            current_time = time.time()
+
+            # 1. Vérification de la présence de segments HLS
+            hls_dir = Path(f"/app/hls/{self.name}")
+            if not hls_dir.exists():
+                logger.warning(f"[{self.name}] ⚠️ Dossier HLS manquant")
+                return False
+
+            # 2. Vérification de la playlist
+            playlist = hls_dir / "playlist.m3u8"
+            if not playlist.exists():
+                logger.warning(f"[{self.name}] ⚠️ Playlist HLS manquante")
+
+                # Si le stream est censé être en cours, redémarrer
+                if (
+                    self.process_manager.is_running()
+                    and hasattr(self, "watchers_count")
+                    and self.watchers_count > 0
+                ):
+                    logger.info(
+                        f"[{self.name}] 🔄 Redémarrage du stream (playlist manquante)"
+                    )
+                    return self._restart_stream()
+                return False
+
+            # 3. Vérification de la présence de segments
+            segments = list(hls_dir.glob("*.ts"))
+            if not segments:
+                logger.warning(f"[{self.name}] ⚠️ Aucun segment HLS")
+
+                # Si processus en cours mais pas de segments, possible blocage
+                if (
+                    self.process_manager.is_running()
+                    and hasattr(self, "watchers_count")
+                    and self.watchers_count > 0
+                ):
+                    logger.info(
+                        f"[{self.name}] 🔄 Redémarrage du stream (aucun segment)"
+                    )
+                    return self._restart_stream()
+                return False
+
+            # 4. Vérification de l'âge du segment le plus récent
+            newest_segment = max(segments, key=lambda p: p.stat().st_mtime)
+            time_since_newest = current_time - newest_segment.stat().st_mtime
+
+            if (
+                time_since_newest > 60 and self.process_manager.is_running()
+            ):  # Plus de 60s sans nouveau segment
+                logger.warning(
+                    f"[{self.name}] ⚠️ Dernier segment trop vieux: {time_since_newest:.1f}s"
+                )
+
+                # Si viewers actifs, redémarrer
+                if hasattr(self, "watchers_count") and self.watchers_count > 0:
+                    logger.info(
+                        f"[{self.name}] 🔄 Redémarrage du stream (segments périmés)"
+                    )
+                    return self._restart_stream()
+
+            # 5. Vérification des processus
+            if (
+                hasattr(self, "watchers_count")
+                and self.watchers_count > 0
+                and not self.process_manager.is_running()
+            ):
+                logger.info(
+                    f"[{self.name}] 🔄 Redémarrage du stream (processus manquant)"
+                )
+                return self.start_stream()
+
+            # Tout semble bon
+            return True
+
+        except Exception as e:
+            logger.error(f"[{self.name}] ❌ Erreur health check: {e}")
+            return False
 
     def update_watchers(self, count: int):
         """Mise à jour du nombre de watchers"""

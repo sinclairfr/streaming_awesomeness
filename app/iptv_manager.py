@@ -335,6 +335,7 @@ class IPTVManager:
     def _watchers_loop(self):
         """Surveille l'activité des watchers et arrête les streams inutilisés"""
         last_log_time = 0
+        last_health_check = 0
         log_cycle = int(
             os.getenv("WATCHERS_LOG_CYCLE", "60")
         )  # Augmenter à 60s au lieu de 10s
@@ -343,6 +344,18 @@ class IPTVManager:
             try:
                 current_time = time.time()
                 channels_to_stop = []
+
+                # Ajout du health check toutes les 5 minutes
+                if current_time - last_health_check > 300:  # 5 minutes
+                    for channel_name, channel in self.channels.items():
+                        if hasattr(channel, "channel_health_check"):
+                            try:
+                                channel.channel_health_check()
+                            except Exception as e:
+                                logger.error(
+                                    f"[{channel_name}] ❌ Erreur health check: {e}"
+                                )
+                    last_health_check = current_time
 
                 # Pour chaque chaîne, on vérifie l'inactivité
                 for channel_name, channel in self.channels.items():
@@ -388,7 +401,9 @@ class IPTVManager:
                 logger.error(f"❌ Erreur watchers_loop: {e}")
                 time.sleep(10)
 
-    def update_watchers(self, channel_name: str, count: int, request_path: str):
+    def update_watchers(
+        self, channel_name: str, count: int, request_path: str, status_code: str = None
+    ):
         """Met à jour les watchers en fonction des requêtes m3u8 et ts"""
         try:
             # Vérifier si la chaîne existe
@@ -433,6 +448,21 @@ class IPTVManager:
             else:
                 # On met quand même à jour le timestamp pour éviter l'inactivité
                 channel.last_watcher_time = time.time()
+
+            # AJOUT: Détection des erreurs 404 pour démarrer automatiquement les streams
+            if status_code == "404" and ".m3u8" in request_path:
+                # Si on reçoit une erreur 404 sur une playlist, c'est que le stream n'est pas démarré
+                if (
+                    channel_name in self.channel_ready_status
+                    and self.channel_ready_status[channel_name]
+                    and not channel.process_manager.is_running()
+                ):
+                    logger.info(
+                        f"[{channel_name}] 🚨 Détection accès 404, démarrage automatique du stream"
+                    )
+                    channel.start_stream_if_needed()
+                    # On force la mise à jour du watcher count pour éviter un arrêt immédiat
+                    channel.watchers_count = max(count, 1)  # Au moins 1 watcher
 
         except Exception as e:
             logger.error(f"❌ Erreur update_watchers: {e}")

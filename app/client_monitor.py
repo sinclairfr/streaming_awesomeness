@@ -9,6 +9,7 @@ from config import TIMEOUT_NO_VIEWERS
 
 
 class ClientMonitor(threading.Thread):
+    # Dans la méthode __init__ de ClientMonitor
     def __init__(self, log_path, update_watchers_callback, manager):
         super().__init__(daemon=True)
         self.log_path = log_path
@@ -30,16 +31,13 @@ class ClientMonitor(threading.Thread):
         self.inactivity_threshold = TIMEOUT_NO_VIEWERS
 
         # Pour surveiller les sauts de segments
-        self.segment_monitor_thread = threading.Thread(
-            target=self._monitor_segment_jumps, daemon=True
-        )
-        self.segment_monitor_thread.start()
+        # MODIFIÉ: Ne pas démarrer un thread qui n'existe pas
+        # self.segment_monitor_thread = threading.Thread(target=self._monitor_segment_jumps, daemon=True)
+        # self.segment_monitor_thread.start()
 
         # Thread de nettoyage
         self.cleanup_thread = threading.Thread(target=self._cleanup_loop, daemon=True)
         self.cleanup_thread.start()
-
-        # self.log_check_thread.start()
 
     def _cleanup_loop(self):
         """Nettoie les watchers inactifs plus fréquemment"""
@@ -88,8 +86,7 @@ class ClientMonitor(threading.Thread):
                 self.update_watchers(channel, count, "/hls/")
 
     def _monitor_segment_jumps(self):
-        """Surveille les sauts anormaux dans les segments et ainsi detectés les bugs"""
-        # Boucle infinie pour surveiller les segments
+        """Surveille les sauts anormaux dans les segments pour détecter les bugs"""
         while True:
             try:
                 with self.lock:
@@ -122,7 +119,7 @@ class ClientMonitor(threading.Thread):
                                     f"(saut de {current_id - prev_id} segments)"
                                 )
 
-                                # On peut notifier ici ou prendre des mesures
+                                # Notification au canal si possible
                                 channel_obj = self.manager.channels.get(channel)
                                 if channel_obj and hasattr(
                                     channel_obj, "report_segment_jump"
@@ -419,13 +416,15 @@ class ClientMonitor(threading.Thread):
 
                 # Traitement des nouvelles lignes
                 channel_updates = {}  # {channel_name: count}
+                status_codes = {}  # {channel_name: status_code}
+
                 for line in new_lines:
                     if not line.strip():
                         continue
 
                     # Traiter la ligne
-                    ip, channel, request_type, is_valid, _ = self._parse_access_log(
-                        line
+                    ip, channel, request_type, is_valid, status_code = (
+                        self._parse_access_log(line)
                     )
 
                     if is_valid and channel:
@@ -438,13 +437,20 @@ class ClientMonitor(threading.Thread):
                             channel_updates[channel] = set()
                         channel_updates[channel].add(ip)
 
+                        # Stockage du dernier code de statut pour cette chaîne
+                        status_codes[channel] = status_code
+
                 # Mise à jour groupée par chaîne
                 for channel, ips in channel_updates.items():
                     count = len(ips)
+                    status_code = status_codes.get(
+                        channel, "200"
+                    )  # Par défaut 200 si pas de code
+
                     logger.info(
-                        f"[{channel}] 👁️ MAJ watchers: {count} actifs - {list(ips)}"
+                        f"[{channel}] 👁️ MAJ watchers: {count} actifs - {list(ips)} - Status: {status_code}"
                     )
-                    self.update_watchers(channel, count, "/hls/")
+                    self.update_watchers(channel, count, "/hls/", status_code)
 
                 return True
 

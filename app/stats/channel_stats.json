@@ -1,39 +1,14 @@
 {
   "channels": {
     "pagnol": {
-      "current_watchers": 0,
+      "current_watchers": 1,
       "peak_watchers": 3,
       "peak_time": 1742185360,
       "total_watch_time": 0,
-      "session_count": 14,
-      "total_segments": 110,
+      "session_count": 15,
+      "total_segments": 115,
       "watchlist": {},
       "segment_history": [
-        {
-          "segment_id": "10",
-          "size": 4718236,
-          "time": 1742185429
-        },
-        {
-          "segment_id": "11",
-          "size": 5812960,
-          "time": 1742185439
-        },
-        {
-          "segment_id": "12",
-          "size": 2335524,
-          "time": 1742185445
-        },
-        {
-          "segment_id": "13",
-          "size": 5542052,
-          "time": 1742185455
-        },
-        {
-          "segment_id": "14",
-          "size": 4733276,
-          "time": 1742185465
-        },
         {
           "segment_id": "15",
           "size": 4764484,
@@ -508,73 +483,43 @@
           "segment_id": "2785",
           "size": 5176956,
           "time": 1742205512
+        },
+        {
+          "segment_id": "0",
+          "size": 2339472,
+          "time": 1742221594
+        },
+        {
+          "segment_id": "1",
+          "size": 1868908,
+          "time": 1742221598
+        },
+        {
+          "segment_id": "2",
+          "size": 3407876,
+          "time": 1742221604
+        },
+        {
+          "segment_id": "3",
+          "size": 1426544,
+          "time": 1742221606
+        },
+        {
+          "segment_id": "4",
+          "size": 1322580,
+          "time": 1742221610
         }
       ]
     },
     "defunes": {
-      "current_watchers": 0,
+      "current_watchers": 2,
       "peak_watchers": 3,
       "peak_time": 1742185359,
       "total_watch_time": 0,
-      "session_count": 8,
-      "total_segments": 110,
+      "session_count": 10,
+      "total_segments": 121,
       "watchlist": {},
       "segment_history": [
-        {
-          "segment_id": "11",
-          "size": 1026856,
-          "time": 1742185408
-        },
-        {
-          "segment_id": "12",
-          "size": 1327844,
-          "time": 1742185414
-        },
-        {
-          "segment_id": "13",
-          "size": 1297576,
-          "time": 1742185418
-        },
-        {
-          "segment_id": "14",
-          "size": 1298328,
-          "time": 1742185422
-        },
-        {
-          "segment_id": "15",
-          "size": 1101116,
-          "time": 1742185426
-        },
-        {
-          "segment_id": "16",
-          "size": 891872,
-          "time": 1742185430
-        },
-        {
-          "segment_id": "17",
-          "size": 811596,
-          "time": 1742185434
-        },
-        {
-          "segment_id": "18",
-          "size": 1276332,
-          "time": 1742185438
-        },
-        {
-          "segment_id": "19",
-          "size": 1287988,
-          "time": 1742185442
-        },
-        {
-          "segment_id": "20",
-          "size": 1128188,
-          "time": 1742185444
-        },
-        {
-          "segment_id": "21",
-          "size": 1137024,
-          "time": 1742185448
-        },
         {
           "segment_id": "22",
           "size": 1316376,
@@ -1019,28 +964,73 @@
           "segment_id": "4219",
           "size": 1108448,
           "time": 1742209506
+        },
+        {
+          "segment_id": "0",
+          "size": 531288,
+          "time": 1742221577
+        },
+        {
+          "segment_id": "1",
+          "size": 844120,
+          "time": 1742221587
+        },
+        {
+          "segment_id": "2",
+          "size": 492560,
+          "time": 1742221593
+        },
+        {
+          "segment_id": "3",
+          "size": 408712,
+          "time": 1742221599
+        },
+        {
+          "segment_id": "4",
+          "size": 211500,
+          "time": 1742221603
+        },
+        {
+          "segment_id": "0",
+          "size": 1529192,
+          "time": 1742221792
+        },
+        {
+          "segment_id": "1",
+          "size": 1054116,
+          "time": 1742221796
+        },
+        {
+          "segment_id": "2",
+          "size": 817048,
+          "time": 1742221800
+        },
+        {
+          "segment_id": "3",
+          "size": 668152,
+          "time": 1742221804
+        },
+        {
+          "segment_id": "4",
+          "size": 680560,
+          "time": 1742221808
+        },
+        {
+          "segment_id": "5",
+          "size": 1020840,
+          "time": 1742221810
         }
       ]
     },
     "rambo": {
-      "current_watchers": 0,
+      "current_watchers": 2,
       "peak_watchers": 3,
       "peak_time": 1742185353,
       "total_watch_time": 0,
-      "session_count": 17,
-      "total_segments": 215,
+      "session_count": 19,
+      "total_segments": 217,
       "watchlist": {},
       "segment_history": [
-        {
-          "segment_id": "8",
-          "size": 6463440,
-          "time": 1742187602
-        },
-        {
-          "segment_id": "9",
-          "size": 3176448,
-          "time": 1742187606
-        },
         {
           "segment_id": "10",
           "size": 2229492,
@@ -1530,98 +1520,28 @@
           "segment_id": "2020",
           "size": 810468,
           "time": 1742219887
+        },
+        {
+          "segment_id": "0",
+          "size": 3399040,
+          "time": 1742221593
+        },
+        {
+          "segment_id": "1",
+          "size": 2889748,
+          "time": 1742221603
         }
       ]
     },
     "BruceLee": {
-      "current_watchers": 0,
+      "current_watchers": 1,
       "peak_watchers": 3,
       "peak_time": 1742185352,
       "total_watch_time": 0,
-      "session_count": 7,
-      "total_segments": 173,
+      "session_count": 8,
+      "total_segments": 189,
       "watchlist": {},
       "segment_history": [
-        {
-          "segment_id": "4",
-          "size": 3503004,
-          "time": 1742187176
-        },
-        {
-          "segment_id": "5",
-          "size": 375812,
-          "time": 1742187178
-        },
-        {
-          "segment_id": "6",
-          "size": 596900,
-          "time": 1742187180
-        },
-        {
-          "segment_id": "8",
-          "size": 399124,
-          "time": 1742187184
-        },
-        {
-          "segment_id": "9",
-          "size": 1218428,
-          "time": 1742187190
-        },
-        {
-          "segment_id": "10",
-          "size": 1990356,
-          "time": 1742187196
-        },
-        {
-          "segment_id": "11",
-          "size": 1651204,
-          "time": 1742187200
-        },
-        {
-          "segment_id": "12",
-          "size": 623220,
-          "time": 1742187202
-        },
-        {
-          "segment_id": "13",
-          "size": 1432748,
-          "time": 1742187204
-        },
-        {
-          "segment_id": "14",
-          "size": 2042620,
-          "time": 1742187206
-        },
-        {
-          "segment_id": "15",
-          "size": 2542700,
-          "time": 1742187210
-        },
-        {
-          "segment_id": "16",
-          "size": 9185304,
-          "time": 1742187224
-        },
-        {
-          "segment_id": "17",
-          "size": 4509180,
-          "time": 1742187230
-        },
-        {
-          "segment_id": "18",
-          "size": 4705264,
-          "time": 1742187238
-        },
-        {
-          "segment_id": "19",
-          "size": 2269160,
-          "time": 1742187242
-        },
-        {
-          "segment_id": "20",
-          "size": 1276708,
-          "time": 1742187244
-        },
         {
           "segment_id": "21",
           "size": 1021592,
@@ -2041,15 +1961,95 @@
           "segment_id": "4090",
           "size": 1088332,
           "time": 1742205486
+        },
+        {
+          "segment_id": "0",
+          "size": 2683136,
+          "time": 1742221573
+        },
+        {
+          "segment_id": "1",
+          "size": 1894852,
+          "time": 1742221577
+        },
+        {
+          "segment_id": "2",
+          "size": 1478244,
+          "time": 1742221581
+        },
+        {
+          "segment_id": "3",
+          "size": 529784,
+          "time": 1742221583
+        },
+        {
+          "segment_id": "4",
+          "size": 1720952,
+          "time": 1742221585
+        },
+        {
+          "segment_id": "5",
+          "size": 2669412,
+          "time": 1742221595
+        },
+        {
+          "segment_id": "6",
+          "size": 172584,
+          "time": 1742221597
+        },
+        {
+          "segment_id": "7",
+          "size": 223156,
+          "time": 1742221599
+        },
+        {
+          "segment_id": "8",
+          "size": 403824,
+          "time": 1742221601
+        },
+        {
+          "segment_id": "9",
+          "size": 497072,
+          "time": 1742221603
+        },
+        {
+          "segment_id": "10",
+          "size": 1132888,
+          "time": 1742221609
+        },
+        {
+          "segment_id": "0",
+          "size": 5752988,
+          "time": 1742221796
+        },
+        {
+          "segment_id": "1",
+          "size": 669656,
+          "time": 1742221798
+        },
+        {
+          "segment_id": "2",
+          "size": 1576192,
+          "time": 1742221801
+        },
+        {
+          "segment_id": "3",
+          "size": 1442524,
+          "time": 1742221804
+        },
+        {
+          "segment_id": "4",
+          "size": 1592360,
+          "time": 1742221806
         }
       ]
     },
     "western": {
-      "current_watchers": 0,
+      "current_watchers": 1,
       "peak_watchers": 3,
       "peak_time": 1742185353,
       "total_watch_time": 0,
-      "session_count": 10,
+      "session_count": 11,
       "total_segments": 183,
       "watchlist": {},
       "segment_history": [
@@ -2561,59 +2561,9 @@
       "peak_time": 1742185355,
       "total_watch_time": 0,
       "session_count": 5,
-      "total_segments": 169,
+      "total_segments": 179,
       "watchlist": {},
       "segment_history": [
-        {
-          "segment_id": "33",
-          "size": 1685608,
-          "time": 1742185976
-        },
-        {
-          "segment_id": "34",
-          "size": 386716,
-          "time": 1742185978
-        },
-        {
-          "segment_id": "0",
-          "size": 2836168,
-          "time": 1742187157
-        },
-        {
-          "segment_id": "1",
-          "size": 1055432,
-          "time": 1742187161
-        },
-        {
-          "segment_id": "2",
-          "size": 1721328,
-          "time": 1742187165
-        },
-        {
-          "segment_id": "3",
-          "size": 9225912,
-          "time": 1742187175
-        },
-        {
-          "segment_id": "4",
-          "size": 7305492,
-          "time": 1742187183
-        },
-        {
-          "segment_id": "5",
-          "size": 9542692,
-          "time": 1742187193
-        },
-        {
-          "segment_id": "6",
-          "size": 9449256,
-          "time": 1742187201
-        },
-        {
-          "segment_id": "7",
-          "size": 3990300,
-          "time": 1742187207
-        },
         {
           "segment_id": "8",
           "size": 6011488,
@@ -3063,53 +3013,68 @@
           "segment_id": "3733",
           "size": 3265936,
           "time": 1742205488
+        },
+        {
+          "segment_id": "0",
+          "size": 2836168,
+          "time": 1742221572
+        },
+        {
+          "segment_id": "1",
+          "size": 1055432,
+          "time": 1742221576
+        },
+        {
+          "segment_id": "2",
+          "size": 1721328,
+          "time": 1742221580
+        },
+        {
+          "segment_id": "3",
+          "size": 9225912,
+          "time": 1742221590
+        },
+        {
+          "segment_id": "4",
+          "size": 7305492,
+          "time": 1742221598
+        },
+        {
+          "segment_id": "5",
+          "size": 9542692,
+          "time": 1742221608
+        },
+        {
+          "segment_id": "0",
+          "size": 2836168,
+          "time": 1742221791
+        },
+        {
+          "segment_id": "1",
+          "size": 1055432,
+          "time": 1742221795
+        },
+        {
+          "segment_id": "2",
+          "size": 1721328,
+          "time": 1742221799
+        },
+        {
+          "segment_id": "3",
+          "size": 9225912,
+          "time": 1742221809
         }
       ]
     },
     "fela": {
-      "current_watchers": 0,
+      "current_watchers": 1,
       "peak_watchers": 3,
       "peak_time": 1742185357,
       "total_watch_time": 0,
-      "session_count": 8,
-      "total_segments": 105,
+      "session_count": 9,
+      "total_segments": 112,
       "watchlist": {},
       "segment_history": [
-        {
-          "segment_id": "6",
-          "size": 2627864,
-          "time": 1742185418
-        },
-        {
-          "segment_id": "7",
-          "size": 2693476,
-          "time": 1742185428
-        },
-        {
-          "segment_id": "8",
-          "size": 2734460,
-          "time": 1742185438
-        },
-        {
-          "segment_id": "9",
-          "size": 1167480,
-          "time": 1742185442
-        },
-        {
-          "segment_id": "10",
-          "size": 696728,
-          "time": 1742185444
-        },
-        {
-          "segment_id": "11",
-          "size": 833216,
-          "time": 1742185448
-        },
-        {
-          "segment_id": "12",
-          "size": 2003516,
-          "time": 1742185452
-        },
         {
           "segment_id": "13",
           "size": 2443248,
@@ -3574,23 +3539,53 @@
           "segment_id": "559",
           "size": 605548,
           "time": 1742191086
+        },
+        {
+          "segment_id": "0",
+          "size": 2471072,
+          "time": 1742221578
+        },
+        {
+          "segment_id": "1",
+          "size": 2814172,
+          "time": 1742221588
+        },
+        {
+          "segment_id": "2",
+          "size": 1548368,
+          "time": 1742221594
+        },
+        {
+          "segment_id": "3",
+          "size": 1870036,
+          "time": 1742221600
+        },
+        {
+          "segment_id": "4",
+          "size": 2834852,
+          "time": 1742221610
+        },
+        {
+          "segment_id": "0",
+          "size": 3129072,
+          "time": 1742221798
+        },
+        {
+          "segment_id": "1",
+          "size": 4739856,
+          "time": 1742221808
         }
       ]
     },
     "vandamme": {
-      "current_watchers": 0,
+      "current_watchers": 1,
       "peak_watchers": 3,
       "peak_time": 1742185358,
       "total_watch_time": 0,
-      "session_count": 7,
-      "total_segments": 137,
+      "session_count": 8,
+      "total_segments": 138,
       "watchlist": {},
       "segment_history": [
-        {
-          "segment_id": "40",
-          "size": 2563192,
-          "time": 1742185525
-        },
         {
           "segment_id": "41",
           "size": 2267468,
@@ -4085,38 +4080,23 @@
           "segment_id": "4123",
           "size": 6662908,
           "time": 1742205490
+        },
+        {
+          "segment_id": "0",
+          "size": 2768112,
+          "time": 1742221604
         }
       ]
     },
     "gendarme": {
-      "current_watchers": 0,
+      "current_watchers": 2,
       "peak_watchers": 3,
       "peak_time": 1742185361,
       "total_watch_time": 0,
-      "session_count": 12,
-      "total_segments": 128,
+      "session_count": 15,
+      "total_segments": 132,
       "watchlist": {},
       "segment_history": [
-        {
-          "segment_id": "30",
-          "size": 5065472,
-          "time": 1742185563
-        },
-        {
-          "segment_id": "31",
-          "size": 6854856,
-          "time": 1742185573
-        },
-        {
-          "segment_id": "32",
-          "size": 8346448,
-          "time": 1742185583
-        },
-        {
-          "segment_id": "33",
-          "size": 8040196,
-          "time": 1742185593
-        },
         {
           "segment_id": "34",
           "size": 2024948,
@@ -4596,6 +4576,26 @@
           "segment_id": "866",
           "size": 4318924,
           "time": 1742219904
+        },
+        {
+          "segment_id": "0",
+          "size": 1783556,
+          "time": 1742221591
+        },
+        {
+          "segment_id": "1",
+          "size": 1852364,
+          "time": 1742221601
+        },
+        {
+          "segment_id": "2",
+          "size": 270156,
+          "time": 1742221603
+        },
+        {
+          "segment_id": "0",
+          "size": 7109032,
+          "time": 1742221810
         }
       ]
     },
@@ -4791,7 +4791,7 @@
       "peak_time": 1742185413,
       "total_watch_time": 0,
       "session_count": 1,
-      "total_segments": 34,
+      "total_segments": 35,
       "watchlist": {},
       "segment_history": [
         {
@@ -4963,16 +4963,21 @@
           "segment_id": "34",
           "size": 826636,
           "time": 1742185554
+        },
+        {
+          "segment_id": "0",
+          "size": 275232,
+          "time": 1742221609
         }
       ]
     }
   },
   "global": {
-    "total_watchers": 0,
+    "total_watchers": 11,
     "peak_watchers": 25,
     "peak_time": 1742185361,
     "total_watch_time": 0,
-    "last_updated": 1742220485
+    "last_updated": 1742221811
   },
   "daily": {
     "2025-03-16": {
