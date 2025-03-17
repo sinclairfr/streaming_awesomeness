@@ -40,15 +40,28 @@ class ClientMonitor(threading.Thread):
         self.cleanup_thread.start()
 
     def _cleanup_loop(self):
-        """Nettoie les watchers inactifs plus fréquemment"""
+        """Nettoie les watchers inactifs et vérifie l'état des logs"""
+        last_health_check = 0
+
         while True:
-            time.sleep(10)
-            self._cleanup_inactive()
+            try:
+                time.sleep(10)
+                self._cleanup_inactive()
+
+                # Vérification périodique des logs (toutes les 5 minutes)
+                current_time = time.time()
+                if current_time - last_health_check > 300:  # 5 minutes
+                    self.check_log_status()
+                    last_health_check = current_time
+
+            except Exception as e:
+                logger.error(f"❌ Erreur dans cleanup_loop: {e}")
+                time.sleep(30)  # Pause plus longue en cas d'erreur
 
     def _cleanup_inactive(self):
-        """Version simplifiée du nettoyage"""
+        """Version simplifiée du nettoyage avec meilleures logs"""
         now = time.time()
-        timeout = 60  # Un seul timeout de 60 secondes, point.
+        timeout = 60  # Un seul timeout de 60 secondes
 
         to_remove = []
         affected_channels = set()
@@ -68,7 +81,9 @@ class ClientMonitor(threading.Thread):
                     if (
                         key[0] != "master_playlist"
                     ):  # Ne log pas les suppressions de master_playlist
-                        logger.info(f"🗑️ Watcher supprimé: {key[1]} → {key[0]}")
+                        logger.info(
+                            f"🗑️ Watcher supprimé: {key[1]} → {key[0]} (inactif depuis {now - self.watchers[key]:.1f}s)"
+                        )
                     del self.watchers[key]
 
             # Recalculer le nombre de watchers pour chaque chaîne affectée
@@ -137,7 +152,7 @@ class ClientMonitor(threading.Thread):
         return 0
 
     def _parse_access_log(self, line):
-        """Version simplifiée qui extrait seulement l'essentiel"""
+        """Version simplifiée qui extrait seulement l'essentiel avec debug amélioré"""
         # Si pas de /hls/ dans la ligne, on ignore direct
         if "/hls/" not in line:
             return None, None, None, False, None
@@ -164,12 +179,13 @@ class ClientMonitor(threading.Thread):
                 if channel_part and not channel_part.endswith(".m3u"):
                     channel = channel_part
 
-            # Type de requête
-            request_type = (
-                "playlist"
-                if ".m3u8" in line
-                else "segment" if ".ts" in line else "unknown"
-            )
+            # Type de requête - IMPORTANT: rechercher .ts avant .m3u8 pour priorité
+            if ".ts" in line:
+                request_type = "segment"
+            elif ".m3u8" in line:
+                request_type = "playlist"
+            else:
+                request_type = "unknown"
 
         # Statut HTTP (format: " 200 ")
         status_code = "???"
@@ -180,6 +196,7 @@ class ClientMonitor(threading.Thread):
         # Validité
         is_valid = status_code in ["200", "206"]
 
+        # Retour des informations avec plus de contexte pour debug
         return ip, channel, request_type, is_valid, None
 
     def _follow_log_file_legacy(self):
@@ -414,17 +431,23 @@ class ClientMonitor(threading.Thread):
                 # Mise à jour de la position
                 self.last_position = f.tell()
 
+                if not new_lines:
+                    return True  # Pas de nouvelles lignes, tout est ok
+
+                # Débogage: nombre de lignes traitées
+                # logger.debug(f"Traitement de {len(new_lines)} nouvelles lignes")
+
                 # Traitement des nouvelles lignes
-                channel_updates = {}  # {channel_name: count}
-                status_codes = {}  # {channel_name: status_code}
+                segment_requests = {}  # {channel_name: [segment_ids]}
+                channel_updates = {}  # {channel_name: set(ips)}
 
                 for line in new_lines:
                     if not line.strip():
                         continue
 
                     # Traiter la ligne
-                    ip, channel, request_type, is_valid, status_code = (
-                        self._parse_access_log(line)
+                    ip, channel, request_type, is_valid, _ = self._parse_access_log(
+                        line
                     )
 
                     if is_valid and channel:
@@ -432,25 +455,44 @@ class ClientMonitor(threading.Thread):
                         current_time = time.time()
                         self.watchers[(channel, ip)] = current_time
 
+                        # Si c'est un segment, on le stocke pour analyse
+                        if request_type == "segment":
+                            segment_match = re.search(r"segment_(\d+)\.ts", line)
+                            if segment_match:
+                                segment_id = segment_match.group(1)
+                                if channel not in segment_requests:
+                                    segment_requests[channel] = []
+                                segment_requests[channel].append(segment_id)
+
+                                # On met à jour aussi la dernière activité de segment
+                                if (
+                                    hasattr(self.manager, "channels")
+                                    and channel in self.manager.channels
+                                ):
+                                    self.manager.channels[channel].last_segment_time = (
+                                        current_time
+                                    )
+
                         # Regrouper par chaîne pour ne faire qu'une mise à jour
                         if channel not in channel_updates:
                             channel_updates[channel] = set()
                         channel_updates[channel].add(ip)
 
-                        # Stockage du dernier code de statut pour cette chaîne
-                        status_codes[channel] = status_code
-
                 # Mise à jour groupée par chaîne
                 for channel, ips in channel_updates.items():
-                    count = len(ips)
-                    status_code = status_codes.get(
-                        channel, "200"
-                    )  # Par défaut 200 si pas de code
+                    if channel == "master_playlist":
+                        continue  # On ignore la playlist maîtresse
 
+                    count = len(ips)
                     logger.info(
-                        f"[{channel}] 👁️ MAJ watchers: {count} actifs - {list(ips)} - Status: {status_code}"
+                        f"[{channel}] 👁️ MAJ watchers: {count} actifs - {list(ips)}"
                     )
-                    self.update_watchers(channel, count, "/hls/", status_code)
+                    self.update_watchers(channel, count, "/hls/")
+
+                # Loguer les requêtes de segments pour debugging
+                for channel, segments in segment_requests.items():
+                    if segments:
+                        logger.debug(f"[{channel}] 📊 Segments demandés: {segments}")
 
                 return True
 
@@ -786,6 +828,65 @@ class ClientMonitor(threading.Thread):
                 self.manager.stats_collector.update_user_stats(
                     ip, channel, duration, user_agent
                 )
+
+    def check_log_status(self):
+        """Vérifie l'état du monitoring des logs et effectue des actions correctives si nécessaire"""
+        try:
+            # Vérifie que le fichier existe
+            if not os.path.exists(self.log_path):
+                logger.error(f"❌ Fichier log nginx introuvable: {self.log_path}")
+                return False
+
+            # Vérifie la taille du fichier
+            file_size = os.path.getsize(self.log_path)
+
+            # Vérifie que la position de lecture est valide
+            if hasattr(self, "last_position"):
+                if self.last_position > file_size:
+                    logger.warning(
+                        f"⚠️ Position de lecture ({self.last_position}) > taille du fichier ({file_size})"
+                    )
+                    self.last_position = 0
+                    logger.info("🔄 Réinitialisation de la position de lecture")
+
+                # Vérifie si de nouvelles données ont été ajoutées depuis la dernière lecture
+                if file_size > self.last_position:
+                    diff = file_size - self.last_position
+                    logger.info(
+                        f"📊 {diff} octets de nouveaux logs depuis la dernière lecture"
+                    )
+                else:
+                    logger.info(f"ℹ️ Pas de nouveaux logs depuis la dernière lecture")
+
+            # Tente de lire quelques lignes pour vérifier que le fichier est accessible
+            try:
+                with open(self.log_path, "r") as f:
+                    f.seek(max(0, file_size - 1000))  # Lire les 1000 derniers octets
+                    last_lines = f.readlines()
+                    logger.info(
+                        f"✅ Lecture réussie, {len(last_lines)} lignes récupérées"
+                    )
+
+                    # Analyse des dernières lignes pour vérifier qu'elles contiennent des requêtes HLS
+                    hls_requests = sum(1 for line in last_lines if "/hls/" in line)
+                    if hls_requests == 0 and len(last_lines) > 0:
+                        logger.warning(
+                            "⚠️ Aucune requête HLS dans les dernières lignes du log!"
+                        )
+                    else:
+                        logger.info(
+                            f"✅ {hls_requests}/{len(last_lines)} requêtes HLS détectées"
+                        )
+
+                    return True
+
+            except Exception as e:
+                logger.error(f"❌ Erreur lecture fichier log: {e}")
+                return False
+
+        except Exception as e:
+            logger.error(f"❌ Erreur vérification logs: {e}")
+            return False
 
     def _update_watcher_count(self, channel):
         """Calcule et met à jour le nombre de watchers pour une chaîne"""
