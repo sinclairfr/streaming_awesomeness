@@ -152,6 +152,12 @@ class IPTVManager:
         # statistiques
         self.stats_collector = StatsCollector()
 
+        # Thread de rapport de statistiques
+        self.stats_thread = threading.Thread(
+            target=self._stats_reporting_loop, daemon=True
+        )
+        self.stats_thread.start()
+
     def _check_client_monitor(self):
         """Vérifie périodiquement l'état du client_monitor"""
         while True:
@@ -171,6 +177,127 @@ class IPTVManager:
             except Exception as e:
                 logger.error(f"❌ Erreur vérification client_monitor: {e}")
             time.sleep(60)  # Vérification toutes les minutes
+
+    def _stats_reporting_loop(self):
+        """Thread qui génère périodiquement un rapport des statistiques"""
+        stats_report_interval = int(
+            os.getenv("STATS_REPORT_INTERVAL", "300")
+        )  # Toutes les 5 minutes par défaut
+
+        while self.running:
+            try:
+                time.sleep(stats_report_interval)
+
+                if not hasattr(self, "stats_collector") or not self.stats_collector:
+                    logger.warning(
+                        "⚠️ StatsCollector non disponible, rapport impossible"
+                    )
+                    continue
+
+                # Générer le rapport
+                self._generate_stats_report()
+
+            except Exception as e:
+                logger.error(f"❌ Erreur dans la boucle de rapport stats: {e}")
+                time.sleep(60)  # Attente plus longue en cas d'erreur
+
+    def _generate_stats_report(self):
+        """Génère un rapport de statistiques basé sur les données du StatsCollector"""
+        try:
+            stats = self.stats_collector
+
+            # Récupérer les statistiques globales
+            global_stats = stats.stats.get("global", {})
+            total_watchers = global_stats.get("total_watchers", 0)
+            peak_watchers = global_stats.get("peak_watchers", 0)
+            total_watch_time = global_stats.get("total_watch_time", 0)
+
+            # Formater le temps de visionnage
+            hours = int(total_watch_time // 3600)
+            minutes = int((total_watch_time % 3600) // 60)
+            seconds = int(total_watch_time % 60)
+            watch_time_formatted = f"{hours}h {minutes}m {seconds}s"
+
+            # Générer le rapport
+            report_lines = [
+                "📊 RAPPORT DE STATISTIQUES",
+                f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}",
+                f"Spectateurs actifs: {total_watchers}",
+                f"Pic de spectateurs: {peak_watchers}",
+                f"Temps de visionnage total: {watch_time_formatted}",
+            ]
+
+            # Statistiques par chaîne
+            channels_stats = []
+            for name, channel_data in stats.stats.get("channels", {}).items():
+                current_watchers = channel_data.get("current_watchers", 0)
+                peak_watchers = channel_data.get("peak_watchers", 0)
+                watch_time = channel_data.get("total_watch_time", 0)
+
+                # Ne montrer que les chaînes avec activité
+                if current_watchers > 0 or peak_watchers > 0 or watch_time > 0:
+                    # Formater le temps de visionnage
+                    hours = int(watch_time // 3600)
+                    minutes = int((watch_time % 3600) // 60)
+                    watch_time_formatted = f"{hours}h {minutes}m"
+
+                    channels_stats.append(
+                        {
+                            "name": name,
+                            "current": current_watchers,
+                            "peak": peak_watchers,
+                            "watch_time": watch_time,
+                            "watch_time_formatted": watch_time_formatted,
+                        }
+                    )
+
+            # Trier par nombre de spectateurs actuels
+            channels_stats.sort(key=lambda x: (x["current"], x["peak"]), reverse=True)
+
+            if channels_stats:
+                report_lines.append("\nSTATISTIQUES PAR CHAÎNE:")
+                for ch in channels_stats:
+                    report_lines.append(
+                        f"- {ch['name']}: {ch['current']} actifs (pic: {ch['peak']}, visionnage: {ch['watch_time_formatted']})"
+                    )
+
+            # Statistiques par utilisateur (IP)
+            user_stats = stats.user_stats.get("users", {})
+
+            if user_stats:
+                # Limiter à 10 utilisateurs les plus actifs pour éviter des logs trop longs
+                top_users = sorted(
+                    [(ip, data) for ip, data in user_stats.items()],
+                    key=lambda x: x[1].get("total_watch_time", 0),
+                    reverse=True,
+                )[:10]
+
+                if top_users:
+                    report_lines.append("\nTOP 10 UTILISATEURS (par IP):")
+                    for ip, data in top_users:
+                        watch_time = data.get("total_watch_time", 0)
+                        hours = int(watch_time // 3600)
+                        minutes = int((watch_time % 3600) // 60)
+                        watch_time_formatted = f"{hours}h {minutes}m"
+
+                        # Si on a des chaînes pour cet utilisateur
+                        user_channels = len(data.get("channels", {}))
+                        favorite = "aucune"
+
+                        for ch_name, ch_data in data.get("channels", {}).items():
+                            if ch_data.get("favorite", False):
+                                favorite = ch_name
+                                break
+
+                        report_lines.append(
+                            f"- {ip}: {watch_time_formatted} sur {user_channels} chaînes (favorite: {favorite})"
+                        )
+
+            # Afficher le rapport
+            logger.info("\n".join(report_lines))
+
+        except Exception as e:
+            logger.error(f"❌ Erreur génération rapport stats: {e}")
 
     def _process_channel_init_queue(self):
         """Traite la queue d'initialisation des chaînes en parallèle"""
@@ -429,10 +556,25 @@ class IPTVManager:
             if ".ts" in request_path:
                 channel.last_segment_time = time.time()
 
+                # Si on a un StatsCollector, mettre à jour stats de segment
+                if hasattr(self, "stats_collector") and self.stats_collector:
+                    # Extraction du segment ID
+                    segment_match = re.search(r"segment_(\d+)\.ts", request_path)
+                    if segment_match:
+                        segment_id = segment_match.group(1)
+                        # On ne connaît pas la taille, donc on la fixe à une valeur par défaut
+                        self.stats_collector.update_segment_stats(
+                            channel_name, segment_id, 100000
+                        )
+
             old_count = getattr(channel, "watchers_count", 0)
 
             # MAJ du compteur s'il y a changement
             channel.watchers_count = count  # Toujours mettre à jour
+
+            # Mise à jour des statistiques globales si StatsCollector existe
+            if hasattr(self, "stats_collector") and self.stats_collector:
+                self.stats_collector.update_channel_watchers(channel_name, count)
 
             # Vérification de l'état de la chaîne après mise à jour
             logger.debug(

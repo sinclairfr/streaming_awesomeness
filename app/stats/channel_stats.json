@@ -1,12 +1,85 @@
 {
-  "channels": {},
-  "global": {
-    "total_watchers": 0,
-    "peak_watchers": 0,
-    "peak_time": 0,
-    "total_watch_time": 0,
-    "last_updated": 1742418214
+  "channels": {
+    "weber": {
+      "current_watchers": 0,
+      "peak_watchers": 1,
+      "peak_time": 1742419437,
+      "total_watch_time": 0,
+      "session_count": 1,
+      "total_segments": 0,
+      "watchlist": {}
+    },
+    "western": {
+      "current_watchers": 0,
+      "peak_watchers": 1,
+      "peak_time": 1742419447,
+      "total_watch_time": 0,
+      "session_count": 1,
+      "total_segments": 0,
+      "watchlist": {}
+    },
+    "visiteurs": {
+      "current_watchers": 0,
+      "peak_watchers": 1,
+      "peak_time": 1742419460,
+      "total_watch_time": 0,
+      "session_count": 1,
+      "total_segments": 0,
+      "watchlist": {}
+    },
+    "verite": {
+      "current_watchers": 0,
+      "peak_watchers": 1,
+      "peak_time": 1742419477,
+      "total_watch_time": 0,
+      "session_count": 1,
+      "total_segments": 0,
+      "watchlist": {}
+    },
+    "vandamme": {
+      "current_watchers": 1,
+      "peak_watchers": 1,
+      "peak_time": 1742419483,
+      "total_watch_time": 0,
+      "session_count": 1,
+      "total_segments": 0,
+      "watchlist": {}
+    }
   },
-  "daily": {},
+  "global": {
+    "total_watchers": 1,
+    "peak_watchers": 5,
+    "peak_time": 1742419483,
+    "total_watch_time": 0,
+    "last_updated": 1742419781
+  },
+  "daily": {
+    "2025-03-19": {
+      "peak_watchers": 5,
+      "total_watch_time": 0,
+      "channels": {
+        "weber": {
+          "peak_watchers": 1,
+          "total_watch_time": 0
+        },
+        "western": {
+          "peak_watchers": 1,
+          "total_watch_time": 0
+        },
+        "visiteurs": {
+          "peak_watchers": 1,
+          "total_watch_time": 0
+        },
+        "verite": {
+          "peak_watchers": 1,
+          "total_watch_time": 0
+        },
+        "vandamme": {
+          "peak_watchers": 1,
+          "total_watch_time": 0
+        }
+      }
+    }
+  },
   "last_daily_save": 1742412917.5941224
 }

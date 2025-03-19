@@ -188,6 +188,8 @@ class StatsCollector:
                 logger.error(f"❌ Erreur sauvegarde stats: {e}")
                 return False
 
+    # Modifications à apporter à stats_collector.py pour garantir l'initialisation correcte
+
     def update_channel_watchers(self, channel_name, watchers_count):
         """Met à jour les stats de watchers pour une chaîne"""
         with self.lock:
@@ -218,9 +220,10 @@ class StatsCollector:
                 channel_stats["session_count"] += watchers_count - old_watchers
 
             # Mise à jour des stats globales
-            self.stats["global"]["total_watchers"] = sum(
+            total_current_watchers = sum(
                 ch["current_watchers"] for ch in self.stats["channels"].values()
             )
+            self.stats["global"]["total_watchers"] = total_current_watchers
 
             # Mise à jour du pic global si nécessaire
             if (
@@ -331,6 +334,42 @@ class StatsCollector:
 
             # Mise à jour des stats globales
             self.stats["global"]["total_watch_time"] += duration
+
+    def cleanup(self):
+        logger.info("Début du nettoyage...")
+
+        # Arrêt du StatsCollector
+        if hasattr(self, "stats_collector"):
+            self.stats_collector.stop()
+            logger.info("📊 StatsCollector arrêté")
+
+        # Arrêt du thread d'initialisation
+        self.stop_init_thread.set()
+
+        if hasattr(self, "channel_init_thread") and self.channel_init_thread.is_alive():
+            self.channel_init_thread.join(timeout=5)
+
+        if hasattr(self, "hls_cleaner"):
+            self.hls_cleaner.stop()
+
+        if hasattr(self, "observer"):
+            self.observer.stop()
+            self.observer.join()
+
+        if hasattr(self, "ready_observer"):
+            self.ready_observer.stop()
+            self.ready_observer.join()
+
+        for name, channel in self.channels.items():
+            channel._clean_processes()
+
+        if hasattr(self, "scan_thread_stop"):
+            self.scan_thread_stop.set()
+
+        if hasattr(self, "scan_thread") and self.scan_thread.is_alive():
+            self.scan_thread.join(timeout=5)
+
+        logger.info("Nettoyage terminé")
 
     def stop(self):
         """Arrête le thread de sauvegarde et fait une dernière sauvegarde"""
