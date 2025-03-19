@@ -9,7 +9,7 @@ from config import TIMEOUT_NO_VIEWERS
 
 
 class ClientMonitor(threading.Thread):
-    # Dans la méthode __init__ de ClientMonitor
+
     def __init__(self, log_path, update_watchers_callback, manager):
         super().__init__(daemon=True)
         self.log_path = log_path
@@ -153,10 +153,11 @@ class ClientMonitor(threading.Thread):
         if "/hls/" not in line:
             return None, None, None, False, None
 
-        # Log pour debug
-        logger.debug(
-            f"🔍 Analyse ligne: {line[:100]}..."
-        )  # Limite la taille pour éviter des logs trop longs
+        # On récupère l'utilisateur agent si possible
+        user_agent = None
+        user_agent_match = re.search(r'"([^"]*)"$', line)
+        if user_agent_match:
+            user_agent = user_agent_match.group(1)
 
         # Si pas un GET ou un HEAD, on ignore
         if not ("GET /hls/" in line or "HEAD /hls/" in line):
@@ -194,18 +195,6 @@ class ClientMonitor(threading.Thread):
                         else "segment" if ".ts" in line else "unknown"
                     )
 
-                    # Log plus détaillé pour debug
-                    if request_type == "playlist":
-                        logger.debug(
-                            f"📋 Détecté accès playlist pour chaîne '{channel}' par {ip}, status: {status_code}"
-                        )
-                    elif request_type == "segment":
-                        segment_match = re.search(r"segment_(\d+)\.ts", line)
-                        segment_id = segment_match.group(1) if segment_match else "?"
-                        logger.debug(
-                            f"🎬 Détecté accès segment {segment_id} pour chaîne '{channel}' par {ip}"
-                        )
-
         # Validité - note que 404 est valide pour le suivi même si le contenu n'existe pas
         is_valid = status_code in [
             "200",
@@ -213,131 +202,81 @@ class ClientMonitor(threading.Thread):
             "404",
         ]  # Ajout du 404 pour détecter les demandes de playlists manquantes
 
-        # Pour les erreurs 404 sur les playlists, on veut les traiter spécialement
-        if status_code == "404" and ".m3u8" in line and channel != "master_playlist":
-            logger.info(
-                f"🔴 Requête 404 détectée pour {channel}/playlist.m3u8 par {ip}"
-            )
-            # Ce sera traité plus tard dans update_watchers
+        return (
+            ip,
+            channel,
+            request_type,
+            is_valid,
+            user_agent,
+        )  # On renvoie aussi l'user-agent maintenant
 
-        return ip, channel, request_type, is_valid, None
+    def _update_stats(self, ip, channel, request_type, segment_id=None):
+        """Mise à jour des statistiques via le StatsCollector"""
+        if (
+            not hasattr(self.manager, "stats_collector")
+            or not self.manager.stats_collector
+        ):
+            return
 
-    def _follow_log_file_legacy(self):
-        """Version robuste pour suivre le fichier de log sans pyinotify"""
+        stats = self.manager.stats_collector
+
+        # Déterminer la durée à ajouter selon le type de requête
+        if request_type == "segment":
+            # Les segments sont typiquement de 2-4 secondes
+            duration = 4.0
+            # Mise à jour des stats de segment si segment_id est fourni
+            if segment_id is not None:
+                stats.update_segment_stats(
+                    channel, segment_id, size=0
+                )  # La taille n'est pas connue ici
+        elif request_type == "playlist":
+            # Les playlists sont des heartbeats, on ajoute une petite durée
+            duration = 0.5
+        else:
+            # Pour les autres types, on ajoute une durée minimale
+            duration = 0.1
+
+        # Ajout du temps de visionnage
+        stats.add_watch_time(channel, ip, duration)
+
+        # Mise à jour des stats utilisateur
+        user_agent = None  # Idéalement, récupérer l'user-agent de la requête
+        stats.update_user_stats(ip, channel, duration, user_agent)
+
+    def _process_log_line(self, line):
+        """Traite une ligne du log sans déclencher de mise à jour immédiate"""
+        # Parse la ligne
+        ip, channel, request_type, is_valid, user_agent = self._parse_access_log(line)
+
+        # Si pas valide, on sort
+        if not is_valid or not channel:
+            return
+
+        # MAJ du timestamp uniquement
         try:
-            # Position initiale - SE PLACER À LA FIN DU FICHIER, PAS AU DÉBUT
-            position = os.path.getsize(self.log_path)  # <-- Correction ici
+            current_time = time.time()
 
-            logger.info(
-                f"👁️ Mode surveillance legacy actif sur {self.log_path} (démarrage à position {position})"
-            )
+            with self.lock:
+                # On stocke juste l'heure pour ce watcher
+                self.watchers[(channel, ip)] = current_time
 
-            # Variables pour le heartbeat et les nettoyages
-            last_activity_time = time.time()
-            last_heartbeat_time = time.time()
-            last_cleanup_time = time.time()
-            last_update_time = time.time()
+                # On signale que cette chaîne a été modifiée (sans faire de mise à jour)
+                if not hasattr(self, "modified_channels"):
+                    self.modified_channels = set()
+                self.modified_channels.add(channel)
 
-            while True:
-                # Vérifier que le fichier existe toujours
-                if not os.path.exists(self.log_path):
-                    logger.error(f"❌ Fichier log disparu: {self.log_path}")
-                    time.sleep(5)
-                    continue
+                # Extraction de l'ID du segment si c'est une requête de segment
+                segment_id = None
+                if request_type == "segment":
+                    segment_match = re.search(r"segment_(\d+)\.ts", line)
+                    if segment_match:
+                        segment_id = segment_match.group(1)
 
-                # Taille actuelle du fichier
-                current_size = os.path.getsize(self.log_path)
-
-                # Si le fichier a grandi, lire les nouvelles lignes
-                if current_size > position:
-                    with open(self.log_path, "r") as f:
-                        f.seek(position)
-                        new_lines = f.readlines()
-                        position = f.tell()  # Nouvelle position
-
-                        # Log pour debug - montre la différence de taille
-                        if new_lines:
-                            logger.debug(
-                                f"📝 Traitement de {len(new_lines)} nouvelles lignes (pos: {position}/{current_size})"
-                            )
-
-                        # Regrouper par chaîne pour traiter d'un coup
-                        channel_updates = {}
-
-                        # Traitement des nouvelles lignes en batch
-                        for line in new_lines:
-                            if line.strip():
-                                # Pré-traitement
-                                ip, channel, request_type, is_valid, _ = (
-                                    self._parse_access_log(line.strip())
-                                )
-
-                                # Si valide, ajouter à notre dictionnaire de chaînes
-                                if is_valid and channel:
-                                    # On stocke l'heure ACTUELLE, pas celle du log
-                                    self.watchers[(channel, ip)] = time.time()
-                                    if channel not in channel_updates:
-                                        channel_updates[channel] = set()
-                                    channel_updates[channel].add(ip)
-
-                                # On marque l'activité
-                                last_activity_time = time.time()
-
-                        # Une fois toutes les lignes traitées, mettre à jour les chaînes
-                        current_time = time.time()
-                        if (
-                            current_time - last_update_time > 2
-                        ):  # Au moins 2 secondes entre les mises à jour
-                            # Mise à jour groupée par chaîne
-                            for channel, ips in channel_updates.items():
-                                if channel == "master_playlist":
-                                    continue
-                                count = len(ips)
-                                # Vérifier changement réel avant de loguer
-                                old_count = self.get_channel_watchers(channel)
-
-                                # On force à update même si pas de changement
-                                logger.info(
-                                    f"[{channel}] 👁️ MAJ watchers: {count} actifs - {list(ips)}"
-                                )
-                                self.update_watchers(channel, count, "/hls/")
-
-                            # Réinitialiser le temps de dernière mise à jour
-                            last_update_time = current_time
-
-                # Si le fichier a été tronqué (rotation de logs)
-                elif current_size < position:
-                    logger.warning(f"⚠️ Fichier log tronqué, redémarrage lecture")
-                    position = 0
-                    continue
-
-                current_time = time.time()
-
-                # Nettoyage périodique des watchers inactifs
-                if current_time - last_cleanup_time > 10:
-                    self._cleanup_inactive()
-                    last_cleanup_time = current_time
-
-                # Heartbeat périodique
-                if current_time - last_heartbeat_time > 60:
-                    active_count = len(set(ch for (ch, _), _ in self.watchers.items()))
-                    logger.info(
-                        f"💓 ClientMonitor actif (pos: {position}/{current_size}), {active_count} chaînes actives"
-                    )
-                    last_heartbeat_time = current_time
-
-                # Pause courte avant la prochaine vérification
-                time.sleep(0.5)
+                # Mise à jour des stats
+                self._update_stats(ip, channel, request_type, segment_id)
 
         except Exception as e:
-            logger.error(f"❌ Erreur mode legacy: {e}")
-            import traceback
-
-            logger.error(traceback.format_exc())
-
-            # Tentative de récupération après pause
-            time.sleep(10)
-            self._follow_log_file_legacy()
+            logger.error(f"❌ Erreur traitement ligne: {e}")
 
     def _check_log_file_exists(self, retry_count, max_retries):
         """Vérifie si le fichier de log existe et est accessible"""
@@ -536,31 +475,6 @@ class ClientMonitor(threading.Thread):
             logger.error(traceback.format_exc())
             return False
 
-    def _process_log_line(self, line):
-        """Traite une ligne du log sans déclencher de mise à jour immédiate"""
-        # Parse la ligne
-        ip, channel, request_type, is_valid, _ = self._parse_access_log(line)
-
-        # Si pas valide, on sort
-        if not is_valid or not channel:
-            return
-
-        # MAJ du timestamp uniquement
-        try:
-            current_time = time.time()
-
-            with self.lock:
-                # On stocke juste l'heure pour ce watcher
-                self.watchers[(channel, ip)] = current_time
-
-                # On signale que cette chaîne a été modifiée (sans faire de mise à jour)
-                if not hasattr(self, "modified_channels"):
-                    self.modified_channels = set()
-                self.modified_channels.add(channel)
-
-        except Exception as e:
-            logger.error(f"❌ Erreur traitement ligne: {e}")
-
     def _apply_pending_updates(self):
         """Applique les mises à jour en attente pour éviter les doublons"""
         if not hasattr(self, "modified_channels") or not self.modified_channels:
@@ -679,24 +593,6 @@ class ClientMonitor(threading.Thread):
 
             # Mise à jour du compteur global
             self._update_channel_watchers_count(channel)
-
-    def _handle_segment_request(self, channel, ip, line, user_agent):
-        """Traite une requête de segment"""
-        segment_match = re.search(r"segment_(\d+)\.ts", line)
-        segment_id = segment_match.group(1) if segment_match else "unknown"
-
-        # Enregistrer le segment dans l'historique
-        self.segments_by_channel.setdefault(channel, {})[segment_id] = time.time()
-
-        # Ajouter du temps de visionnage (chaque segment = ~4 secondes)
-        if hasattr(self.manager, "stats_collector"):
-            segment_duration = 4  # Durée approximative en secondes
-            self.manager.stats_collector.add_watch_time(channel, ip, segment_duration)
-            # Mise à jour des stats utilisateur si disponible
-            if user_agent:
-                self.manager.stats_collector.update_user_stats(
-                    ip, channel, segment_duration, user_agent
-                )
 
     def _handle_playlist_request(self, channel, ip):
         """Traite une requête de playlist"""
@@ -844,7 +740,7 @@ class ClientMonitor(threading.Thread):
             # CORRECTION IMPORTANTE: Mise à jour du nombre de watchers
             self._update_watcher_count(channel)
 
-    def _handle_segment_request(self, ip, channel, line, user_agent):
+    def _handle_segment_request(self, channel, ip, line, user_agent):
         """Traite une requête de segment"""
         # Identifier le segment
         segment_match = re.search(r"segment_(\d+)\.ts", line)
@@ -853,13 +749,15 @@ class ClientMonitor(threading.Thread):
         # Enregistrer le segment
         self.segments_by_channel.setdefault(channel, {})[segment_id] = time.time()
 
-        # Ajouter du temps de visionnage (4 secondes par segment environ)
-        duration = 4.0  # secondes
-        if hasattr(self.manager, "stats_collector"):
-            self.manager.stats_collector.add_watch_time(channel, ip, duration)
+        # Ajouter du temps de visionnage (4 secondes par segment est une bonne estimation)
+        segment_duration = 4.0  # secondes par segment, valeur typique pour HLS
+
+        # S'assurer que le stats_collector est disponible via le manager
+        if hasattr(self.manager, "stats_collector") and self.manager.stats_collector:
+            self.manager.stats_collector.add_watch_time(channel, ip, segment_duration)
             if user_agent:
                 self.manager.stats_collector.update_user_stats(
-                    ip, channel, duration, user_agent
+                    ip, channel, segment_duration, user_agent
                 )
 
     def check_log_status(self):

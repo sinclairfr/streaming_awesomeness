@@ -32,14 +32,32 @@
       "peak_watchers": 1,
       "peak_time": 1742419477,
       "total_watch_time": 0,
-      "session_count": 1,
+      "session_count": 2,
       "total_segments": 0,
       "watchlist": {}
     },
     "vandamme": {
-      "current_watchers": 1,
+      "current_watchers": 0,
       "peak_watchers": 1,
       "peak_time": 1742419483,
+      "total_watch_time": 0,
+      "session_count": 1,
+      "total_segments": 0,
+      "watchlist": {}
+    },
+    "ufc": {
+      "current_watchers": 0,
+      "peak_watchers": 1,
+      "peak_time": 1742419854,
+      "total_watch_time": 0,
+      "session_count": 1,
+      "total_segments": 0,
+      "watchlist": {}
+    },
+    "rocky": {
+      "current_watchers": 0,
+      "peak_watchers": 1,
+      "peak_time": 1742419860,
       "total_watch_time": 0,
       "session_count": 1,
       "total_segments": 0,
@@ -47,11 +65,11 @@
     }
   },
   "global": {
-    "total_watchers": 1,
+    "total_watchers": 0,
     "peak_watchers": 5,
     "peak_time": 1742419483,
     "total_watch_time": 0,
-    "last_updated": 1742419781
+    "last_updated": 1742420020
   },
   "daily": {
     "2025-03-19": {
@@ -75,6 +93,14 @@
           "total_watch_time": 0
         },
         "vandamme": {
+          "peak_watchers": 1,
+          "total_watch_time": 0
+        },
+        "ufc": {
+          "peak_watchers": 1,
+          "total_watch_time": 0
+        },
+        "rocky": {
           "peak_watchers": 1,
           "total_watch_time": 0
         }
