@@ -269,103 +269,25 @@ class FFmpegProcessManager:
         logger.debug(f"[{self.channel_name}] 👀 Surveillance FFmpeg démarrée")
 
     def _monitor_process(self, hls_dir):
-        """
-        # Surveille le processus FFmpeg et ses segments
-        """
-        last_segment_check = 0
-        segment_count = 0
-        hls_path = Path(hls_dir)
-        last_frozen_check = 0
-
-        while not self.stop_monitoring.is_set():
-            try:
-                # Vérification du processus
-                if not self.process or self.process.poll() is not None:
-                    logger.error(
-                        f"[{self.channel_name}] ❌ Processus FFmpeg terminé avec code: {self.process.returncode if self.process else 'None'}"
-                    )
-
-                    # Callback en cas de mort du processus
+        """Surveille le processus FFmpeg en continu"""
+        try:
+            while not self.stop_monitoring.is_set():
+                if not self.process or not self.process.poll() is None:
+                    # Le processus est mort
                     if self.on_process_died:
-                        self.on_process_died(
-                            self.process.returncode if self.process else None
-                        )
+                        self.on_process_died()
                     break
 
-                # Vérification périodique des segments (toutes les 2 secondes)
-                current_time = time.time()
-                if current_time - last_segment_check >= 2:
-                    # Comptage des segments
-                    try:
-                        segments = list(hls_path.glob("*.ts"))
-                        new_count = len(segments)
+                # Mise à jour de la position de lecture
+                if self.on_position_update:
+                    self.on_position_update(self.playback_offset)
 
-                        if new_count != segment_count:
-                            logger.debug(
-                                f"[{self.channel_name}] 📊 Segments HLS: {new_count}"
-                            )
-
-                            # Tri des segments par numéro
-                            segments.sort(key=lambda x: int(x.stem.split("_")[-1]))
-
-                            # Callback pour le nouveau segment
-                            if (
-                                new_count > segment_count
-                                and self.on_segment_created
-                                and segments
-                            ):
-                                newest_segment = segments[-1]
-                                self.on_segment_created(
-                                    str(newest_segment), newest_segment.stat().st_size
-                                )
-
-                            segment_count = new_count
-                    except Exception as e:
-                        logger.error(
-                            f"[{self.channel_name}] ❌ Erreur vérification segments: {e}"
-                        )
-
-                    last_segment_check = current_time
-
-                # Vérification périodique du gel du flux (toutes les 30 secondes)
-                if current_time - last_frozen_check >= 30:
-                    # On ne vérifie que s'il y a des spectateurs
-                    from_channel = None
-                    for name, channel in (
-                        FFmpegProcessManager.all_channels.items()
-                        if hasattr(FFmpegProcessManager, "all_channels")
-                        else {}
-                    ):
-                        if (
-                            hasattr(channel, "process_manager")
-                            and channel.process_manager == self
-                        ):
-                            from_channel = channel
-                            break
-
-                    if (
-                        from_channel
-                        and hasattr(from_channel, "watchers_count")
-                        and from_channel.watchers_count > 0
-                    ):
-                        if self._detect_frozen_stream():
-                            # Si le flux est bloqué et qu'il y a des spectateurs, on redémarre
-                            logger.warning(
-                                f"[{self.channel_name}] 🔄 Redémarrage du flux bloqué (spectateurs: {from_channel.watchers_count})"
-                            )
-                            if hasattr(from_channel, "_restart_stream"):
-                                from_channel._restart_stream()
-
-                    last_frozen_check = current_time
-
-                # On attend un peu avant la prochaine vérification
-                time.sleep(0.5)
-
-            except Exception as e:
-                logger.error(f"[{self.channel_name}] ❌ Erreur surveillance: {e}")
                 time.sleep(1)
 
-        logger.info(f"[{self.channel_name}] 👋 Fin de la surveillance FFmpeg")
+        except Exception as e:
+            logger.error(f"[{self.channel_name}] ❌ Erreur surveillance processus: {e}")
+            if self.on_process_died:
+                self.on_process_died()
 
     def set_total_duration(self, duration):
         """
@@ -408,66 +330,3 @@ class FFmpegProcessManager:
         # Vérifie si le processus FFmpeg est en cours d'exécution
         """
         return self.process is not None and self.process.poll() is None
-
-    def _detect_frozen_stream(self):
-        """
-        # Détecte si le stream est gelé/bloqué en surveillant les fichiers de progression FFmpeg
-        # Retourne True si le stream semble bloqué
-        """
-        if not self.process or not self.logger_instance:
-            return False
-
-        try:
-            progress_file = self.logger_instance.get_progress_file()
-            if not progress_file or not Path(progress_file).exists():
-                return False
-
-            # Vérifier la dernière modification du fichier de progression
-            mod_time = Path(progress_file).stat().st_mtime
-            current_time = time.time()
-            time_since_update = current_time - mod_time
-
-            # Si le fichier de progression n'a pas été mis à jour depuis 30s, c'est suspect
-            if time_since_update > 30:
-                logger.warning(
-                    f"[{self.channel_name}] ⚠️ Fichier progression non mis à jour depuis {time_since_update:.1f}s"
-                )
-
-                # On lit le contenu pour voir si la sortie est bloquée
-                with open(progress_file, "r") as f:
-                    content = f.read()
-                    last_position = 0
-
-                    # Chercher la dernière position
-                    if "out_time_ms=" in content:
-                        position_lines = [
-                            l for l in content.split("\n") if "out_time_ms=" in l
-                        ]
-                        if position_lines:
-                            time_part = position_lines[-1].split("=")[1]
-                            if time_part.isdigit():
-                                last_position = (
-                                    int(time_part) / 1_000_000
-                                )  # En secondes
-
-                    # Si on n'a pas de position ou une position statique, c'est bloqué
-                    if last_position == 0 or (
-                        hasattr(self, "last_checked_position")
-                        and self.last_checked_position == last_position
-                        and time_since_update > 60
-                    ):  # 60s sans progression
-                        # On stocke la position pour comparer la prochaine fois
-                        self.last_checked_position = last_position
-                        logger.error(
-                            f"[{self.channel_name}] 🚨 FLUX BLOQUÉ détecté! Position: {last_position:.2f}s, Inactivité: {time_since_update:.1f}s"
-                        )
-                        return True
-
-                    # Mise à jour de la position pour la prochaine vérification
-                    self.last_checked_position = last_position
-
-            return False
-
-        except Exception as e:
-            logger.error(f"[{self.channel_name}] ❌ Erreur détection flux bloqué: {e}")
-            return False

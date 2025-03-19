@@ -99,7 +99,6 @@ class IPTVChannel:
         # Scan asynchrone en arrière-plan
         threading.Thread(target=self._scan_videos_async, daemon=True).start()
 
-        self._verify_playlist()
         _playlist_creation_timestamps = (
             {}
         )  # Pour suivre les créations récentes par chaîne
@@ -545,7 +544,7 @@ class IPTVChannel:
             return False
 
         inactivity_duration = current_time - self.last_watcher_time
-
+        
         if inactivity_duration > timeout + 60:
             logger.info(
                 f"[{self.name}] ⚠️ Inactivité détectée: {inactivity_duration:.1f}s"
@@ -668,6 +667,7 @@ class IPTVChannel:
             # 2) Vérifier la durée pour éviter offset = 0 (si total_duration = 0, le modulo forcera l'offset à 0)
             if self.position_manager.total_duration <= 0:
                 # On réessaye de calculer la durée (par exemple, forcer un scan)
+                # si vous avez une fonction _calculate_total_duration()
                 # si vous avez une fonction _calculate_total_duration()
                 recalculated = self._calculate_total_duration()
                 if recalculated <= 0:
@@ -1135,8 +1135,7 @@ class IPTVChannel:
         )
 
     def _handle_segment_created(self, segment_path, size):
-        """Notifié quand un nouveau segment est créé"""
-        self.last_segment_time = time.time()
+        """Gère la création d'un nouveau segment HLS"""
         if self.logger:
             self.logger.log_segment(segment_path, size)
 
@@ -1145,100 +1144,6 @@ class IPTVChannel:
             # Extraction de l'ID du segment depuis le nom
             segment_id = Path(segment_path).stem.split("_")[-1]
             self.stats_collector.update_segment_stats(self.name, segment_id, size)
-
-    def report_segment_jump(self, prev_segment: int, curr_segment: int):
-        """
-        Gère les sauts détectés dans les segments HLS avec une meilleure logique
-
-        Args:
-            prev_segment: Le segment précédent
-            curr_segment: Le segment actuel (avec un saut)
-        """
-        try:
-            jump_size = curr_segment - prev_segment
-
-            # On ne s'inquiète que des sauts importants et récurrents
-            if jump_size <= 5:
-                return
-
-            logger.warning(
-                f"[{self.name}] 🚨 Saut de segment détecté: {prev_segment} → {curr_segment} (delta: {jump_size})"
-            )
-
-            # On stocke l'historique des sauts si pas déjà fait
-            if not hasattr(self, "jump_history"):
-                self.jump_history = []
-
-            # Ajout du saut à l'historique avec timestamp
-            self.jump_history.append(
-                (time.time(), prev_segment, curr_segment, jump_size)
-            )
-
-            # On ne garde que les 5 derniers sauts
-            if len(self.jump_history) > 5:
-                self.jump_history = self.jump_history[-5:]
-
-            # On vérifie si on a des sauts fréquents et similaires (signe d'un problème systémique)
-            recent_jumps = [
-                j for j in self.jump_history if time.time() - j[0] < 300
-            ]  # Sauts des 5 dernières minutes
-
-            if len(recent_jumps) >= 3:
-                # Si on a au moins 3 sauts récents avec des tailles similaires, on considère que c'est un problème systémique
-                similar_sizes = any(
-                    abs(j[3] - jump_size) < 10 for j in recent_jumps[:-1]
-                )  # Tailles de saut similaires
-
-                if (
-                    similar_sizes
-                    and self.error_handler
-                    and self.error_handler.add_error("segment_jump")
-                ):
-                    logger.warning(
-                        f"[{self.name}] 🔄 Redémarrage après {len(recent_jumps)} sauts similaires récents"
-                    )
-
-                    # On vérifie si on a encore des spectateurs actifs
-                    watchers = getattr(self, "watchers_count", 0)
-                    if watchers > 0:
-                        return self._restart_stream()
-                    else:
-                        logger.info(
-                            f"[{self.name}] ℹ️ Pas de redémarrage: aucun watcher actif"
-                        )
-        except Exception as e:
-            logger.error(f"[{self.name}] ❌ Erreur gestion saut de segment: {e}")
-            return False
-
-    def refresh_videos(self):
-        """Force un nouveau scan des vidéos et notifie le manager"""
-
-        def scan_and_notify():
-            try:
-                # Vérifie et déplace les fichiers invalides
-                self._check_and_move_invalid_files()
-
-                # Exécute le scan
-                with self.scan_lock:
-                    success = self._scan_videos()
-
-                # S'assure que le statut est correctement reporté au manager
-                if success and self.ready_for_streaming:
-                    # Notification et mise à jour de la playlist
-                    self._notify_manager_ready()
-
-                    # Vérification et création du fichier de concaténation
-                    self._create_concat_file()
-
-                logger.info(
-                    f"[{self.name}] 🔄 Rafraîchissement terminé, prêt: {self.ready_for_streaming}"
-                )
-            except Exception as e:
-                logger.error(f"[{self.name}] ❌ Erreur dans scan_and_notify: {e}")
-
-        # Lance le scan dans un thread séparé
-        threading.Thread(target=scan_and_notify, daemon=True).start()
-        return True
 
     def _scan_videos(self) -> bool:
         """Scanne les fichiers vidéos et met à jour processed_videos"""
@@ -1365,31 +1270,3 @@ class IPTVChannel:
                 frame = frame.f_back
         except Exception as e:
             logger.error(f"[{self.name}] ❌ Erreur notification manager: {e}")
-
-    def refresh_videos(self):
-        """Force un nouveau scan des vidéos et notifie le manager"""
-
-        def scan_and_notify():
-            try:
-                # Exécute le scan
-                with self.scan_lock:
-                    success = self._scan_videos()
-
-                # S'assure que le statut est correctement reporté au manager
-                # Vérification directe si des vidéos ont été traitées
-                if success and self.ready_for_streaming:
-                    # Notification et mise à jour de la playlist
-                    self._notify_manager_ready()
-
-                    # Vérification et création du fichier de concaténation
-                    self._create_concat_file()
-
-                logger.info(
-                    f"[{self.name}] 🔄 Rafraîchissement terminé, prêt: {self.ready_for_streaming}"
-                )
-            except Exception as e:
-                logger.error(f"[{self.name}] ❌ Erreur dans scan_and_notify: {e}")
-
-        # Lance le scan dans un thread séparé
-        threading.Thread(target=scan_and_notify, daemon=True).start()
-        return True

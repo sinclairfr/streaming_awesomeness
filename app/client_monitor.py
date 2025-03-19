@@ -30,11 +30,6 @@ class ClientMonitor(threading.Thread):
 
         self.inactivity_threshold = TIMEOUT_NO_VIEWERS
 
-        # Pour surveiller les sauts de segments
-        # MODIFIÉ: Ne pas démarrer un thread qui n'existe pas
-        # self.segment_monitor_thread = threading.Thread(target=self._monitor_segment_jumps, daemon=True)
-        # self.segment_monitor_thread.start()
-
         # Thread de nettoyage
         self.cleanup_thread = threading.Thread(target=self._cleanup_loop, daemon=True)
         self.cleanup_thread.start()
@@ -145,51 +140,6 @@ class ClientMonitor(threading.Thread):
 
         except Exception as e:
             logger.error(f"❌ Erreur récapitulatif: {e}")
-
-    def _monitor_segment_jumps(self):
-        """Surveille les sauts anormaux dans les segments pour détecter les bugs"""
-        while True:
-            try:
-                with self.lock:
-                    for channel, segments in self.segments_by_channel.items():
-                        if len(segments) < 2:
-                            continue
-
-                        # Récupération des segments ordonnés par ID
-                        ordered_segments = sorted(
-                            [
-                                (int(seg_id), ts)
-                                for seg_id, ts in segments.items()
-                                if seg_id.isdigit()
-                            ],
-                            key=lambda x: x[0],
-                        )
-
-                        # Vérification des sauts
-                        for i in range(1, len(ordered_segments)):
-                            current_id, current_ts = ordered_segments[i]
-                            prev_id, prev_ts = ordered_segments[i - 1]
-
-                            # Si le saut est supérieur à 5 segments et récent (< 20 secondes)
-                            if (
-                                current_id - prev_id > 5
-                                and time.time() - current_ts < 20
-                            ):
-                                logger.warning(
-                                    f"⚠️ Saut détecté pour {channel}: segment {prev_id} → {current_id} "
-                                    f"(saut de {current_id - prev_id} segments)"
-                                )
-
-                                # Notification au canal si possible
-                                channel_obj = self.manager.channels.get(channel)
-                                if channel_obj and hasattr(
-                                    channel_obj, "report_segment_jump"
-                                ):
-                                    channel_obj.report_segment_jump(prev_id, current_id)
-            except Exception as e:
-                logger.error(f"❌ Erreur surveillance segments: {e}")
-
-            time.sleep(10)  # Vérification toutes les 10 secondes
 
     def get_channel_watchers(self, channel):
         """Récupère le nombre actuel de watchers pour une chaîne"""

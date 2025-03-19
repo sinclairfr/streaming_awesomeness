@@ -35,12 +35,6 @@ from config import (
 )
 from stats_collector import StatsCollector
 
-# TODO mkv stream quand meme et sans gpu si condition ok, offset bien géré en premier pour éviter annulation avec lancement stream,
-# maj watcher et playlist périodique ok mais à la demande en cas d'update chaine
-# verifier kill process
-# statistiques par user dans un json
-
-
 class IPTVManager:
     """
     Gestionnaire principal du service IPTV - version améliorée avec:

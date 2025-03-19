@@ -630,61 +630,6 @@ class VideoProcessor:
         seconds_part = seconds % 60
         return f"{hours:02d}:{minutes:02d}:{seconds_part:06.3f}"
 
-    def _concatenate_segments(self, segment_dir: Path, output_path: Path) -> Optional[Path]:
-        """Concatène les segments en un seul fichier MP4"""
-        try:
-            # Liste tous les segments
-            segments = sorted(segment_dir.glob("segment_*.mp4"))
-            
-            if not segments:
-                logger.error(f"❌ Aucun segment trouvé dans {segment_dir}")
-                self._cleanup_temp_dir(segment_dir)
-                return None
-                
-            logger.info(f"🔄 Concaténation de {len(segments)} segments")
-            
-            # Création du fichier de concaténation
-            concat_file = segment_dir / "concat.txt"
-            with open(concat_file, "w") as f:
-                for segment in segments:
-                    f.write(f"file '{segment.name}'\n")
-            
-            # Concaténation avec ffmpeg
-            cmd = [
-                "ffmpeg", "-y",
-                "-f", "concat",
-                "-safe", "0",
-                "-i", str(concat_file),
-                "-c", "copy",  # Copie sans réencodage
-                "-movflags", "+faststart",  # Optimisation streaming
-                str(output_path)
-            ]
-            
-            result = subprocess.run(cmd, 
-                                cwd=str(segment_dir),
-                                capture_output=True, 
-                                text=True)
-            
-            if result.returncode != 0:
-                logger.error(f"❌ Erreur concaténation: {result.stderr}")
-                self._cleanup_temp_dir(segment_dir)
-                return None
-                
-            logger.info(f"✅ Concaténation réussie -> {output_path}")
-            
-            # Nettoyer les segments temporaires
-            self._cleanup_temp_dir(segment_dir)
-            
-            # Notifier la fin du traitement
-            self.notify_file_processed(output_path)
-            
-            return output_path
-            
-        except Exception as e:
-            logger.error(f"❌ Erreur concaténation: {e}")
-            self._cleanup_temp_dir(segment_dir)
-            return None
-
     def _cleanup_temp_dir(self, temp_dir: Path):
         """Nettoie un répertoire temporaire"""
         try:
