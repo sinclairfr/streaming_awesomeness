@@ -544,7 +544,7 @@ class IPTVChannel:
             return False
 
         inactivity_duration = current_time - self.last_watcher_time
-        
+
         if inactivity_duration > timeout + 60:
             logger.info(
                 f"[{self.name}] ⚠️ Inactivité détectée: {inactivity_duration:.1f}s"
@@ -1154,6 +1154,9 @@ class IPTVChannel:
             # Création du dossier s'il n'existe pas
             ready_to_stream_dir.mkdir(exist_ok=True)
 
+            # Vérifier et déplacer les fichiers invalides dans "ready_to_stream"
+            self._check_and_move_invalid_files()
+
             self._verify_processor()
 
             # On réinitialise la liste des vidéos traitées
@@ -1214,8 +1217,10 @@ class IPTVChannel:
 
                 if old_names != new_names:
                     logger.info(f"[{self.name}] 🔄 Liste des vidéos modifiée:")
-                    logger.info(f"   - Supprimées: {old_names - new_names}")
-                    logger.info(f"   + Ajoutées: {new_names - old_names}")
+                    if old_names - new_names:
+                        logger.info(f"   - Supprimées: {old_names - new_names}")
+                    if new_names - old_names:
+                        logger.info(f"   + Ajoutées: {new_names - old_names}")
 
                     # Mise à jour de la playlist
                     threading.Thread(
