@@ -35,6 +35,7 @@ from config import (
 )
 from stats_collector import StatsCollector
 
+
 class IPTVManager:
     """
     Gestionnaire principal du service IPTV - version améliorée avec:
@@ -466,8 +467,9 @@ class IPTVManager:
                 return
 
             # Organiser les chaînes par état
-            active_channels = []
-            inactive_channels = []
+            active_with_viewers = []  # Chaînes actives avec viewers
+            active_without_viewers = []  # Chaînes actives sans viewers
+            stopped_channels = []  # Chaînes arrêtées
 
             for name, channel in sorted(self.channels.items()):
                 watchers_count = getattr(channel, "watchers_count", 0)
@@ -484,52 +486,52 @@ class IPTVManager:
                     "last_activity": getattr(channel, "last_watcher_time", 0),
                 }
 
-                if watchers_count > 0:
-                    active_channels.append(channel_info)
-                else:
-                    inactive_channels.append(channel_info)
+                if is_streaming:  # Si la chaîne est en streaming
+                    if watchers_count > 0:  # Et qu'elle a des viewers
+                        active_with_viewers.append(channel_info)
+                    else:  # En streaming mais sans viewers
+                        active_without_viewers.append(channel_info)
+                else:  # Chaîne arrêtée
+                    stopped_channels.append(channel_info)
 
             # Construire le récapitulatif
             summary_lines = ["📊 RÉCAPITULATIF DES CHAÎNES:"]
 
-            # Afficher d'abord les chaînes actives
-            if active_channels:
+            # Afficher les chaînes actives avec viewers
+            if active_with_viewers:
                 active_parts = []
-                for ch in active_channels:
-                    emoji = "🟢" if ch["streaming"] else "🟠"
-                    active_parts.append(
-                        f"{emoji} {ch['name']}: {ch['watchers']} viewers"
-                    )
+                for ch in active_with_viewers:
+                    active_parts.append(f"🟢 {ch['name']}: {ch['watchers']} viewers")
 
-                summary_lines.append("CHAÎNES ACTIVES: " + " | ".join(active_parts))
+                summary_lines.append(
+                    "CHAÎNES AVEC VIEWERS: " + " | ".join(active_parts)
+                )
             else:
-                summary_lines.append("CHAÎNES ACTIVES: Aucune")
+                summary_lines.append("CHAÎNES AVEC VIEWERS: Aucune")
 
-            # Afficher un résumé des chaînes inactives
-            streaming_inactive = [ch for ch in inactive_channels if ch["streaming"]]
-            if streaming_inactive:
+            # Afficher les chaînes actives sans viewers
+            if active_without_viewers:
                 inactive_parts = []
-                for ch in streaming_inactive[
+                for ch in active_without_viewers[
                     :5
                 ]:  # Limiter à 5 pour éviter des logs trop longs
                     inactive_parts.append(f"{ch['name']}")
 
-                remaining = len(streaming_inactive) - 5
+                remaining = len(active_without_viewers) - 5
                 if remaining > 0:
                     inactive_parts.append(f"et {remaining} autres")
 
                 summary_lines.append(
-                    f"CHAÎNES EN ATTENTE: {len(streaming_inactive)} ({', '.join(inactive_parts)})"
+                    f"CHAÎNES ACTIVES SANS VIEWERS: {len(active_without_viewers)} ({', '.join(inactive_parts)})"
                 )
 
             # Nombre total de chaînes arrêtées
-            stopped_channels = [ch for ch in inactive_channels if not ch["streaming"]]
             if stopped_channels:
                 summary_lines.append(f"CHAÎNES ARRÊTÉES: {len(stopped_channels)}")
 
             # Stats globales
-            total_viewers = sum(ch["watchers"] for ch in active_channels)
-            total_streams = len(active_channels) + len(streaming_inactive)
+            total_viewers = sum(ch["watchers"] for ch in active_with_viewers)
+            total_streams = len(active_with_viewers) + len(active_without_viewers)
             summary_lines.append(
                 f"TOTAL: {total_viewers} viewers sur {total_streams} streams actifs ({len(self.channels)} chaînes)"
             )
