@@ -158,6 +158,11 @@ class FFmpegMonitor(threading.Thread):
                 logger.error(f"❌ Erreur watchers_loop: {e}")
                 time.sleep(10)
 
+    def _save_stats_periodically(self):
+        """Sauvegarde périodiquement les statistiques"""
+        if hasattr(self.channels, "stats_collector") and self.channels.stats_collector:
+            self.channels.stats_collector.save_stats()
+
     def run(self):
         while not self.stop_event.is_set():
             try:
