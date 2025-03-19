@@ -269,15 +269,28 @@ class ChannelEventHandler(FileSystemEventHandler):
             logger.error(f"❌ Erreur extraction nom de chaîne: {e}")
             return ""
 
+    # Dans iptv_manager.py, ajoute cette méthode
+
+    def force_scan_now(self):
+        """Force un scan immédiat des chaînes"""
+        logger.info("🔄 Forçage d'un scan immédiat des chaînes...")
+        self.scan_channels(force=True)
+        logger.info("✅ Scan forcé terminé")
+
     def on_created(self, event):
         if event.is_directory:
             logger.info(f"📂 Nouveau dossier détecté: {event.src_path}")
-            # On vérifie si c'est un dossier de chaîne
-            if Path(event.src_path).parent == Path(self.manager.content_dir):
-                logger.info(
-                    f"🆕 Nouvelle chaîne potentielle détectée: {Path(event.src_path).name}"
-                )
-                self.manager.scan_channels()
+            # On vérifie si c'est un dossier de chaîne (direct dans content_dir)
+            content_dir = Path(self.manager.content_dir)
+            path = Path(event.src_path)
+
+            if path.parent == content_dir:
+                channel_name = path.name
+                logger.info(f"🆕 Nouvelle chaîne potentielle détectée: {channel_name}")
+                # Force un scan immédiat plutôt que d'attendre
+                threading.Thread(
+                    target=self.manager.scan_channels, args=(True,), daemon=True
+                ).start()
             return
 
         # Pour les fichiers, vérification du type de fichier et ignorer les tmp_
@@ -433,9 +446,6 @@ class ReadyContentHandler(FileSystemEventHandler):
         self.last_update_time = {}  # Pour éviter les mises à jour trop fréquentes
         self.update_cooldown = 5  # 5 secondes entre mises à jour
         super().__init__()
-
-    def on_created(self, event):
-        self._handle_event(event)
 
     def on_deleted(self, event):
         self._handle_event(event)
