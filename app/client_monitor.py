@@ -883,8 +883,8 @@ class ClientMonitor(threading.Thread):
                 if last_lines:
                     logger.info(f"📋 Dernière ligne du log: {last_lines[-1][:100]}")
 
-            # Utilisation directe du mode legacy
-            self._follow_log_file_legacy()
+            # Utilisation de la méthode _follow_log_file au lieu de _follow_log_file_legacy
+            self._follow_log_file()
 
         except Exception as e:
             logger.error(f"❌ Erreur démarrage surveillance: {e}")
