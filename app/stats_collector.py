@@ -41,6 +41,8 @@ class StatsCollector:
             f"📊 StatsCollector initialisé (sauvegarde dans {self.stats_file}, user stats dans {self.user_stats_file})"
         )
 
+    # Dans stats_collector.py, modifiez la méthode add_watch_time:
+
     def add_watch_time(self, channel_name, ip, duration):
         """Ajoute du temps de visionnage pour une IP sur une chaîne"""
         with self.lock:
@@ -51,25 +53,37 @@ class StatsCollector:
                 )
                 duration = max(0.1, duration)  # Force au moins 0.1s
 
-            # Log pour debug
+            # IMPORTANT: Toujours logger l'ajout pour comprendre ce qui se passe
             logger.info(
-                f"⏱️ Ajout de {duration:.1f}s de visionnage pour {ip} sur {channel_name}"
+                f"⏱️ STATS: Ajout effectif de {duration:.1f}s de visionnage pour {ip} sur {channel_name}"
             )
 
             # Init des stats pour cette chaîne si nécessaire
             if channel_name not in self.stats["channels"]:
                 self.update_channel_watchers(channel_name, 0)
 
-            # Mise à jour du temps de visionnage
+            # CORRECTION: S'assurer que la structure existe avant l'ajout
             channel_stats = self.stats["channels"][channel_name]
+            if "total_watch_time" not in channel_stats:
+                channel_stats["total_watch_time"] = 0
+
+            # Mise à jour du temps de visionnage avec vérification
+            old_time = channel_stats["total_watch_time"]
             channel_stats["total_watch_time"] += duration
+            logger.info(
+                f"⏱️ {channel_name}: total_watch_time passé de {old_time:.1f}s à {channel_stats['total_watch_time']:.1f}s"
+            )
 
             # Mise à jour des stats globales
+            if "total_watch_time" not in self.stats["global"]:
+                self.stats["global"]["total_watch_time"] = 0
             self.stats["global"]["total_watch_time"] += duration
 
-            # Mise à jour des stats utilisateur
-            if not hasattr(self, "user_stats"):
-                logger.warning("⚠️ user_stats non initialisé, création...")
+            # CORRECTION: S'assurer que la structure user_stats existe et est correctement initialisée
+            if not hasattr(self, "user_stats") or not self.user_stats:
+                logger.warning(
+                    "⚠️ Réinitialisation de user_stats qui était absent ou invalide"
+                )
                 self.user_stats = {"users": {}, "last_updated": int(time.time())}
 
             if "users" not in self.user_stats:
@@ -85,12 +99,20 @@ class StatsCollector:
                 }
 
             # Mise à jour utilisateur
-            self.user_stats["users"][ip]["total_watch_time"] += duration
-            self.user_stats["users"][ip]["last_seen"] = int(time.time())
+            user_data = self.user_stats["users"][ip]
+            old_user_time = user_data.get("total_watch_time", 0)
+            user_data["total_watch_time"] = old_user_time + duration
+            user_data["last_seen"] = int(time.time())
+            logger.info(
+                f"⏱️ Utilisateur {ip}: total_watch_time passé de {old_user_time:.1f}s à {user_data['total_watch_time']:.1f}s"
+            )
 
             # Vérification/création de l'entrée chaîne pour cet utilisateur
-            if channel_name not in self.user_stats["users"][ip]["channels"]:
-                self.user_stats["users"][ip]["channels"][channel_name] = {
+            if "channels" not in user_data:
+                user_data["channels"] = {}
+
+            if channel_name not in user_data["channels"]:
+                user_data["channels"][channel_name] = {
                     "first_seen": int(time.time()),
                     "last_seen": int(time.time()),
                     "total_watch_time": 0,
@@ -98,15 +120,18 @@ class StatsCollector:
                 }
 
             # Mise à jour chaîne pour cet utilisateur
-            self.user_stats["users"][ip]["channels"][channel_name][
-                "total_watch_time"
-            ] += duration
-            self.user_stats["users"][ip]["channels"][channel_name]["last_seen"] = int(
-                time.time()
+            old_channel_time = user_data["channels"][channel_name].get(
+                "total_watch_time", 0
             )
+            user_data["channels"][channel_name]["total_watch_time"] += duration
+            user_data["channels"][channel_name]["last_seen"] = int(time.time())
+
+            # CORRECTION: S'assurer que la structure watchlist existe
+            if "watchlist" not in channel_stats:
+                channel_stats["watchlist"] = {}
 
             # Mise à jour de la watchlist
-            watchlist = channel_stats.get("watchlist", {})
+            watchlist = channel_stats["watchlist"]
             if ip not in watchlist:
                 watchlist[ip] = {
                     "first_seen": int(time.time()),
@@ -117,11 +142,11 @@ class StatsCollector:
             watchlist[ip]["total_time"] += duration
             watchlist[ip]["last_seen"] = int(time.time())
 
-            # Mise à jour de la watchlist
-            channel_stats["watchlist"] = watchlist
-
-            # Mise à jour des stats quotidiennes
+            # CORRECTION: Mise à jour des stats quotidiennes
             today = time.strftime("%Y-%m-%d")
+            if "daily" not in self.stats:
+                self.stats["daily"] = {}
+
             if today not in self.stats["daily"]:
                 self.stats["daily"][today] = {
                     "peak_watchers": 0,
@@ -130,22 +155,31 @@ class StatsCollector:
                 }
 
             # S'assurer que le canal existe dans les stats quotidiennes
-            if channel_name not in self.stats["daily"][today]["channels"]:
-                self.stats["daily"][today]["channels"][channel_name] = {
+            daily_stats = self.stats["daily"][today]
+            if "channels" not in daily_stats:
+                daily_stats["channels"] = {}
+
+            if channel_name not in daily_stats["channels"]:
+                daily_stats["channels"][channel_name] = {
                     "peak_watchers": 0,
                     "total_watch_time": 0,
                 }
 
             # Mise à jour du temps de visionnage quotidien
-            self.stats["daily"][today]["channels"][channel_name][
-                "total_watch_time"
-            ] += duration
-            self.stats["daily"][today]["total_watch_time"] += duration
+            daily_stats["channels"][channel_name]["total_watch_time"] += duration
+            daily_stats["total_watch_time"] += duration
 
-            # Forcer une sauvegarde si modification significative
-            if duration > 10:  # S'il y a un ajout de plus de 10 secondes
-                threading.Thread(target=self.save_stats, daemon=True).start()
-                threading.Thread(target=self.save_user_stats, daemon=True).start()
+            # IMPORTANT: Forcer une sauvegarde après des modifications significatives
+            # mais pas trop souvent pour éviter les problèmes de performance
+            if not hasattr(self, "last_forced_save"):
+                self.last_forced_save = time.time()
+
+            if (
+                time.time() - self.last_forced_save > 15
+            ):  # 15 secondes max entre sauvegardes forcées
+                self.save_stats()
+                self.save_user_stats()
+                self.last_forced_save = time.time()
 
     def _save_loop(self):
         """Sauvegarde périodique des statistiques"""
@@ -184,6 +218,13 @@ class StatsCollector:
         """Sauvegarde les statistiques par utilisateur"""
         with self.lock:
             try:
+                # Vérification avant sauvegarde
+                if not hasattr(self, "user_stats") or not self.user_stats:
+                    logger.warning(
+                        "⚠️ user_stats n'existe pas ou est vide lors de la sauvegarde"
+                    )
+                    self.user_stats = {"users": {}, "last_updated": int(time.time())}
+
                 # S'assurer que le dossier existe
                 os.makedirs(os.path.dirname(self.user_stats_file), exist_ok=True)
 
@@ -191,8 +232,13 @@ class StatsCollector:
                 self.user_stats["last_updated"] = int(time.time())
 
                 # Log pour comprendre ce qu'on sauvegarde
+                user_count = len(self.user_stats.get("users", {}))
+                watch_times = {}
+                for ip, data in self.user_stats.get("users", {}).items():
+                    watch_times[ip] = data.get("total_watch_time", 0)
+
                 logger.info(
-                    f"💾 Sauvegarde des stats utilisateurs: {len(self.user_stats['users'])} utilisateurs"
+                    f"💾 Sauvegarde des stats utilisateurs: {user_count} utilisateurs avec temps: {watch_times}"
                 )
 
                 # Sauvegarde effective
@@ -210,9 +256,19 @@ class StatsCollector:
                 logger.error(traceback.format_exc())
                 return False
 
+    # Dans stats_collector.py, modifiez la méthode update_user_stats:
+
     def update_user_stats(self, ip, channel_name, duration, user_agent=None):
         """Met à jour les stats par utilisateur"""
         with self.lock:
+            # S'assurer que user_stats et users existent
+            if not hasattr(self, "user_stats"):
+                logger.warning("⚠️ Initialisation de user_stats")
+                self.user_stats = {"users": {}, "last_updated": int(time.time())}
+
+            if "users" not in self.user_stats:
+                self.user_stats["users"] = {}
+
             # Init pour cet utilisateur si nécessaire
             if ip not in self.user_stats["users"]:
                 self.user_stats["users"][ip] = {
@@ -230,6 +286,10 @@ class StatsCollector:
             # MAJ de l'user agent si fourni
             if user_agent:
                 user["user_agent"] = user_agent
+
+            # S'assurer que channels existe
+            if "channels" not in user:
+                user["channels"] = {}
 
             # Init pour cette chaîne si nécessaire
             if channel_name not in user["channels"]:
@@ -254,9 +314,13 @@ class StatsCollector:
                 for ch_name, ch_data in user["channels"].items():
                     ch_data["favorite"] = ch_name == favorite_channel
 
-            # Sauvegarde si changements importants
-            if duration > 300:  # Plus de 5 minutes
+            # Sauvegarde périodique
+            if (
+                not hasattr(self, "last_user_save")
+                or time.time() - self.last_user_save > 300
+            ):
                 threading.Thread(target=self.save_user_stats, daemon=True).start()
+                self.last_user_save = time.time()
 
     def _load_stats(self):
         """Charge les stats existantes ou crée un nouveau fichier"""
