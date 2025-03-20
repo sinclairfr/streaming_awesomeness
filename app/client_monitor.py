@@ -295,6 +295,11 @@ class ClientMonitor(threading.Thread):
                     "user_agent": user_agent,
                 }
 
+                # AJOUT: Debugging explicite pour voir le type de requête
+                logger.info(
+                    f"🔍 DEBUG: Processing {request_type} request from {ip} for {channel}"
+                )
+
                 # On signale que cette chaîne a été modifiée (sans faire de mise à jour)
                 if not hasattr(self, "modified_channels"):
                     self.modified_channels = set()
@@ -306,6 +311,10 @@ class ClientMonitor(threading.Thread):
                     segment_match = re.search(r"segment_(\d+)\.ts", line)
                     if segment_match:
                         segment_id = segment_match.group(1)
+                        # AJOUT: Debug pour segment_id
+                        logger.info(
+                            f"🔍 DEBUG: Detected segment_id {segment_id} for {channel}"
+                        )
 
                 # AJOUT: Mise à jour explicite des stats ici
                 # Déterminer la durée à ajouter selon le type de requête
@@ -324,12 +333,16 @@ class ClientMonitor(threading.Thread):
                     hasattr(self.manager, "stats_collector")
                     and self.manager.stats_collector
                 ):
+                    # AJOUT: Debug pour la mise à jour des stats
+                    logger.info(
+                        f"🔍 DEBUG: Calling stats_collector.add_watch_time({channel}, {ip}, {duration})"
+                    )
                     self.manager.stats_collector.add_watch_time(channel, ip, duration)
                     # Mise à jour des stats utilisateur également
                     self.manager.stats_collector.update_user_stats(
                         ip, channel, duration, user_agent
                     )
-
+                    logger.info(f"🔍 DEBUG: Stats update completed for {channel}")
         except Exception as e:
             logger.error(f"❌ Erreur traitement ligne: {e}")
             import traceback
