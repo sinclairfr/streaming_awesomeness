@@ -41,8 +41,6 @@ class StatsCollector:
             f"📊 StatsCollector initialisé (sauvegarde dans {self.stats_file}, user stats dans {self.user_stats_file})"
         )
 
-    # Dans stats_collector.py, modifiez la méthode add_watch_time:
-
     def add_watch_time(self, channel_name, ip, duration):
         """Ajoute du temps de visionnage pour une IP sur une chaîne"""
         with self.lock:

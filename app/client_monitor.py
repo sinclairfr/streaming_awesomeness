@@ -331,7 +331,7 @@ class ClientMonitor(threading.Thread):
                     f"⏱️ {channel}: Ajout de {duration:.1f}s pour {ip} (elapsed: {elapsed_time:.1f}s, type: {request_type})"
                 )
 
-                # CRITICAL FIX: Mise à jour explicite des stats
+                # CRITICAL FIX: Mise à jour explicite des stats ici
                 # Vérification que stats_collector existe et appel avec les bonnes durées
                 if (
                     hasattr(self.manager, "stats_collector")
