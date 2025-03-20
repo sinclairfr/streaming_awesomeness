@@ -54,29 +54,45 @@ class ClientMonitor(threading.Thread):
                 time.sleep(30)  # Pause plus longue en cas d'erreur
 
     def _cleanup_inactive(self):
-        """Version simplifiée du nettoyage avec meilleure gestion du timing"""
+        """Version optimisée du nettoyage avec détection rapide des watchers inactifs"""
         now = time.time()
-        # Augmentons le timeout pour éviter de perdre des watchers actifs
-        timeout = 120  # 2 minutes, pour être sûr
+
+        # Timeouts spécifiques par type de requête - plus courts qu'avant
+        segment_timeout = 30  # 30 secondes (avant: 60)
+        playlist_timeout = 20  # 20 secondes (avant: 30)
+        unknown_timeout = 25  # 25 secondes (avant: 45)
 
         to_remove = []
         affected_channels = set()
 
         with self.lock:
             # Trouver les watchers inactifs
-            for (channel, ip), last_seen in self.watchers.items():
+            for (channel, ip), data in self.watchers.items():
+                # Déterminer le type de requête et le timestamp
+                if isinstance(data, dict):
+                    last_seen = data.get("time", 0)
+                    req_type = data.get("type", "unknown")
+                else:
+                    last_seen = data
+                    req_type = "unknown"
+
+                # Appliquer le timeout approprié selon le type
+                timeout = (
+                    segment_timeout
+                    if req_type == "segment"
+                    else playlist_timeout if req_type == "playlist" else unknown_timeout
+                )
+
+                # Marquer pour suppression si inactif
                 if now - last_seen > timeout:
                     to_remove.append((channel, ip))
-                    # N'ajoute pas master_playlist aux chaînes affectées
                     if channel != "master_playlist":
                         affected_channels.add(channel)
 
             # Supprimer les watchers inactifs
             for key in to_remove:
                 if key in self.watchers:
-                    if (
-                        key[0] != "master_playlist"
-                    ):  # Ne log pas les suppressions de master_playlist
+                    if key[0] != "master_playlist":
                         logger.info(
                             f"🗑️ Watcher supprimé: {key[1]} → {key[0]} (inactif depuis {now - self.watchers[key]:.1f}s)"
                         )
@@ -86,9 +102,28 @@ class ClientMonitor(threading.Thread):
             for channel in affected_channels:
                 # Compter les viewers actifs
                 active_ips = set()
-                for (ch, ip), last_seen in self.watchers.items():
-                    if ch == channel and now - last_seen < timeout:
-                        active_ips.add(ip)
+                for (ch, ip), data in self.watchers.items():
+                    if ch == channel:
+                        # Refaire la vérification pour être cohérent
+                        if isinstance(data, dict):
+                            last_seen = data.get("time", 0)
+                            req_type = data.get("type", "unknown")
+                        else:
+                            last_seen = data
+                            req_type = "unknown"
+
+                        timeout = (
+                            segment_timeout
+                            if req_type == "segment"
+                            else (
+                                playlist_timeout
+                                if req_type == "playlist"
+                                else unknown_timeout
+                            )
+                        )
+
+                        if now - last_seen <= timeout:
+                            active_ips.add(ip)
 
                 count = len(active_ips)
                 if count > 0 or channel in self.manager.channels:
@@ -820,10 +855,15 @@ class ClientMonitor(threading.Thread):
             return False
 
     def _update_watcher_count(self, channel):
-        """Calcule et met à jour le nombre de watchers pour une chaîne"""
+        """Calcule et met à jour le nombre de watchers pour une chaîne avec timeouts cohérents"""
         # Trouver toutes les IPs actives pour cette chaîne
         active_ips = set()
         current_time = time.time()
+
+        # Utiliser les mêmes timeouts que dans _cleanup_inactive
+        segment_timeout = 30  # 30 secondes
+        playlist_timeout = 20  # 20 secondes
+        unknown_timeout = 25  # 25 secondes
 
         for (ch, ip), data in self.watchers.items():
             if ch != channel:
@@ -837,19 +877,20 @@ class ClientMonitor(threading.Thread):
                 last_time = data
                 req_type = "unknown"
 
-            # Différents timeouts selon le type
-            if (
-                (req_type == "segment" and current_time - last_time < 60)
-                or (req_type == "playlist" and current_time - last_time < 30)
-                or (req_type == "unknown" and current_time - last_time < 45)
-            ):
+            # Appliquer le même timeout qu'au nettoyage
+            timeout = (
+                segment_timeout
+                if req_type == "segment"
+                else playlist_timeout if req_type == "playlist" else unknown_timeout
+            )
+
+            if current_time - last_time <= timeout:
                 active_ips.add(ip)
 
         # Nombre de watchers
         watcher_count = len(active_ips)
 
-        # CORRECTION ICI: Mise à jour forcée même si le compte n'a pas changé
-        # Plus de logs pour debug
+        # Mise à jour forcée avec log
         logger.info(
             f"[{channel}] 👁️ Watchers: {watcher_count} actifs - IPs: {list(active_ips)}"
         )
