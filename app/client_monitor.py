@@ -259,11 +259,7 @@ class ClientMonitor(threading.Thread):
         if request_type == "segment":
             # Les segments sont typiquement de 2-4 secondes
             duration = 4.0
-            # Mise à jour des stats de segment si segment_id est fourni
-            if segment_id is not None:
-                stats.update_segment_stats(
-                    channel, segment_id, size=0
-                )  # La taille n'est pas connue ici
+            # ...
         elif request_type == "playlist":
             # Les playlists sont des heartbeats, on ajoute une petite durée
             duration = 0.5
@@ -292,8 +288,12 @@ class ClientMonitor(threading.Thread):
             current_time = time.time()
 
             with self.lock:
-                # On stocke juste l'heure pour ce watcher
-                self.watchers[(channel, ip)] = current_time
+                # On stocke des informations complètes pour ce watcher
+                self.watchers[(channel, ip)] = {
+                    "time": current_time,
+                    "type": request_type,
+                    "user_agent": user_agent,
+                }
 
                 # On signale que cette chaîne a été modifiée (sans faire de mise à jour)
                 if not hasattr(self, "modified_channels"):
@@ -307,11 +307,34 @@ class ClientMonitor(threading.Thread):
                     if segment_match:
                         segment_id = segment_match.group(1)
 
-                # Mise à jour des stats
-                self._update_stats(ip, channel, request_type, segment_id)
+                # AJOUT: Mise à jour explicite des stats ici
+                # Déterminer la durée à ajouter selon le type de requête
+                if request_type == "segment":
+                    # Les segments sont typiquement de 2-4 secondes
+                    duration = 4.0
+                elif request_type == "playlist":
+                    # Les playlists sont des heartbeats
+                    duration = 0.5
+                else:
+                    # Pour les autres types, durée minimale
+                    duration = 0.1
+
+                # Mise à jour des statistiques via le StatsCollector
+                if (
+                    hasattr(self.manager, "stats_collector")
+                    and self.manager.stats_collector
+                ):
+                    self.manager.stats_collector.add_watch_time(channel, ip, duration)
+                    # Mise à jour des stats utilisateur également
+                    self.manager.stats_collector.update_user_stats(
+                        ip, channel, duration, user_agent
+                    )
 
         except Exception as e:
             logger.error(f"❌ Erreur traitement ligne: {e}")
+            import traceback
+
+            logger.error(traceback.format_exc())
 
     def _check_log_file_exists(self, retry_count, max_retries):
         """Vérifie si le fichier de log existe et est accessible"""

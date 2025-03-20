@@ -65,10 +65,10 @@
     },
     "belmondo": {
       "current_watchers": 0,
-      "peak_watchers": 1,
-      "peak_time": 1742421208,
+      "peak_watchers": 2,
+      "peak_time": 1742502941,
       "total_watch_time": 0,
-      "session_count": 11,
+      "session_count": 16,
       "total_segments": 0,
       "watchlist": {}
     },
@@ -82,11 +82,11 @@
       "watchlist": {}
     },
     "pagnol": {
-      "current_watchers": 1,
+      "current_watchers": 0,
       "peak_watchers": 1,
       "peak_time": 1742421299,
       "total_watch_time": 0,
-      "session_count": 10,
+      "session_count": 11,
       "total_segments": 0,
       "watchlist": {}
     },
@@ -95,7 +95,7 @@
       "peak_watchers": 1,
       "peak_time": 1742421304,
       "total_watch_time": 0,
-      "session_count": 6,
+      "session_count": 7,
       "total_segments": 0,
       "watchlist": {}
     },
@@ -136,11 +136,11 @@
       "watchlist": {}
     },
     "bronzes": {
-      "current_watchers": 0,
+      "current_watchers": 1,
       "peak_watchers": 1,
       "peak_time": 1742421597,
       "total_watch_time": 0,
-      "session_count": 8,
+      "session_count": 9,
       "total_segments": 0,
       "watchlist": {}
     },
@@ -167,7 +167,7 @@
       "peak_watchers": 1,
       "peak_time": 1742456035,
       "total_watch_time": 0,
-      "session_count": 10,
+      "session_count": 11,
       "total_segments": 0,
       "watchlist": {}
     },
@@ -186,7 +186,7 @@
     "peak_watchers": 19,
     "peak_time": 1742456153,
     "total_watch_time": 0,
-    "last_updated": 1742486801
+    "last_updated": 1742503781
   },
   "daily": {
     "2025-03-19": {
@@ -276,7 +276,7 @@
           "total_watch_time": 0
         },
         "belmondo": {
-          "peak_watchers": 1,
+          "peak_watchers": 2,
           "total_watch_time": 0
         },
         "bronzes": {
@@ -350,5 +350,5 @@
       }
     }
   },
-  "last_daily_save": 1742412917.5941224
+  "last_daily_save": 1742499479.6957211
 }

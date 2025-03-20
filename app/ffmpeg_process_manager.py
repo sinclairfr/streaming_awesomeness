@@ -274,8 +274,10 @@ class FFmpegProcessManager:
             while not self.stop_monitoring.is_set():
                 if not self.process or not self.process.poll() is None:
                     # Le processus est mort
+                    return_code = self.process.poll() if self.process else -999
                     if self.on_process_died:
-                        self.on_process_died()
+                        # On passe le code de retour comme argument
+                        self.on_process_died(return_code)
                     break
 
                 # Mise à jour de la position de lecture
@@ -287,7 +289,8 @@ class FFmpegProcessManager:
         except Exception as e:
             logger.error(f"[{self.channel_name}] ❌ Erreur surveillance processus: {e}")
             if self.on_process_died:
-                self.on_process_died()
+                # On passe un code d'erreur -1 en cas d'exception
+                self.on_process_died(-1)
 
     def set_total_duration(self, duration):
         """
