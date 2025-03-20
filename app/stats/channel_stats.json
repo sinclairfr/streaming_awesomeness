@@ -5,7 +5,7 @@
       "peak_watchers": 1,
       "peak_time": 1742419437,
       "total_watch_time": 0,
-      "session_count": 1,
+      "session_count": 9,
       "total_segments": 0,
       "watchlist": {}
     },
@@ -14,7 +14,7 @@
       "peak_watchers": 1,
       "peak_time": 1742419447,
       "total_watch_time": 0,
-      "session_count": 1,
+      "session_count": 10,
       "total_segments": 0,
       "watchlist": {}
     },
@@ -23,7 +23,7 @@
       "peak_watchers": 1,
       "peak_time": 1742419460,
       "total_watch_time": 0,
-      "session_count": 1,
+      "session_count": 10,
       "total_segments": 0,
       "watchlist": {}
     },
@@ -32,7 +32,7 @@
       "peak_watchers": 1,
       "peak_time": 1742419477,
       "total_watch_time": 0,
-      "session_count": 2,
+      "session_count": 8,
       "total_segments": 0,
       "watchlist": {}
     },
@@ -41,7 +41,7 @@
       "peak_watchers": 1,
       "peak_time": 1742419483,
       "total_watch_time": 0,
-      "session_count": 1,
+      "session_count": 6,
       "total_segments": 0,
       "watchlist": {}
     },
@@ -50,7 +50,7 @@
       "peak_watchers": 1,
       "peak_time": 1742419854,
       "total_watch_time": 0,
-      "session_count": 1,
+      "session_count": 7,
       "total_segments": 0,
       "watchlist": {}
     },
@@ -59,21 +59,129 @@
       "peak_watchers": 1,
       "peak_time": 1742419860,
       "total_watch_time": 0,
-      "session_count": 1,
+      "session_count": 6,
+      "total_segments": 0,
+      "watchlist": {}
+    },
+    "belmondo": {
+      "current_watchers": 0,
+      "peak_watchers": 1,
+      "peak_time": 1742421208,
+      "total_watch_time": 0,
+      "session_count": 10,
+      "total_segments": 0,
+      "watchlist": {}
+    },
+    "rambo": {
+      "current_watchers": 0,
+      "peak_watchers": 1,
+      "peak_time": 1742421295,
+      "total_watch_time": 0,
+      "session_count": 5,
+      "total_segments": 0,
+      "watchlist": {}
+    },
+    "pagnol": {
+      "current_watchers": 0,
+      "peak_watchers": 1,
+      "peak_time": 1742421299,
+      "total_watch_time": 0,
+      "session_count": 7,
+      "total_segments": 0,
+      "watchlist": {}
+    },
+    "guerre": {
+      "current_watchers": 0,
+      "peak_watchers": 1,
+      "peak_time": 1742421304,
+      "total_watch_time": 0,
+      "session_count": 5,
+      "total_segments": 0,
+      "watchlist": {}
+    },
+    "gendarme": {
+      "current_watchers": 0,
+      "peak_watchers": 1,
+      "peak_time": 1742421313,
+      "total_watch_time": 0,
+      "session_count": 5,
+      "total_segments": 0,
+      "watchlist": {}
+    },
+    "fela": {
+      "current_watchers": 0,
+      "peak_watchers": 1,
+      "peak_time": 1742421320,
+      "total_watch_time": 0,
+      "session_count": 5,
+      "total_segments": 0,
+      "watchlist": {}
+    },
+    "defunes": {
+      "current_watchers": 0,
+      "peak_watchers": 1,
+      "peak_time": 1742421496,
+      "total_watch_time": 0,
+      "session_count": 6,
+      "total_segments": 0,
+      "watchlist": {}
+    },
+    "columbos1s5": {
+      "current_watchers": 0,
+      "peak_watchers": 1,
+      "peak_time": 1742421501,
+      "total_watch_time": 0,
+      "session_count": 4,
+      "total_segments": 0,
+      "watchlist": {}
+    },
+    "bronzes": {
+      "current_watchers": 0,
+      "peak_watchers": 1,
+      "peak_time": 1742421597,
+      "total_watch_time": 0,
+      "session_count": 7,
+      "total_segments": 0,
+      "watchlist": {}
+    },
+    "columbos6end": {
+      "current_watchers": 0,
+      "peak_watchers": 1,
+      "peak_time": 1742421599,
+      "total_watch_time": 0,
+      "session_count": 2,
+      "total_segments": 0,
+      "watchlist": {}
+    },
+    "brucelee": {
+      "current_watchers": 0,
+      "peak_watchers": 1,
+      "peak_time": 1742456017,
+      "total_watch_time": 0,
+      "session_count": 5,
+      "total_segments": 0,
+      "watchlist": {}
+    },
+    "oss": {
+      "current_watchers": 0,
+      "peak_watchers": 1,
+      "peak_time": 1742456035,
+      "total_watch_time": 0,
+      "session_count": 6,
       "total_segments": 0,
       "watchlist": {}
     }
   },
   "global": {
     "total_watchers": 0,
-    "peak_watchers": 5,
-    "peak_time": 1742419483,
+    "peak_watchers": 19,
+    "peak_time": 1742456153,
     "total_watch_time": 0,
-    "last_updated": 1742420568
+    "last_updated": 1742481974
   },
   "daily": {
     "2025-03-19": {
-      "peak_watchers": 5,
+      "peak_watchers": 17,
       "total_watch_time": 0,
       "channels": {
         "weber": {
@@ -101,6 +209,128 @@
           "total_watch_time": 0
         },
         "rocky": {
+          "peak_watchers": 1,
+          "total_watch_time": 0
+        },
+        "belmondo": {
+          "peak_watchers": 1,
+          "total_watch_time": 0
+        },
+        "rambo": {
+          "peak_watchers": 1,
+          "total_watch_time": 0
+        },
+        "pagnol": {
+          "peak_watchers": 1,
+          "total_watch_time": 0
+        },
+        "guerre": {
+          "peak_watchers": 1,
+          "total_watch_time": 0
+        },
+        "gendarme": {
+          "peak_watchers": 1,
+          "total_watch_time": 0
+        },
+        "fela": {
+          "peak_watchers": 1,
+          "total_watch_time": 0
+        },
+        "defunes": {
+          "peak_watchers": 1,
+          "total_watch_time": 0
+        },
+        "columbos1s5": {
+          "peak_watchers": 1,
+          "total_watch_time": 0
+        },
+        "bronzes": {
+          "peak_watchers": 1,
+          "total_watch_time": 0
+        },
+        "columbos6end": {
+          "peak_watchers": 1,
+          "total_watch_time": 0
+        }
+      }
+    },
+    "2025-03-20": {
+      "peak_watchers": 19,
+      "total_watch_time": 0,
+      "channels": {
+        "weber": {
+          "peak_watchers": 1,
+          "total_watch_time": 0
+        },
+        "visiteurs": {
+          "peak_watchers": 1,
+          "total_watch_time": 0
+        },
+        "belmondo": {
+          "peak_watchers": 1,
+          "total_watch_time": 0
+        },
+        "bronzes": {
+          "peak_watchers": 1,
+          "total_watch_time": 0
+        },
+        "brucelee": {
+          "peak_watchers": 1,
+          "total_watch_time": 0
+        },
+        "columbos1s5": {
+          "peak_watchers": 1,
+          "total_watch_time": 0
+        },
+        "gendarme": {
+          "peak_watchers": 1,
+          "total_watch_time": 0
+        },
+        "guerre": {
+          "peak_watchers": 1,
+          "total_watch_time": 0
+        },
+        "oss": {
+          "peak_watchers": 1,
+          "total_watch_time": 0
+        },
+        "pagnol": {
+          "peak_watchers": 1,
+          "total_watch_time": 0
+        },
+        "rambo": {
+          "peak_watchers": 1,
+          "total_watch_time": 0
+        },
+        "rocky": {
+          "peak_watchers": 1,
+          "total_watch_time": 0
+        },
+        "vandamme": {
+          "peak_watchers": 1,
+          "total_watch_time": 0
+        },
+        "verite": {
+          "peak_watchers": 1,
+          "total_watch_time": 0
+        },
+        "western": {
+          "peak_watchers": 1,
+          "total_watch_time": 0
+        },
+        "columbos6end": {
+          "peak_watchers": 1,
+          "total_watch_time": 0
+        },
+        "defunes": {
+          "peak_watchers": 1,
+          "total_watch_time": 0
+        },
+        "fela": {
+          "peak_watchers": 1,
+          "total_watch_time": 0
+        },
+        "ufc": {
           "peak_watchers": 1,
           "total_watch_time": 0
         }

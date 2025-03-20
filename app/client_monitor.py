@@ -857,6 +857,123 @@ class ClientMonitor(threading.Thread):
         # Mise à jour dans le manager
         self.update_watchers(channel, watcher_count, "/hls/")
 
+    def _follow_log_file_legacy(self):
+        """Version robuste pour suivre le fichier de log sans pyinotify"""
+        try:
+            # Position initiale - SE PLACER À LA FIN DU FICHIER, PAS AU DÉBUT
+            position = os.path.getsize(self.log_path)
+
+            logger.info(
+                f"👁️ Mode surveillance legacy actif sur {self.log_path} (démarrage à position {position})"
+            )
+
+            # Variables pour le heartbeat et les nettoyages
+            last_activity_time = time.time()
+            last_heartbeat_time = time.time()
+            last_cleanup_time = time.time()
+            last_update_time = time.time()
+
+            while True:
+                # Vérifier que le fichier existe toujours
+                if not os.path.exists(self.log_path):
+                    logger.error(f"❌ Fichier log disparu: {self.log_path}")
+                    time.sleep(5)
+                    continue
+
+                # Taille actuelle du fichier
+                current_size = os.path.getsize(self.log_path)
+
+                # Si le fichier a grandi, lire les nouvelles lignes
+                if current_size > position:
+                    with open(self.log_path, "r") as f:
+                        f.seek(position)
+                        new_lines = f.readlines()
+                        position = f.tell()  # Nouvelle position
+
+                        # Log pour debug - montre la différence de taille
+                        if new_lines:
+                            logger.debug(
+                                f"📝 Traitement de {len(new_lines)} nouvelles lignes (pos: {position}/{current_size})"
+                            )
+
+                        # Regrouper par chaîne pour traiter d'un coup
+                        channel_updates = {}
+
+                        # Traitement des nouvelles lignes en batch
+                        for line in new_lines:
+                            if line.strip():
+                                # Pré-traitement
+                                ip, channel, request_type, is_valid, _ = (
+                                    self._parse_access_log(line.strip())
+                                )
+
+                                # Si valide, ajouter à notre dictionnaire de chaînes
+                                if is_valid and channel:
+                                    # On stocke l'heure ACTUELLE, pas celle du log
+                                    self.watchers[(channel, ip)] = time.time()
+                                    if channel not in channel_updates:
+                                        channel_updates[channel] = set()
+                                    channel_updates[channel].add(ip)
+
+                                # On marque l'activité
+                                last_activity_time = time.time()
+
+                        # Une fois toutes les lignes traitées, mettre à jour les chaînes
+                        current_time = time.time()
+                        if (
+                            current_time - last_update_time > 2
+                        ):  # Au moins 2 secondes entre les mises à jour
+                            # Mise à jour groupée par chaîne
+                            for channel, ips in channel_updates.items():
+                                if channel == "master_playlist":
+                                    continue
+                                count = len(ips)
+                                # Vérifier changement réel avant de loguer
+                                old_count = self.get_channel_watchers(channel)
+
+                                # On force à update même si pas de changement
+                                logger.info(
+                                    f"[{channel}] 👁️ MAJ watchers: {count} actifs - {list(ips)}"
+                                )
+                                self.update_watchers(channel, count, "/hls/")
+
+                            # Réinitialiser le temps de dernière mise à jour
+                            last_update_time = current_time
+
+                # Si le fichier a été tronqué (rotation de logs)
+                elif current_size < position:
+                    logger.warning(f"⚠️ Fichier log tronqué, redémarrage lecture")
+                    position = 0
+                    continue
+
+                current_time = time.time()
+
+                # Nettoyage périodique des watchers inactifs
+                if current_time - last_cleanup_time > 10:
+                    self._cleanup_inactive()
+                    last_cleanup_time = current_time
+
+                # Heartbeat périodique
+                if current_time - last_heartbeat_time > 60:
+                    active_count = len(set(ch for (ch, _), _ in self.watchers.items()))
+                    logger.info(
+                        f"💓 ClientMonitor actif (pos: {position}/{current_size}), {active_count} chaînes actives"
+                    )
+                    last_heartbeat_time = current_time
+
+                # Pause courte avant la prochaine vérification
+                time.sleep(0.5)
+
+        except Exception as e:
+            logger.error(f"❌ Erreur mode legacy: {e}")
+            import traceback
+
+            logger.error(traceback.format_exc())
+
+            # Tentative de récupération après pause
+            time.sleep(10)
+            self._follow_log_file_legacy()
+
     def run(self):
         """Démarre le monitoring en mode direct (legacy)"""
         logger.info("👀 Démarrage de la surveillance des requêtes...")
@@ -883,8 +1000,8 @@ class ClientMonitor(threading.Thread):
                 if last_lines:
                     logger.info(f"📋 Dernière ligne du log: {last_lines[-1][:100]}")
 
-            # Utilisation de la méthode _follow_log_file au lieu de _follow_log_file_legacy
-            self._follow_log_file()
+            # Utilisation directe du mode legacy
+            self._follow_log_file_legacy()
 
         except Exception as e:
             logger.error(f"❌ Erreur démarrage surveillance: {e}")
