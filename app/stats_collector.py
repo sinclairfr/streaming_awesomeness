@@ -52,7 +52,6 @@ class StatsCollector:
         logger.info(
             f"📊 StatsCollector initialisé (sauvegarde dans {self.stats_file}, user stats dans {self.user_stats_file})"
         )
-
     def add_watch_time(self, channel, ip, duration):
         """Ajoute du temps de visionnage pour un watcher avec limitation de fréquence"""
         try:
@@ -98,6 +97,10 @@ class StatsCollector:
             channel_stats["unique_viewers"].add(ip)
             channel_stats["last_update"] = time.time()
 
+            # Initialiser watchlist si elle n'existe pas
+            if "watchlist" not in channel_stats:
+                channel_stats["watchlist"] = {}
+
             # Mise à jour de la watchlist pour cette IP
             if ip not in channel_stats["watchlist"]:
                 channel_stats["watchlist"][ip] = 0.0
@@ -117,8 +120,9 @@ class StatsCollector:
             global_stats["unique_viewers"].add(ip)
             global_stats["last_update"] = time.time()
 
-            # Mise à jour des stats utilisateur (structure PLATE)
+            # Mise à jour des stats utilisateur (avec vérification des champs manquants)
             if ip not in self.user_stats:
+                # Structure complète pour nouvel utilisateur
                 self.user_stats[ip] = {
                     "total_watch_time": 0.0,
                     "channels_watched": set(),
@@ -128,8 +132,13 @@ class StatsCollector:
                 }
             
             user = self.user_stats[ip]
-            user["total_watch_time"] += duration
+            user["total_watch_time"] = user.get("total_watch_time", 0.0) + duration
+            
+            # Vérifier si channels_watched existe et l'initialiser si nécessaire
+            if "channels_watched" not in user:
+                user["channels_watched"] = set()
             user["channels_watched"].add(channel)
+            
             user["last_seen"] = time.time()
 
             # S'assurer que channels existe
@@ -171,7 +180,7 @@ class StatsCollector:
         except Exception as e:
             logger.error(f"❌ Erreur mise à jour stats: {e}")
             import traceback
-            logger.error(traceback.format_exc())    
+            logger.error(traceback.format_exc())
     def _save_loop(self):
         """Sauvegarde périodique des statistiques"""
         while not self.stop_save_thread.is_set():
@@ -427,12 +436,22 @@ class StatsCollector:
 
                 # Conversion des stats des chaînes
                 for channel_name, channel_data in self.stats.items():
-                    stats_to_save["channels"][channel_name] = {
-                        "total_watch_time": channel_data["total_watch_time"],
-                        "unique_viewers": list(channel_data["unique_viewers"]),
-                        "watchlist": channel_data["watchlist"],
-                        "last_update": channel_data["last_update"]
+                    # Skip global stats, they're handled separately
+                    if channel_name == "global":
+                        continue
+                        
+                    # Ensure all required keys exist
+                    channel_stats = {
+                        "total_watch_time": channel_data.get("total_watch_time", 0),
+                        "unique_viewers": list(channel_data.get("unique_viewers", set())),
+                        "last_update": channel_data.get("last_update", time.time())
                     }
+                    
+                    # Add watchlist only if it exists
+                    if "watchlist" in channel_data:
+                        channel_stats["watchlist"] = channel_data["watchlist"]
+
+                    stats_to_save["channels"][channel_name] = channel_stats
 
                 # Sauvegarde dans le fichier principal
                 with open(self.stats_file, "w") as f:
@@ -458,7 +477,6 @@ class StatsCollector:
                 import traceback
                 logger.error(traceback.format_exc())
                 return False
-
     def update_channel_watchers(self, channel_name, watchers_count):
         """Met à jour les stats de watchers pour une chaîne"""
         with self.lock:

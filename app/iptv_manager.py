@@ -686,6 +686,18 @@ class IPTVManager:
             # Sauvegarder les statistiques
             self.stats_collector.save_stats()
             self.stats_collector.save_user_stats()
+        
+        # NEW: Update the channel status for dashboard
+        if hasattr(self, "channel_status") and self.channel_status:
+            is_active = bool(getattr(channel, "ready_for_streaming", False))
+            is_streaming = bool(channel.process_manager.is_running())
+            
+            self.channel_status.update_channel(
+                channel_name,
+                is_active=is_active,
+                viewers=watcher_count,
+                streaming=is_streaming
+            )
 
     def _log_channels_summary(self):
         """Génère et affiche un récapitulatif de l'état des chaînes"""
@@ -951,11 +963,18 @@ class IPTVManager:
         )
 
     def cleanup_manager(self):
+        """Cleanup everything before shutdown"""
         logger.info("Début du nettoyage...")
 
         # Arrêt du StatsCollector
         if hasattr(self, "stats_collector"):
             self.stats_collector.stop()
+            logger.info("📊 StatsCollector arrêté")
+
+        # NEW: Stop channel status manager
+        if hasattr(self, "channel_status") and self.channel_status:
+            self.channel_status.stop()
+            logger.info("✅ Channel status manager stopped")
 
         # Arrêt du thread d'initialisation
         self.stop_init_thread.set()
@@ -964,7 +983,7 @@ class IPTVManager:
             self.channel_init_thread.join(timeout=5)
 
         if hasattr(self, "hls_cleaner"):
-            self.hls_cleaner.stop()
+            self.hls_cleaner.stop_cleaner()
 
         if hasattr(self, "observer"):
             self.observer.stop()
@@ -982,9 +1001,14 @@ class IPTVManager:
 
         if hasattr(self, "scan_thread") and self.scan_thread.is_alive():
             self.scan_thread.join(timeout=5)
+            
+        # Stop status update thread if running
+        if hasattr(self, "status_update_thread") and self.status_update_thread.is_alive():
+            # No easy way to stop it since it doesn't have a dedicated stop event
+            # Just let it die when the process exits
+            logger.info("✅ Status update thread will terminate with process")
 
         logger.info("Nettoyage terminé")
-
     def _setup_ready_observer(self):
         """Configure l'observateur pour les dossiers ready_to_stream de chaque chaîne"""
         try:
@@ -1186,45 +1210,6 @@ class IPTVManager:
                 logger.error(f"❌ Erreur surveillance legacy: {e}")
                 time.sleep(5)  # Attente plus longue en cas d'erreur
 
-    def run_manager_loop(self):
-        try:
-            # Démarrer la boucle de surveillance des watchers
-            if not self.watchers_thread.is_alive():
-                self.watchers_thread.start()
-                logger.info("🔄 Boucle de surveillance des watchers démarrée")
-
-            # Démarrer la surveillance des logs nginx
-            nginx_monitor_thread = threading.Thread(target=self._monitor_nginx_logs, daemon=True)
-            nginx_monitor_thread.start()
-            logger.info("🔍 Surveillance des logs nginx démarrée")
-
-            logger.debug("📥 Scan initial des chaînes...")
-            self.scan_channels(initial=True)  # Marquer comme scan initial
-
-            logger.debug("🕵️ Démarrage de l'observer...")
-            if not self.observer.is_alive():
-                self.observer.start()
-
-            # Configurer l'observateur pour ready_to_stream
-            self._setup_ready_observer()
-
-            # Attente suffisamment longue pour l'initialisation des chaînes
-            logger.info(
-                "⏳ Attente de 30 secondes pour l'initialisation des chaînes..."
-            )
-            time.sleep(30)
-
-            # Démarrage automatique des chaînes prêtes
-            self.auto_start_ready_channels()
-
-            while True:
-                time.sleep(1)
-
-        except KeyboardInterrupt:
-            self.cleanup_manager()
-        except Exception as e:
-            logger.error(f"🔥 Erreur manager : {e}")
-            self.cleanup_manager()
 
     def _cleanup_inactive(self):
         """Nettoie les watchers inactifs"""
@@ -1265,3 +1250,119 @@ class IPTVManager:
         while True:
             time.sleep(60)  # Vérification toutes les minutes
             self._cleanup_inactive()
+
+# Add this code to iptv_manager.py
+
+    def init_channel_status_manager(self):
+        """Initialize the channel status manager for dashboard"""
+        try:
+            from channel_status_manager import ChannelStatusManager
+            self.channel_status = ChannelStatusManager()
+            logger.info("✅ Channel status manager initialized for dashboard")
+            
+            # Do an initial update with current channels
+            self._update_channel_status()
+        except Exception as e:
+            logger.error(f"❌ Error initializing channel status manager: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            self.channel_status = None
+
+    def _update_channel_status(self):
+        """Update the channel status file with current channel information"""
+        if not hasattr(self, "channel_status") or not self.channel_status:
+            return False
+        
+        try:
+            channels_dict = {}
+            
+            for name, channel in self.channels.items():
+                # Get channel information
+                is_active = bool(getattr(channel, "ready_for_streaming", False))
+                is_streaming = bool(channel.process_manager.is_running())
+                viewers = getattr(channel, "watchers_count", 0)
+                
+                # Add to dictionary
+                channels_dict[name] = {
+                    "active": is_active,
+                    "streaming": is_streaming,
+                    "viewers": viewers
+                }
+            
+            # Update all channels at once
+            self.channel_status.update_all_channels(channels_dict)
+            logger.debug(f"📊 Updated channel status for {len(channels_dict)} channels")
+            return True
+        
+        except Exception as e:
+            logger.error(f"❌ Error updating channel status: {e}")
+            return False
+
+    def run_manager_loop(self):
+        try:
+            # NEW: Initialize channel status manager
+            self.init_channel_status_manager()
+            
+            # Rest of the existing method...
+            # Démarrer la boucle de surveillance des watchers
+            if not self.watchers_thread.is_alive():
+                self.watchers_thread.start()
+                logger.info("🔄 Boucle de surveillance des watchers démarrée")
+
+            # Démarrer la surveillance des logs nginx
+            nginx_monitor_thread = threading.Thread(target=self._monitor_nginx_logs, daemon=True)
+            nginx_monitor_thread.start()
+            logger.info("🔍 Surveillance des logs nginx démarrée")
+
+            logger.debug("📥 Scan initial des chaînes...")
+            self.scan_channels(initial=True)  # Marquer comme scan initial
+
+            logger.debug("🕵️ Démarrage de l'observer...")
+            if not self.observer.is_alive():
+                self.observer.start()
+
+            # Configurer l'observateur pour ready_to_stream
+            self._setup_ready_observer()
+
+            # Attente suffisamment longue pour l'initialisation des chaînes
+            logger.info(
+                "⏳ Attente de 30 secondes pour l'initialisation des chaînes..."
+            )
+            time.sleep(30)
+            
+            # NEW: Update channel status after initialization
+            self._update_channel_status()
+
+            # Démarrage automatique des chaînes prêtes
+            self.auto_start_ready_channels()
+
+            # NEW: Add periodic channel status updates
+            self.status_update_thread = threading.Thread(
+                target=self._status_update_loop, 
+                daemon=True
+            )
+            self.status_update_thread.start()
+
+            while True:
+                time.sleep(1)
+
+        except KeyboardInterrupt:
+            self.cleanup_manager()
+        except Exception as e:
+            logger.error(f"🔥 Erreur manager : {e}")
+            self.cleanup_manager()
+
+    def _status_update_loop(self):
+        """Background thread to periodically update channel status"""
+        update_interval = 30  # Update every 30 seconds
+        
+        while True:
+            try:
+                # Update channel status
+                self._update_channel_status()
+                
+                # Sleep until next update
+                time.sleep(update_interval)
+            except Exception as e:
+                logger.error(f"❌ Error in status update loop: {e}")
+                time.sleep(10)  # Shorter sleep on error
