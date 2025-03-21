@@ -5,7 +5,7 @@
       "peak_watchers": 1,
       "peak_time": 1742419437,
       "total_watch_time": 0,
-      "session_count": 22,
+      "session_count": 24,
       "total_segments": 0,
       "watchlist": {}
     },
@@ -14,7 +14,7 @@
       "peak_watchers": 1,
       "peak_time": 1742419447,
       "total_watch_time": 0,
-      "session_count": 19,
+      "session_count": 22,
       "total_segments": 0,
       "watchlist": {}
     },
@@ -23,7 +23,7 @@
       "peak_watchers": 1,
       "peak_time": 1742419460,
       "total_watch_time": 0,
-      "session_count": 22,
+      "session_count": 24,
       "total_segments": 0,
       "watchlist": {}
     },
@@ -32,7 +32,7 @@
       "peak_watchers": 1,
       "peak_time": 1742419477,
       "total_watch_time": 0,
-      "session_count": 21,
+      "session_count": 22,
       "total_segments": 0,
       "watchlist": {}
     },
@@ -41,34 +41,34 @@
       "peak_watchers": 1,
       "peak_time": 1742419483,
       "total_watch_time": 0,
-      "session_count": 15,
+      "session_count": 16,
       "total_segments": 0,
       "watchlist": {}
     },
     "ufc": {
-      "current_watchers": 0,
+      "current_watchers": 1,
       "peak_watchers": 1,
       "peak_time": 1742419854,
       "total_watch_time": 0,
-      "session_count": 17,
+      "session_count": 18,
       "total_segments": 0,
       "watchlist": {}
     },
     "rocky": {
-      "current_watchers": 0,
+      "current_watchers": 1,
       "peak_watchers": 1,
       "peak_time": 1742419860,
       "total_watch_time": 0,
-      "session_count": 15,
+      "session_count": 16,
       "total_segments": 0,
       "watchlist": {}
     },
     "belmondo": {
-      "current_watchers": 0,
+      "current_watchers": 1,
       "peak_watchers": 2,
       "peak_time": 1742502941,
       "total_watch_time": 0,
-      "session_count": 32,
+      "session_count": 35,
       "total_segments": 0,
       "watchlist": {}
     },
@@ -82,47 +82,47 @@
       "watchlist": {}
     },
     "pagnol": {
-      "current_watchers": 0,
+      "current_watchers": 1,
       "peak_watchers": 1,
       "peak_time": 1742421299,
       "total_watch_time": 0,
-      "session_count": 19,
+      "session_count": 20,
       "total_segments": 0,
       "watchlist": {}
     },
     "guerre": {
-      "current_watchers": 0,
+      "current_watchers": 1,
       "peak_watchers": 1,
       "peak_time": 1742421304,
       "total_watch_time": 0,
-      "session_count": 15,
+      "session_count": 16,
       "total_segments": 0,
       "watchlist": {}
     },
     "gendarme": {
-      "current_watchers": 0,
+      "current_watchers": 1,
       "peak_watchers": 1,
       "peak_time": 1742421313,
       "total_watch_time": 0,
-      "session_count": 16,
+      "session_count": 17,
       "total_segments": 0,
       "watchlist": {}
     },
     "fela": {
-      "current_watchers": 0,
+      "current_watchers": 1,
       "peak_watchers": 1,
       "peak_time": 1742421320,
       "total_watch_time": 0,
-      "session_count": 15,
+      "session_count": 16,
       "total_segments": 0,
       "watchlist": {}
     },
     "defunes": {
-      "current_watchers": 0,
+      "current_watchers": 1,
       "peak_watchers": 1,
       "peak_time": 1742421496,
       "total_watch_time": 0,
-      "session_count": 16,
+      "session_count": 17,
       "total_segments": 0,
       "watchlist": {}
     },
@@ -131,16 +131,16 @@
       "peak_watchers": 1,
       "peak_time": 1742421501,
       "total_watch_time": 0,
-      "session_count": 18,
+      "session_count": 19,
       "total_segments": 0,
       "watchlist": {}
     },
     "bronzes": {
-      "current_watchers": 1,
+      "current_watchers": 0,
       "peak_watchers": 1,
       "peak_time": 1742421597,
       "total_watch_time": 0,
-      "session_count": 26,
+      "session_count": 28,
       "total_segments": 0,
       "watchlist": {}
     },
@@ -149,7 +149,7 @@
       "peak_watchers": 1,
       "peak_time": 1742421599,
       "total_watch_time": 0,
-      "session_count": 8,
+      "session_count": 9,
       "total_segments": 0,
       "watchlist": {}
     },
@@ -158,16 +158,16 @@
       "peak_watchers": 1,
       "peak_time": 1742456017,
       "total_watch_time": 0,
-      "session_count": 19,
+      "session_count": 20,
       "total_segments": 0,
       "watchlist": {}
     },
     "oss": {
-      "current_watchers": 0,
+      "current_watchers": 1,
       "peak_watchers": 1,
       "peak_time": 1742456035,
       "total_watch_time": 0,
-      "session_count": 21,
+      "session_count": 22,
       "total_segments": 0,
       "watchlist": {}
     },
@@ -176,17 +176,17 @@
       "peak_watchers": 2,
       "peak_time": 1742550355,
       "total_watch_time": 0,
-      "session_count": 11,
+      "session_count": 14,
       "total_segments": 0,
       "watchlist": {}
     }
   },
   "global": {
-    "total_watchers": 1,
+    "total_watchers": 9,
     "peak_watchers": 19,
     "peak_time": 1742456153,
     "total_watch_time": 0,
-    "last_updated": 1742559268
+    "last_updated": 1742562508
   },
   "daily": {
     "2025-03-19": {
