@@ -5,24 +5,37 @@
       "peak_watchers": 1,
       "peak_time": 1742575208,
       "total_watch_time": 0,
-      "session_count": 1,
+      "session_count": 4,
+      "total_segments": 0,
+      "watchlist": {}
+    },
+    "bronzes": {
+      "current_watchers": 0,
+      "peak_watchers": 1,
+      "peak_time": 1742575773,
+      "total_watch_time": 0,
+      "session_count": 9,
       "total_segments": 0,
       "watchlist": {}
     }
   },
   "global": {
     "total_watchers": 1,
-    "peak_watchers": 1,
-    "peak_time": 1742575208,
+    "peak_watchers": 2,
+    "peak_time": 1742575773,
     "total_watch_time": 0,
-    "last_updated": 1742575703
+    "last_updated": 1742582205
   },
   "daily": {
     "2025-03-21": {
-      "peak_watchers": 1,
+      "peak_watchers": 2,
       "total_watch_time": 0,
       "channels": {
         "pagnol": {
+          "peak_watchers": 1,
+          "total_watch_time": 0
+        },
+        "bronzes": {
           "peak_watchers": 1,
           "total_watch_time": 0
         }

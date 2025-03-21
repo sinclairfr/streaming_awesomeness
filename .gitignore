@@ -3,6 +3,7 @@ app/cache/
 app/content/
 app/hls/
 app/logs/
+app/rebus/
 
 # Ignore environment files
 .env

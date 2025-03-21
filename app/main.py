@@ -30,7 +30,7 @@ class Application:
         logger.info(f"Signal {signum} reçu, nettoyage et arrêt...")
         self.running = False
         if self.manager:
-            self.manager.cleanup()
+            self.manager.cleanup_manager()
     
     def setup(self):
         """On initialise l'environnement"""
@@ -64,7 +64,7 @@ class Application:
             logger.error(f"Erreur setup: {e}")
             return False
 
-    def run(self):
+    def run_main_loop(self):
         """Boucle principale avec gestion des erreurs"""
         if not self.setup():
             logger.critical("❌ Échec de l'initialisation, arrêt.")
@@ -81,12 +81,12 @@ class Application:
                     self.manager = IPTVManager(CONTENT_DIR, use_gpu=use_gpu)
                 
                 # On lance le manager
-                self.manager.run()
+                self.manager.run_manager_loop()
                 
             except Exception as e:
                 logger.error(f"Erreur critique: {e}")
                 if self.manager:
-                    self.manager.cleanup()
+                    self.manager.cleanup_manager()
                     self.manager = None
                     
                 retry_count += 1
@@ -102,4 +102,4 @@ class Application:
 
 if __name__ == "__main__":
     app = Application()
-    sys.exit(app.run())
+    sys.exit(app.run_main_loop())

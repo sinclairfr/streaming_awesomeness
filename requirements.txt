@@ -4,4 +4,3 @@ psutil
 ffmpeg
 tqdm
 tree #for debugging purposes
-pyinotify 

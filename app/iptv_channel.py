@@ -960,67 +960,31 @@ class IPTVChannel:
             return False
 
     def channel_health_check(self):
-        """Vérifie l'état de santé de la chaîne et effectue des actions correctives si nécessaire"""
+        """Vérifie la santé de la chaîne"""
         try:
-            current_time = time.time()
-
-            # 1. Vérification de la présence de segments HLS
-            hls_dir = Path(f"/app/hls/{self.name}")
-            if not hls_dir.exists():
-                logger.warning(f"[{self.name}] ⚠️ Dossier HLS manquant")
+            # 1. Vérification du dossier HLS
+            hls_dir = f"/app/hls/{self.name}"
+            if not os.path.exists(hls_dir):
+                logger.error(f"[{self.name}] ❌ Dossier HLS manquant")
                 return False
 
-            # 2. Vérification de la playlist
-            playlist = hls_dir / "playlist.m3u8"
-            if not playlist.exists():
-                logger.warning(f"[{self.name}] ⚠️ Playlist HLS manquante")
-
-                # Si le stream est censé être en cours, redémarrer
-                if (
-                    self.process_manager.is_running()
-                    and hasattr(self, "watchers_count")
-                    and self.watchers_count > 0
-                ):
-                    logger.info(
-                        f"[{self.name}] 🔄 Redémarrage du stream (playlist manquante)"
-                    )
-                    return self._restart_stream()
-                return False
-
-            # 3. Vérification de la présence de segments
-            segments = list(hls_dir.glob("*.ts"))
-            if not segments:
-                logger.warning(f"[{self.name}] ⚠️ Aucun segment HLS")
-
-                # Si processus en cours mais pas de segments, possible blocage
-                if (
-                    self.process_manager.is_running()
-                    and hasattr(self, "watchers_count")
-                    and self.watchers_count > 0
-                ):
-                    logger.info(
-                        f"[{self.name}] 🔄 Redémarrage du stream (aucun segment)"
-                    )
-                    return self._restart_stream()
-                return False
-
-            # 4. Vérification de l'âge du segment le plus récent
-            newest_segment = max(segments, key=lambda p: p.stat().st_mtime)
-            time_since_newest = current_time - newest_segment.stat().st_mtime
-
-            if (
-                time_since_newest > 60 and self.process_manager.is_running()
-            ):  # Plus de 60s sans nouveau segment
+            # 2. Vérification des segments
+            segments_status = self._check_segments(hls_dir)
+            if not segments_status["success"]:
                 logger.warning(
-                    f"[{self.name}] ⚠️ Dernier segment trop vieux: {time_since_newest:.1f}s"
+                    f"[{self.name}] ⚠️ Problème de segments: {segments_status['error']}"
                 )
+                return self._restart_stream()
 
-                # Si viewers actifs, redémarrer
-                if hasattr(self, "watchers_count") and self.watchers_count > 0:
-                    logger.info(
-                        f"[{self.name}] 🔄 Redémarrage du stream (segments périmés)"
-                    )
-                    return self._restart_stream()
+            # 3. Vérification du processeur
+            if not self._verify_processor():
+                logger.error(f"[{self.name}] ❌ Processeur invalide")
+                return self._restart_stream()
+
+            # 4. Vérification des timeouts
+            if not self._handle_timeouts():
+                logger.warning(f"[{self.name}] ⚠️ Timeout détecté")
+                return self._restart_stream()
 
             # 5. Vérification des processus
             if (
@@ -1039,21 +1003,6 @@ class IPTVChannel:
         except Exception as e:
             logger.error(f"[{self.name}] ❌ Erreur health check: {e}")
             return False
-
-    def update_watchers(self, count: int):
-        """Mise à jour du nombre de watchers"""
-        with self.lock:
-            old_count = getattr(self, "watchers_count", 0)
-            self.watchers_count = count
-
-            self.last_watcher_time = time.time()
-
-            if old_count != count:
-                logger.info(f"📊 Mise à jour {self.name}: {count} watchers")
-
-            if count > 0 and old_count == 0:
-                logger.info(f"[{self.name}] 🔥 Premier watcher, démarrage du stream")
-                self.start_stream_if_needed()
 
     def _verify_processor(self) -> bool:
         """Vérifie que le VideoProcessor est correctement initialisé"""
@@ -1088,7 +1037,6 @@ class IPTVChannel:
         except Exception as e:
             logger.error(f"[{self.name}] ❌ Erreur vérification VideoProcessor: {e}")
             return False
-
 
     def _handle_process_died(self, return_code):
         """Gère la mort du processus FFmpeg"""
@@ -1136,6 +1084,7 @@ class IPTVChannel:
         
         # Pour les autres erreurs sans spectateurs, on peut redémarrer uniquement si channel le demande explicitement
         return False
+
     def _handle_segment_created(self, segment_path, size):
         """Gère la création d'un nouveau segment HLS"""
         if self.logger:

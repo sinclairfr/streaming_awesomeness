@@ -943,7 +943,7 @@ class IPTVManager:
             f"Playlist mise à jour ({len(ready_channels)} chaînes prêtes sur {len(self.channels)} totales)"
         )
 
-    def cleanup(self):
+    def cleanup_manager(self):
         logger.info("Début du nettoyage...")
 
         # Arrêt du StatsCollector
@@ -1052,8 +1052,8 @@ class IPTVManager:
             logger.error(f"❌ Erreur parsing log: {e}")
             return None, None, None, False, None
 
-    def process_new_log_lines(self):
-        logger.info(f"[IPTV_MANAGER] 🔄 Début process_new_log_lines")
+    def process_iptv_log_lines(self):
+        logger.info(f"[IPTV_MANAGER] 🔄 Début process_iptv_log_lines")
         """Traite les nouvelles lignes ajoutées au fichier de log nginx"""
         try:
             # Vérification de l'existence du fichier
@@ -1143,7 +1143,7 @@ class IPTVManager:
 
                 def on_modified(self, event):
                     if event.src_path == self.manager.log_path:
-                        self.manager.process_new_log_lines()
+                        self.manager.process_iptv_log_lines()
 
             # Initialiser l'observer
             observer = Observer()
@@ -1172,14 +1172,14 @@ class IPTVManager:
                         f.seek(last_position)
                         new_lines = f.readlines()
                         if new_lines:
-                            self.process_new_log_lines()
+                            self.process_iptv_log_lines()
                             last_position = f.tell()
                 time.sleep(1)  # Vérification toutes les secondes
             except Exception as e:
                 logger.error(f"❌ Erreur surveillance legacy: {e}")
                 time.sleep(5)  # Attente plus longue en cas d'erreur
 
-    def run(self):
+    def run_manager_loop(self):
         try:
             # Démarrer la boucle de surveillance des watchers
             if not self.watchers_thread.is_alive():
@@ -1214,7 +1214,7 @@ class IPTVManager:
                 time.sleep(1)
 
         except KeyboardInterrupt:
-            self.cleanup()
+            self.cleanup_manager()
         except Exception as e:
             logger.error(f"🔥 Erreur manager : {e}")
-            self.cleanup()
+            self.cleanup_manager()

@@ -35,7 +35,7 @@ class HLSCleaner:
         logger.info("🔄 Démarrage du monitoring HLS...")
         self.cleanup_thread.start()
 
-    def stop(self):
+    def stop_cleaner(self):
         """Arrête proprement le nettoyage"""
         self.stop_event.set()
         self.cleanup_thread.join()

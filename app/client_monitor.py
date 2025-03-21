@@ -460,7 +460,7 @@ class ClientMonitor(threading.Thread):
                 # Traiter la ligne
                 self._process_log_line(line)
 
-    def process_new_log_lines(self):
+    def process_client_log_lines(self):
         """Traite les nouvelles lignes ajoutées au fichier de log nginx"""
         try:
             # Vérification de l'existence du fichier
@@ -1081,7 +1081,7 @@ class ClientMonitor(threading.Thread):
             time.sleep(10)
             self._follow_log_file_legacy()
 
-    def run(self):
+    def run_client_monitor(self):
         """Démarre le monitoring en mode direct (legacy)"""
         logger.info("👀 Démarrage de la surveillance des requêtes...")
 
@@ -1090,7 +1090,7 @@ class ClientMonitor(threading.Thread):
             if not os.path.exists(self.log_path):
                 logger.error(f"❌ Fichier log introuvable: {self.log_path}")
                 time.sleep(5)
-                return self.run()
+                return self.run_client_monitor()
 
             # Important: initialiser la position à la fin du fichier, pas au début
             with open(self.log_path, "r") as f:
@@ -1116,4 +1116,4 @@ class ClientMonitor(threading.Thread):
 
             logger.error(traceback.format_exc())
             time.sleep(10)
-            self.run()
+            self.run_client_monitor()

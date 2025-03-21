@@ -1783,7 +1783,7 @@ class VideoProcessor:
             logger.error(f"❌ Erreur générale vérification optimisation: {str(e)}")
             return False
 
-    def stop(self):
+    def stop_processor(self):
         """Arrête proprement le thread de traitement"""
         self.stop_processing.set()
         if self.processing_thread and self.processing_thread.is_alive():

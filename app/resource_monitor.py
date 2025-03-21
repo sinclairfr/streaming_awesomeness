@@ -84,10 +84,10 @@ class ResourceMonitor(threading.Thread):
         except Exception as e:
             logger.error(f"Erreur lors du nettoyage des logs: {e}")
 
-    def stop(self):
+    def stop_monitor(self):
         self.running = False
 
-    def run(self):
+    def run_resource_monitor(self):
         try:
             CPU_CHECK_INTERVAL = float(os.getenv("CPU_CHECK_INTERVAL", "1"))
         except ValueError:

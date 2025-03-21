@@ -183,7 +183,7 @@ class FFmpegMonitor(threading.Thread):
         if hasattr(self.channels, "stats_collector") and self.channels.stats_collector:
             self.channels.stats_collector.save_stats()
 
-    def run(self):
+    def run_monitor_loop(self):
         while not self.stop_event.is_set():
             try:
                 self._check_all_ffmpeg_processes()
