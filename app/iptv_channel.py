@@ -111,18 +111,18 @@ class IPTVChannel:
             IPTVChannel._playlist_creation_timestamps = {}
 
         last_creation = IPTVChannel._playlist_creation_timestamps.get(self.name, 0)
+        concat_file = Path(self.video_dir) / "_playlist.txt"
 
-        # Si on a créé une playlist dans les 5 dernières secondes, ne pas recréer
-        if current_time - last_creation < 5:
+        # Si on a créé une playlist dans les 30 dernières secondes, ne pas recréer
+        if current_time - last_creation < 30:
             logger.debug(
                 f"[{self.name}] ℹ️ Création de playlist ignorée (dernière: il y a {current_time - last_creation:.1f}s)"
             )
-            concat_file = Path(self.video_dir) / "_playlist.txt"
             return concat_file if concat_file.exists() else None
 
-        # Mettre à jour le timestamp
+        # Mettre à jour le timestamp AVANT de créer le fichier
         IPTVChannel._playlist_creation_timestamps[self.name] = current_time
-
+        
         try:
             # Utiliser ready_to_stream au lieu de processed
             ready_to_stream_dir = Path(self.video_dir) / "ready_to_stream"
@@ -958,50 +958,59 @@ class IPTVChannel:
             return False
 
     def channel_health_check(self):
-        """Vérifie la santé de la chaîne"""
+        """Checks if the channel is healthy and running, restarts if needed"""
         try:
-            # 1. Vérification du dossier HLS
-            hls_dir = f"/app/hls/{self.name}"
-            if not os.path.exists(hls_dir):
-                logger.error(f"[{self.name}] ❌ Dossier HLS manquant")
+            # Increment health check counter for logging
+            if not hasattr(self, "_health_check_count"):
+                self._health_check_count = 0
+            self._health_check_count += 1
+            
+            logger.info(f"[{self.name}] 🩺 Health check #{self._health_check_count} - Stream running: {self.process_manager.is_running()}, Watchers: {getattr(self, 'watchers_count', 0)}")
+            
+            # 1. Check if the process is running
+            if not self.process_manager.is_running():
+                logger.warning(f"[{self.name}] ⚠️ Stream process not running but should be (watchers: {getattr(self, 'watchers_count', 0)})")
+                
+                # If we have active watchers, restart the stream
+                if hasattr(self, "watchers_count") and self.watchers_count > 0:
+                    logger.info(f"[{self.name}] 🔄 Auto-restarting stream due to active watchers ({self.watchers_count})")
+                    return self.start_stream()
                 return False
-
-            # 2. Vérification des segments
-            segments_status = self._check_segments(hls_dir)
-            if not segments_status["success"]:
-                logger.warning(
-                    f"[{self.name}] ⚠️ Problème de segments: {segments_status['error']}"
-                )
-                return self._restart_stream()
-
-            # 3. Vérification du processeur
-            if not self._verify_processor():
-                logger.error(f"[{self.name}] ❌ Processeur invalide")
-                return self._restart_stream()
-
-            # 4. Vérification des timeouts
-            if not self._handle_timeouts():
-                logger.warning(f"[{self.name}] ⚠️ Timeout détecté")
-                return self._restart_stream()
-
-            # 5. Vérification des processus
-            if (
-                hasattr(self, "watchers_count")
-                and self.watchers_count > 0
-                and not self.process_manager.is_running()
-            ):
-                logger.info(
-                    f"[{self.name}] 🔄 Redémarrage du stream (processus manquant)"
-                )
-                return self.start_stream()
-
-            # Tout semble bon
+            
+            # 2. Check if HLS directory has segments and they're recent
+            hls_dir = Path(f"/app/hls/{self.name}")
+            segments = list(hls_dir.glob("*.ts")) if hls_dir.exists() else []
+            
+            if not segments:
+                logger.warning(f"[{self.name}] ⚠️ No segments found even though process is running")
+                
+                # Restart the stream if there are watchers
+                if hasattr(self, "watchers_count") and self.watchers_count > 0:
+                    logger.info(f"[{self.name}] 🔄 Auto-restarting stream due to missing segments")
+                    self.stop_stream_if_needed()
+                    time.sleep(2)  # Wait for cleanup
+                    return self.start_stream()
+            else:
+                # Check if segments are recent
+                newest_segment = max(segments, key=lambda p: p.stat().st_mtime)
+                segment_age = time.time() - newest_segment.stat().st_mtime
+                
+                if segment_age > 60:  # No new segments in 1 minute
+                    logger.warning(f"[{self.name}] ⚠️ Segments too old (last: {segment_age:.1f}s ago)")
+                    
+                    # Restart if there are watchers
+                    if hasattr(self, "watchers_count") and self.watchers_count > 0:
+                        logger.info(f"[{self.name}] 🔄 Auto-restarting stream due to stale segments")
+                        self.stop_stream_if_needed()
+                        time.sleep(2)
+                        return self.start_stream()
+                    
             return True
-
+            
         except Exception as e:
-            logger.error(f"[{self.name}] ❌ Erreur health check: {e}")
+            logger.error(f"[{self.name}] ❌ Error in health check: {e}")
             return False
-
+        
     def _verify_processor(self) -> bool:
         """Vérifie que le VideoProcessor est correctement initialisé"""
         try:

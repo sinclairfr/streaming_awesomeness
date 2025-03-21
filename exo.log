@@ -1,0 +1,168 @@
+2025-03-21 23:27:20,229 - config - [INFO] - 🧹 Log ffmpeg nettoyé: columbos1s5_ffmpeg.log
+2025-03-21 23:27:20,229 - config - [INFO] - 🧹 Log ffmpeg nettoyé: columbos6end_ffmpeg.log
+2025-03-21 23:27:20,229 - config - [INFO] - 🧹 Log ffmpeg nettoyé: columbo_progress.log
+2025-03-21 23:27:20,235 - config - [INFO] - 🧹 Log ffmpeg nettoyé: columbos1s5_progress_20250321_030819.log
+2025-03-21 23:27:20,237 - config - [INFO] - 🧹 Log ffmpeg nettoyé: columbos6end_progress.log
+2025-03-21 23:27:20,238 - config - [INFO] - 🧹 Log ffmpeg nettoyé: columbos1s5_progress.log
+2025-03-21 23:27:20,238 - config - [INFO] - 🧹 Log ffmpeg nettoyé: columbo_ffmpeg.log
+2025-03-21 23:27:20,243 - config - [INFO] - ✅ Nouvelle chaîne trouvée: columbos6end
+2025-03-21 23:27:20,243 - config - [INFO] - ✅ Nouvelle chaîne trouvée: columbos1s5
+2025-03-21 23:27:33,225 - config - [INFO] - [columbos6end] - Initialisation asynchrone de la chaîne: 
+2025-03-21 23:27:33,229 - video_processor - [INFO] - [columbos6end] 🧹 Nettoyage du dossier processing
+2025-03-21 23:27:33,233 - config - [INFO] - [columbos6end] 🔄 Préparation initiale de la chaîne
+2025-03-21 23:27:37,682 - config - [DEBUG] - [columbos6end] ✅ VideoProcessor correctement initialisé
+2025-03-21 23:27:37,683 - config - [INFO] - [columbos6end] 🔍 32 fichiers MP4 trouvés dans ready_to_stream: ['columbo_s07_e42_meurtre_a_la_carte.mp4', 'columbo_s09_e54_couronne_mortuaire.mp4', 'columbo_s12_e66_la_griffe_du_crime.mp4', 'columbo_s12_e68_meurtre_en_musique.mp4', 'columbo_s09_e50_portrait_d_un_assassin.mp4', 'columbo_s08_e48_fantasmes.mp4', 'columbo_s10_e57_attention_le_meurtre_peut_nuire_a_votre_sante.mp4', 'columbo_s11_e60_a_chacun_son_heure.mp4', 'columbo_s07_e41_le_mystere_de_la_chambre_forte.mp4', 'columbo_s07_e43_meurtre_parfait.mp4', 'columbo_s09_e52_votez_pour_moi.mp4', 'columbo_s12_e64_columbo_change_de_peau.mp4', 'columbo_s07_e44_jeu_de_mots.mp4', 'columbo_s06_e38_deux_en_un.mp4', 'columbo_s06_e40_les_surdoues.mp4', 'columbo_s09_e55_meurtre_en_deux_temps.mp4', 'columbo_s09_e51_tout_finit_par_se_savoir.mp4', 'columbo_s12_e67_en_grandes_pompes.mp4', 'columbo_s11_e59_meurtre_au_champagne.mp4', 'columbo_s10_e58_jeux_d_ombres.mp4', 'columbo_s08_e46_il_y_a_toujours_un_truc.mp4', 'columbo_s11_e61_un_seul_suffira.mp4', 'columbo_s07_e45_des_sourires_et_des_armes.mp4', 'columbo_s12_e65_etrange_association.mp4', 'columbo_s12_e69_columbo_mene_la_danse.mp4', 'columbo_s08_e47_ombres_et_lumieres.mp4', 'columbo_s12_e62_le_meurtre_aux_deux_visages.mp4', 'columbo_s09_e53_l_enterrement_de_madame_columbo.mp4', 'columbo_s12_e63_face_a_face.mp4', 'columbo_s08_e49_grandes_manoeuvres_petits_soldats.mp4', 'columbo_s06_e39_meurtre_a_l_ancienne.mp4', 'columbo_s10_e56_criminologie_appliquee.mp4']
+2025-03-21 23:27:41,629 - config - [INFO] - [columbos6end] ✅ 32 vidéos valides trouvées dans ready_to_stream
+2025-03-21 23:27:41,629 - config - [INFO] - [columbos6end] 🔄 Liste des vidéos modifiée:
+2025-03-21 23:27:41,630 - config - [INFO] -    + Ajoutées: {'columbo_s07_e41_le_mystere_de_la_chambre_forte.mp4', 'columbo_s06_e39_meurtre_a_l_ancienne.mp4', 'columbo_s08_e47_ombres_et_lumieres.mp4', 'columbo_s11_e61_un_seul_suffira.mp4', 'columbo_s12_e69_columbo_mene_la_danse.mp4', 'columbo_s08_e46_il_y_a_toujours_un_truc.mp4', 'columbo_s06_e38_deux_en_un.mp4', 'columbo_s12_e67_en_grandes_pompes.mp4', 'columbo_s07_e44_jeu_de_mots.mp4', 'columbo_s11_e60_a_chacun_son_heure.mp4', 'columbo_s12_e63_face_a_face.mp4', 'columbo_s12_e68_meurtre_en_musique.mp4', 'columbo_s06_e40_les_surdoues.mp4', 'columbo_s10_e58_jeux_d_ombres.mp4', 'columbo_s07_e45_des_sourires_et_des_armes.mp4', 'columbo_s12_e64_columbo_change_de_peau.mp4', 'columbo_s08_e48_fantasmes.mp4', 'columbo_s09_e53_l_enterrement_de_madame_columbo.mp4', 'columbo_s11_e59_meurtre_au_champagne.mp4', 'columbo_s09_e51_tout_finit_par_se_savoir.mp4', 'columbo_s12_e66_la_griffe_du_crime.mp4', 'columbo_s07_e42_meurtre_a_la_carte.mp4', 'columbo_s10_e57_attention_le_meurtre_peut_nuire_a_votre_sante.mp4', 'columbo_s09_e52_votez_pour_moi.mp4', 'columbo_s12_e65_etrange_association.mp4', 'columbo_s09_e50_portrait_d_un_assassin.mp4', 'columbo_s07_e43_meurtre_parfait.mp4', 'columbo_s09_e54_couronne_mortuaire.mp4', 'columbo_s09_e55_meurtre_en_deux_temps.mp4', 'columbo_s10_e56_criminologie_appliquee.mp4', 'columbo_s12_e62_le_meurtre_aux_deux_visages.mp4', 'columbo_s08_e49_grandes_manoeuvres_petits_soldats.mp4'}
+2025-03-21 23:27:41,630 - config - [INFO] - [columbos6end] ✅ Statut 'prêt' mis à jour dans le manager
+2025-03-21 23:27:41,630 - config - [INFO] - [columbos6end] 🛠️ Création de _playlist.txt avec 32 fichiers uniques
+2025-03-21 23:27:41,632 - config - [DEBUG] - [columbos6end] 📝 Écriture de _playlist.txt
+2025-03-21 23:27:41,631 - config - [DEBUG] - [columbos6end] ℹ️ Création de playlist ignorée (dernière: il y a 0.0s)
+2025-03-21 23:27:41,632 - config - [INFO] - [columbos6end] 🕒 Calcul des durées pour 32 fichiers...
+2025-03-21 23:27:41,665 - config - [DEBUG] - 🔄 Modification détectée: /mnt/videos/streaming_awesomeness/content/columbos6end/_playlist.txt
+2025-03-21 23:27:41,666 - config - [DEBUG] - [columbos6end] ✅ Ajout de columbo_s06_e39_meurtre_a_l_ancienne.mp4
+2025-03-21 23:27:41,667 - config - [DEBUG] - [columbos6end] ✅ Ajout de columbo_s10_e56_criminologie_appliquee.mp4
+2025-03-21 23:27:41,667 - config - [DEBUG] - [columbos6end] ✅ Ajout de columbo_s07_e42_meurtre_a_la_carte.mp4
+2025-03-21 23:27:41,667 - config - [DEBUG] - [columbos6end] ✅ Ajout de columbo_s06_e38_deux_en_un.mp4
+2025-03-21 23:27:41,668 - config - [DEBUG] - [columbos6end] ✅ Ajout de columbo_s09_e51_tout_finit_par_se_savoir.mp4
+2025-03-21 23:27:41,668 - config - [DEBUG] - [columbos6end] ✅ Ajout de columbo_s12_e64_columbo_change_de_peau.mp4
+2025-03-21 23:27:41,668 - config - [DEBUG] - [columbos6end] ✅ Ajout de columbo_s12_e63_face_a_face.mp4
+2025-03-21 23:27:41,669 - config - [DEBUG] - [columbos6end] ✅ Ajout de columbo_s12_e69_columbo_mene_la_danse.mp4
+2025-03-21 23:27:41,669 - config - [DEBUG] - [columbos6end] ✅ Ajout de columbo_s07_e41_le_mystere_de_la_chambre_forte.mp4
+2025-03-21 23:27:41,669 - config - [DEBUG] - [columbos6end] ✅ Ajout de columbo_s11_e60_a_chacun_son_heure.mp4
+2025-03-21 23:27:41,669 - config - [DEBUG] - [columbos6end] ✅ Ajout de columbo_s08_e46_il_y_a_toujours_un_truc.mp4
+2025-03-21 23:27:41,670 - config - [DEBUG] - [columbos6end] ✅ Ajout de columbo_s09_e54_couronne_mortuaire.mp4
+2025-03-21 23:27:41,670 - config - [DEBUG] - [columbos6end] ✅ Ajout de columbo_s10_e58_jeux_d_ombres.mp4
+2025-03-21 23:27:41,670 - config - [DEBUG] - [columbos6end] ✅ Ajout de columbo_s11_e59_meurtre_au_champagne.mp4
+2025-03-21 23:27:41,670 - config - [DEBUG] - [columbos6end] ✅ Ajout de columbo_s09_e53_l_enterrement_de_madame_columbo.mp4
+2025-03-21 23:27:41,671 - config - [DEBUG] - [columbos6end] ✅ Ajout de columbo_s12_e67_en_grandes_pompes.mp4
+2025-03-21 23:27:41,671 - config - [DEBUG] - [columbos6end] ✅ Ajout de columbo_s08_e47_ombres_et_lumieres.mp4
+2025-03-21 23:27:41,672 - config - [DEBUG] - [columbos6end] ✅ Ajout de columbo_s08_e48_fantasmes.mp4
+2025-03-21 23:27:41,672 - config - [DEBUG] - [columbos6end] ✅ Ajout de columbo_s07_e45_des_sourires_et_des_armes.mp4
+2025-03-21 23:27:41,672 - config - [DEBUG] - [columbos6end] ✅ Ajout de columbo_s09_e50_portrait_d_un_assassin.mp4
+2025-03-21 23:27:41,673 - config - [DEBUG] - [columbos6end] ✅ Ajout de columbo_s08_e49_grandes_manoeuvres_petits_soldats.mp4
+2025-03-21 23:27:41,673 - config - [DEBUG] - [columbos6end] ✅ Ajout de columbo_s07_e43_meurtre_parfait.mp4
+2025-03-21 23:27:41,673 - config - [DEBUG] - [columbos6end] ✅ Ajout de columbo_s09_e55_meurtre_en_deux_temps.mp4
+2025-03-21 23:27:41,674 - config - [DEBUG] - [columbos6end] ✅ Ajout de columbo_s09_e52_votez_pour_moi.mp4
+2025-03-21 23:27:41,674 - config - [DEBUG] - [columbos6end] ✅ Ajout de columbo_s12_e65_etrange_association.mp4
+2025-03-21 23:27:41,674 - config - [DEBUG] - [columbos6end] ✅ Ajout de columbo_s12_e62_le_meurtre_aux_deux_visages.mp4
+2025-03-21 23:27:41,674 - config - [DEBUG] - [columbos6end] ✅ Ajout de columbo_s10_e57_attention_le_meurtre_peut_nuire_a_votre_sante.mp4
+2025-03-21 23:27:41,675 - config - [DEBUG] - [columbos6end] ✅ Ajout de columbo_s12_e66_la_griffe_du_crime.mp4
+2025-03-21 23:27:41,675 - config - [DEBUG] - [columbos6end] ✅ Ajout de columbo_s07_e44_jeu_de_mots.mp4
+2025-03-21 23:27:41,676 - config - [DEBUG] - [columbos6end] ✅ Ajout de columbo_s11_e61_un_seul_suffira.mp4
+2025-03-21 23:27:41,676 - config - [DEBUG] - [columbos6end] ✅ Ajout de columbo_s06_e40_les_surdoues.mp4
+2025-03-21 23:27:41,676 - config - [DEBUG] - [columbos6end] ✅ Ajout de columbo_s12_e68_meurtre_en_musique.mp4
+2025-03-21 23:27:41,677 - config - [DEBUG] - 🔄 Modification détectée: /mnt/videos/streaming_awesomeness/content/columbos6end/_playlist.txt
+2025-03-21 23:27:41,703 - config - [INFO] - [columbos6end] 🎥 Playlist créée avec 32 fichiers uniques en mode aléatoire
+2025-03-21 23:27:45,160 - config - [INFO] - [columbos6end] ✅ Durée totale: 165722.20s
+2025-03-21 23:27:45,161 - config - [INFO] - [columbos6end] ✅ Durée totale calculée: 165722.20s (32 vidéos)
+2025-03-21 23:27:45,162 - config - [DEBUG] - [columbos6end] ✅ Initialisation complète. Chaîne prête: True, Offset: 0.00s
+2025-03-21 23:27:45,162 - config - [INFO] - [columbos6end] 🔍 Scan de mise à jour des vidéos en cours...
+2025-03-21 23:27:45,163 - config - [INFO] - ✅ Chaîne columbos6end prête pour le streaming
+2025-03-21 23:27:49,404 - config - [DEBUG] - [columbos6end] ✅ VideoProcessor correctement initialisé
+2025-03-21 23:27:49,407 - config - [INFO] - [columbos6end] 🔍 32 fichiers MP4 trouvés dans ready_to_stream: ['columbo_s07_e42_meurtre_a_la_carte.mp4', 'columbo_s09_e54_couronne_mortuaire.mp4', 'columbo_s12_e66_la_griffe_du_crime.mp4', 'columbo_s12_e68_meurtre_en_musique.mp4', 'columbo_s09_e50_portrait_d_un_assassin.mp4', 'columbo_s08_e48_fantasmes.mp4', 'columbo_s10_e57_attention_le_meurtre_peut_nuire_a_votre_sante.mp4', 'columbo_s11_e60_a_chacun_son_heure.mp4', 'columbo_s07_e41_le_mystere_de_la_chambre_forte.mp4', 'columbo_s07_e43_meurtre_parfait.mp4', 'columbo_s09_e52_votez_pour_moi.mp4', 'columbo_s12_e64_columbo_change_de_peau.mp4', 'columbo_s07_e44_jeu_de_mots.mp4', 'columbo_s06_e38_deux_en_un.mp4', 'columbo_s06_e40_les_surdoues.mp4', 'columbo_s09_e55_meurtre_en_deux_temps.mp4', 'columbo_s09_e51_tout_finit_par_se_savoir.mp4', 'columbo_s12_e67_en_grandes_pompes.mp4', 'columbo_s11_e59_meurtre_au_champagne.mp4', 'columbo_s10_e58_jeux_d_ombres.mp4', 'columbo_s08_e46_il_y_a_toujours_un_truc.mp4', 'columbo_s11_e61_un_seul_suffira.mp4', 'columbo_s07_e45_des_sourires_et_des_armes.mp4', 'columbo_s12_e65_etrange_association.mp4', 'columbo_s12_e69_columbo_mene_la_danse.mp4', 'columbo_s08_e47_ombres_et_lumieres.mp4', 'columbo_s12_e62_le_meurtre_aux_deux_visages.mp4', 'columbo_s09_e53_l_enterrement_de_madame_columbo.mp4', 'columbo_s12_e63_face_a_face.mp4', 'columbo_s08_e49_grandes_manoeuvres_petits_soldats.mp4', 'columbo_s06_e39_meurtre_a_l_ancienne.mp4', 'columbo_s10_e56_criminologie_appliquee.mp4']
+2025-03-21 23:27:50,345 - config - [INFO] - [columbos6end] ⏱️ Démarrage programmé dans 2 secondes
+2025-03-21 23:27:52,345 - config - [INFO] - [columbos6end] 🚀 Démarrage automatique...
+2025-03-21 23:27:52,346 - config - [INFO] - [columbos6end] Offset calculé: 115462.31s (modulo 165722.20s)
+2025-03-21 23:27:52,346 - config - [DEBUG] - [columbos6end] 🔄 Offset ajusté à 115462.31s (modulo 165722.20s)
+2025-03-21 23:27:52,347 - config - [DEBUG] - [columbos6end] 🔄 Process manager: offset ajusté à 115462.31s (modulo 165722.20s)
+2025-03-21 23:27:52,349 - config - [INFO] - [columbos6end] 🛠️ Construction de la commande FFmpeg...
+2025-03-21 23:27:52,349 - config - [INFO] - [columbos6end] 📼 Paramètres optimisés pour la copie directe
+2025-03-21 23:27:52,349 - config - [DEBUG] - [columbos6end] 📝 Commande: ffmpeg -hide_banner -loglevel info -y -thread_queue_size 32768 -analyzeduration 60M -probesize 60M -re -stream_loop -1 -fflags +genpts+igndts+discardcorrupt+fastseek -threads 4 -avoid_negative_ts make_zero -progress /app/logs/ffmpeg/columbos6end_progress.log -f concat -safe 0 -i /mnt/videos/streaming_awesomeness/content/columbos6end/_playlist.txt -c:v copy -c:a copy -sn -dn -map 0:v:0 -map 0:a:0? -max_muxing_queue_size 4096 -f hls -hls_time 4 -hls_list_size 30 -hls_delete_threshold 5 -hls_flags append_list+delete_segments+independent_segments+program_date_time+discont_start -hls_allow_cache 1 -start_number 0 -hls_segment_type mpegts -max_delay 5000000 -hls_init_time 4 -hls_segment_filename /app/hls/columbos6end/segment_%d.ts /app/hls/columbos6end/playlist.m3u8
+2025-03-21 23:27:52,350 - config - [INFO] - [columbos6end] 🚀 Lancement FFmpeg: ffmpeg -hide_banner -loglevel info -y -thread_queue_size 32768 -analyzeduration 60M -probesize 60M -re -stream_loop -1 -fflags +genpts+igndts+discardcorrupt+fastseek -threads 4 -avoid_negative_ts make_zero -progress /app/logs/ffmpeg/columbos6end_progress.log -f concat -safe 0 -i /mnt/videos/streaming_awesomeness/content/columbos6end/_playlist.txt -c:v copy -c:a copy -sn -dn -map 0:v:0 -map 0:a:0? -max_muxing_queue_size 4096 -f hls -hls_time 4 -hls_list_size 30 -hls_delete_threshold 5 -hls_flags append_list+delete_segments+independent_segments+program_date_time+discont_start -hls_allow_cache 1 -start_number 0 -hls_segment_type mpegts -max_delay 5000000 -hls_init_time 4 -hls_segment_filename /app/hls/columbos6end/segment_%d.ts /app/hls/columbos6end/playlist.m3u8
+2025-03-21 23:27:52,350 - config - [DEBUG] - [columbos6end] 🚀 Démarrage start_process
+2025-03-21 23:27:52,351 - config - [INFO] - [columbos6end] 📝 Logs FFmpeg -> /app/logs/ffmpeg/columbos6end_ffmpeg.log
+2025-03-21 23:27:52,351 - config - [INFO] - [columbos6end] 🚀 Lancement FFmpeg: ffmpeg -hide_banner -loglevel info -y -thread_queue_size 32768 -analyzeduration 60M -probesize 60M -re -stream_loop -1 -fflags +genpts+igndts+discardcorrupt+fastseek -threads 4 -avoid_negative_ts make_zero -progress /app/logs/ffmpeg/columbos6end_progress.log -f concat -safe 0 -i /mnt/videos/streaming_awesomeness/content/columbos6end/_playlist.txt -c:v copy -c:a copy -sn -dn -map 0:v:0 -map 0:a:0? -max_muxing_queue_size 4096 -f hls -hls_time 4 -hls_list_size 30 -hls_delete_threshold 5 -hls_flags append_list+delete_segments+independent_segments+program_date_time+discont_start -hls_allow_cache 1 -start_number 0 -hls_segment_type mpegts -max_delay 5000000 -hls_init_time 4 -hls_segment_filename /app/hls/columbos6end/segment_%d.ts /app/hls/columbos6end/playlist.m3u8
+2025-03-21 23:27:52,966 - config - [INFO] - [columbos6end] ✅ 32 vidéos valides trouvées dans ready_to_stream
+2025-03-21 23:27:52,967 - config - [INFO] - [columbos6end] 🔄 Conservation de la durée calculée précédemment: 165722.20s
+2025-03-21 23:27:52,967 - config - [DEBUG] - [columbos6end] ℹ️ Création de playlist ignorée (dernière: il y a 11.3s)
+2025-03-21 23:27:52,968 - config - [INFO] - [columbos6end] ✅ Scan de mise à jour terminé. Chaîne prête: True
+2025-03-21 23:27:53,354 - config - [DEBUG] - [columbos6end] 👀 Surveillance FFmpeg démarrée
+2025-03-21 23:27:53,354 - config - [INFO] - [columbos6end] ✅ FFmpeg démarré avec PID: 474
+2025-03-21 23:27:53,354 - config - [INFO] - [columbos6end] ✅ FFmpeg démarré avec PID: 474
+2025-03-21 23:27:53,355 - config - [INFO] - [columbos6end] ✅ Stream démarré avec succès à 115462.31s.
+2025-03-21 23:27:53,355 - config - [INFO] - [columbos6end] ✅ Démarrage automatique réussi
+2025-03-21 23:28:00,815 - config - [DEBUG] - 📋 Chaînes disponibles: ['weber', 'defunes', 'brucelee', 'gendarme', 'fela', 'guerre', 'rambo', 'verite', 'rocky', 'columbos6end', 'oss', 'bronzes', 'western', 'belmondo', 'pagnol']
+2025-03-21 23:28:00,829 - config - [DEBUG] - 📋 Chaînes disponibles: ['weber', 'defunes', 'brucelee', 'gendarme', 'fela', 'guerre', 'rambo', 'verite', 'rocky', 'columbos6end', 'oss', 'bronzes', 'western', 'belmondo', 'pagnol']
+2025-03-21 23:28:01,860 - config - [DEBUG] - 📋 Chaînes disponibles: ['weber', 'defunes', 'brucelee', 'gendarme', 'fela', 'guerre', 'rambo', 'verite', 'rocky', 'columbos6end', 'oss', 'bronzes', 'western', 'belmondo', 'pagnol', 'vandamme']
+2025-03-21 23:28:01,867 - config - [DEBUG] - 📋 Chaînes disponibles: ['weber', 'defunes', 'brucelee', 'gendarme', 'fela', 'guerre', 'rambo', 'verite', 'rocky', 'columbos6end', 'oss', 'bronzes', 'western', 'belmondo', 'pagnol', 'vandamme']
+2025-03-21 23:28:01,880 - config - [DEBUG] - 📋 Chaînes disponibles: ['weber', 'defunes', 'brucelee', 'gendarme', 'fela', 'guerre', 'rambo', 'verite', 'rocky', 'columbos6end', 'oss', 'bronzes', 'western', 'belmondo', 'pagnol', 'vandamme']
+2025-03-21 23:28:03,387 - config - [DEBUG] - 📋 Chaînes disponibles: ['weber', 'defunes', 'brucelee', 'gendarme', 'fela', 'guerre', 'rambo', 'verite', 'rocky', 'columbos6end', 'oss', 'bronzes', 'western', 'belmondo', 'pagnol', 'vandamme']
+2025-03-21 23:28:03,390 - config - [DEBUG] - 📋 Chaînes disponibles: ['weber', 'defunes', 'brucelee', 'gendarme', 'fela', 'guerre', 'rambo', 'verite', 'rocky', 'columbos6end', 'oss', 'bronzes', 'western', 'belmondo', 'pagnol', 'vandamme']
+2025-03-21 23:28:03,393 - config - [DEBUG] - 📋 Chaînes disponibles: ['weber', 'defunes', 'brucelee', 'gendarme', 'fela', 'guerre', 'rambo', 'verite', 'rocky', 'columbos6end', 'oss', 'bronzes', 'western', 'belmondo', 'pagnol', 'vandamme']
+2025-03-21 23:28:03,403 - config - [DEBUG] - 📋 Chaînes disponibles: ['weber', 'defunes', 'brucelee', 'gendarme', 'fela', 'guerre', 'rambo', 'verite', 'rocky', 'columbos6end', 'oss', 'bronzes', 'western', 'belmondo', 'pagnol', 'vandamme']
+2025-03-21 23:28:03,405 - config - [DEBUG] - 📋 Chaînes disponibles: ['weber', 'defunes', 'brucelee', 'gendarme', 'fela', 'guerre', 'rambo', 'verite', 'rocky', 'columbos6end', 'oss', 'bronzes', 'western', 'belmondo', 'pagnol', 'vandamme']
+2025-03-21 23:28:03,418 - config - [DEBUG] - 📋 Chaînes disponibles: ['weber', 'defunes', 'brucelee', 'gendarme', 'fela', 'guerre', 'rambo', 'verite', 'rocky', 'columbos6end', 'oss', 'bronzes', 'western', 'belmondo', 'pagnol', 'vandamme']
+2025-03-21 23:28:03,421 - config - [DEBUG] - 📋 Chaînes disponibles: ['weber', 'defunes', 'brucelee', 'gendarme', 'fela', 'guerre', 'rambo', 'verite', 'rocky', 'columbos6end', 'oss', 'bronzes', 'western', 'belmondo', 'pagnol', 'vandamme']
+2025-03-21 23:28:05,787 - config - [INFO] - [columbos1s5] - Initialisation asynchrone de la chaîne: 
+2025-03-21 23:28:05,791 - video_processor - [INFO] - [columbos1s5] 🧹 Nettoyage du dossier processing
+2025-03-21 23:28:05,795 - config - [INFO] - [columbos1s5] 🔄 Préparation initiale de la chaîne
+2025-03-21 23:28:06,928 - config - [DEBUG] - 📋 Chaînes disponibles: ['weber', 'defunes', 'brucelee', 'gendarme', 'fela', 'guerre', 'rambo', 'verite', 'rocky', 'columbos6end', 'oss', 'bronzes', 'western', 'belmondo', 'pagnol', 'vandamme']
+2025-03-21 23:28:06,947 - config - [DEBUG] - 📋 Chaînes disponibles: ['weber', 'defunes', 'brucelee', 'gendarme', 'fela', 'guerre', 'rambo', 'verite', 'rocky', 'columbos6end', 'oss', 'bronzes', 'western', 'belmondo', 'pagnol', 'vandamme']
+2025-03-21 23:28:06,976 - config - [DEBUG] - 📋 Chaînes disponibles: ['weber', 'defunes', 'brucelee', 'gendarme', 'fela', 'guerre', 'rambo', 'verite', 'rocky', 'columbos6end', 'oss', 'bronzes', 'western', 'belmondo', 'pagnol', 'vandamme']
+2025-03-21 23:28:11,694 - config - [DEBUG] - [columbos1s5] ✅ VideoProcessor correctement initialisé
+2025-03-21 23:28:11,696 - config - [INFO] - [columbos1s5] 🔍 37 fichiers MP4 trouvés dans ready_to_stream: ['columbo_s01_e02_faux_temoin_dvdrip.mp4', 'columbo_s03_e21_subconscient.mp4', 'columbo_s01_e05_plein_cadre_dvdrip.mp4', 'columbo_s01_e08_une_ville_fatale_dvdrip.mp4', 'columbo_s04_e27_reaction_negative.mp4', 'columbo_s01_e04_poids_mort_dvdrip.mp4', 'columbo_s04_e31_etat_d_esprit.mp4', 'columbo_s03_e23_au_dela_de_la_folie.mp4', 'columbo_s02_e10_symphonie_en_noir_dvdrip.mp4', 'columbo_s01_e01_rancon_pour_un_homme_mort_dvdrip.mp4', 'columbo_s04_e29_eaux_troubles.mp4', 'columbo_s02_e15_le_specialiste.mp4', 'columbo_s05_e32_la_femme_oubliee.mp4', 'columbo_s03_e25_en_toute_amitie.mp4', 'columbo_pilote_inculpe_de_meurtre.mp4', 'columbo_s03_e19quand_le_vin_est_tire.mp4', 'columbo_s01_e07_accident_dvdrip.mp4', 'columbo_s01_e06_attente_dvdrip.mp4', 'columbo_s02_e11_dites_le_avec_des_fleurs_dvdrip.mp4', 'columbo_s02_e12_le_grain_de_sable.mp4', 'columbo_s03_e20_candidat_au_crime.mp4', 'columbo_s05_e36_tout_n_est_qu_illusion.mp4', 'columbo_s05_e35_question_d_honneur.mp4', 'columbo_s02_e17_double_choc.mp4', 'columbo_s02_e16_match_dangereux.mp4', 'columbo_s04_e28_entre_le_crepuscule_et_l_aube.mp4', 'columbo_s02_e13_sos_scotland_yard.mp4', 'columbo_s03_e24_le_chant_du_cygne.mp4', 'columbo_s03_e18adorable_mais_dangereuse.mp4', 'columbo_s01_e03_le_livre_temoin_dvdrip.mp4', 'columbo_s05_e37_la_montre_temoin.mp4', 'columbo_s02_e14_requiem_pour_une_star.mp4', 'columbo_s05_e33_immunite_diplomatique.mp4', 'columbo_s05_e34_jeu_d_identite.mp4', 'columbo_s04_e30_playback.mp4', 'columbo_s04_e26_exercice_fatal.mp4', 'columbo_s03_e22_edition_tragique.mp4']
+2025-03-21 23:28:13,000 - config - [DEBUG] - 📋 Chaînes disponibles: ['weber', 'defunes', 'brucelee', 'gendarme', 'fela', 'guerre', 'rambo', 'verite', 'rocky', 'columbos6end', 'oss', 'bronzes', 'western', 'belmondo', 'pagnol', 'vandamme', 'visiteurs']
+2025-03-21 23:28:16,337 - config - [INFO] - [columbos1s5] ✅ 37 vidéos valides trouvées dans ready_to_stream
+2025-03-21 23:28:16,337 - config - [INFO] - [columbos1s5] 🔄 Liste des vidéos modifiée:
+2025-03-21 23:28:16,338 - config - [INFO] -    + Ajoutées: {'columbo_s02_e17_double_choc.mp4', 'columbo_s03_e21_subconscient.mp4', 'columbo_s05_e34_jeu_d_identite.mp4', 'columbo_s01_e08_une_ville_fatale_dvdrip.mp4', 'columbo_s05_e37_la_montre_temoin.mp4', 'columbo_s02_e14_requiem_pour_une_star.mp4', 'columbo_s03_e19quand_le_vin_est_tire.mp4', 'columbo_s05_e33_immunite_diplomatique.mp4', 'columbo_s01_e02_faux_temoin_dvdrip.mp4', 'columbo_s01_e05_plein_cadre_dvdrip.mp4', 'columbo_s04_e28_entre_le_crepuscule_et_l_aube.mp4', 'columbo_s01_e04_poids_mort_dvdrip.mp4', 'columbo_s02_e10_symphonie_en_noir_dvdrip.mp4', 'columbo_s01_e06_attente_dvdrip.mp4', 'columbo_s01_e07_accident_dvdrip.mp4', 'columbo_s03_e25_en_toute_amitie.mp4', 'columbo_s04_e27_reaction_negative.mp4', 'columbo_s02_e12_le_grain_de_sable.mp4', 'columbo_s01_e03_le_livre_temoin_dvdrip.mp4', 'columbo_s04_e29_eaux_troubles.mp4', 'columbo_s03_e24_le_chant_du_cygne.mp4', 'columbo_s03_e18adorable_mais_dangereuse.mp4', 'columbo_s02_e11_dites_le_avec_des_fleurs_dvdrip.mp4', 'columbo_s03_e20_candidat_au_crime.mp4', 'columbo_pilote_inculpe_de_meurtre.mp4', 'columbo_s04_e31_etat_d_esprit.mp4', 'columbo_s04_e30_playback.mp4', 'columbo_s04_e26_exercice_fatal.mp4', 'columbo_s02_e15_le_specialiste.mp4', 'columbo_s03_e23_au_dela_de_la_folie.mp4', 'columbo_s05_e35_question_d_honneur.mp4', 'columbo_s02_e13_sos_scotland_yard.mp4', 'columbo_s05_e36_tout_n_est_qu_illusion.mp4', 'columbo_s02_e16_match_dangereux.mp4', 'columbo_s01_e01_rancon_pour_un_homme_mort_dvdrip.mp4', 'columbo_s05_e32_la_femme_oubliee.mp4', 'columbo_s03_e22_edition_tragique.mp4'}
+2025-03-21 23:28:16,338 - config - [INFO] - [columbos1s5] 🛠️ Création de _playlist.txt avec 37 fichiers uniques
+2025-03-21 23:28:16,338 - config - [DEBUG] - [columbos1s5] 📝 Écriture de _playlist.txt
+2025-03-21 23:28:16,339 - config - [INFO] - [columbos1s5] ✅ Statut 'prêt' mis à jour dans le manager
+2025-03-21 23:28:16,341 - config - [DEBUG] - [columbos1s5] ℹ️ Création de playlist ignorée (dernière: il y a 0.0s)
+2025-03-21 23:28:16,341 - config - [INFO] - [columbos1s5] 🕒 Calcul des durées pour 37 fichiers...
+2025-03-21 23:28:16,356 - config - [DEBUG] - [columbos1s5] ✅ Ajout de columbo_s01_e05_plein_cadre_dvdrip.mp4
+2025-03-21 23:28:16,356 - config - [DEBUG] - 🔄 Modification détectée: /mnt/videos/streaming_awesomeness/content/columbos1s5/_playlist.txt
+2025-03-21 23:28:16,357 - config - [DEBUG] - [columbos1s5] ✅ Ajout de columbo_s05_e34_jeu_d_identite.mp4
+2025-03-21 23:28:16,357 - config - [DEBUG] - [columbos1s5] ✅ Ajout de columbo_s03_e25_en_toute_amitie.mp4
+2025-03-21 23:28:16,358 - config - [DEBUG] - [columbos1s5] ✅ Ajout de columbo_s01_e02_faux_temoin_dvdrip.mp4
+2025-03-21 23:28:16,358 - config - [DEBUG] - [columbos1s5] ✅ Ajout de columbo_s02_e11_dites_le_avec_des_fleurs_dvdrip.mp4
+2025-03-21 23:28:16,359 - config - [DEBUG] - [columbos1s5] ✅ Ajout de columbo_s03_e19quand_le_vin_est_tire.mp4
+2025-03-21 23:28:16,359 - config - [DEBUG] - [columbos1s5] ✅ Ajout de columbo_s04_e28_entre_le_crepuscule_et_l_aube.mp4
+2025-03-21 23:28:16,359 - config - [DEBUG] - [columbos1s5] ✅ Ajout de columbo_s01_e04_poids_mort_dvdrip.mp4
+2025-03-21 23:28:16,360 - config - [DEBUG] - [columbos1s5] ✅ Ajout de columbo_s02_e16_match_dangereux.mp4
+2025-03-21 23:28:16,360 - config - [DEBUG] - [columbos1s5] ✅ Ajout de columbo_s05_e36_tout_n_est_qu_illusion.mp4
+2025-03-21 23:28:16,360 - config - [DEBUG] - [columbos1s5] ✅ Ajout de columbo_s03_e20_candidat_au_crime.mp4
+2025-03-21 23:28:16,361 - config - [DEBUG] - [columbos1s5] ✅ Ajout de columbo_s01_e08_une_ville_fatale_dvdrip.mp4
+2025-03-21 23:28:16,361 - config - [DEBUG] - [columbos1s5] ✅ Ajout de columbo_s03_e22_edition_tragique.mp4
+2025-03-21 23:28:16,361 - config - [DEBUG] - [columbos1s5] ✅ Ajout de columbo_s02_e14_requiem_pour_une_star.mp4
+2025-03-21 23:28:16,362 - config - [DEBUG] - [columbos1s5] ✅ Ajout de columbo_s05_e33_immunite_diplomatique.mp4
+2025-03-21 23:28:16,363 - config - [DEBUG] - [columbos1s5] ✅ Ajout de columbo_s04_e29_eaux_troubles.mp4
+2025-03-21 23:28:16,364 - config - [DEBUG] - [columbos1s5] ✅ Ajout de columbo_s03_e21_subconscient.mp4
+2025-03-21 23:28:16,365 - config - [DEBUG] - [columbos1s5] ✅ Ajout de columbo_s02_e15_le_specialiste.mp4
+2025-03-21 23:28:16,365 - config - [DEBUG] - [columbos1s5] ✅ Ajout de columbo_s03_e23_au_dela_de_la_folie.mp4
+2025-03-21 23:28:16,367 - config - [DEBUG] - [columbos1s5] ✅ Ajout de columbo_s05_e35_question_d_honneur.mp4
+2025-03-21 23:28:16,368 - config - [DEBUG] - [columbos1s5] ✅ Ajout de columbo_s02_e17_double_choc.mp4
+2025-03-21 23:28:16,368 - config - [DEBUG] - [columbos1s5] ✅ Ajout de columbo_s01_e06_attente_dvdrip.mp4
+2025-03-21 23:28:16,371 - config - [DEBUG] - [columbos1s5] ✅ Ajout de columbo_s01_e01_rancon_pour_un_homme_mort_dvdrip.mp4
+2025-03-21 23:28:16,371 - config - [DEBUG] - [columbos1s5] ✅ Ajout de columbo_s02_e10_symphonie_en_noir_dvdrip.mp4
+2025-03-21 23:28:16,373 - config - [DEBUG] - [columbos1s5] ✅ Ajout de columbo_s01_e03_le_livre_temoin_dvdrip.mp4
+2025-03-21 23:28:16,374 - config - [DEBUG] - [columbos1s5] ✅ Ajout de columbo_s04_e27_reaction_negative.mp4
+2025-03-21 23:28:16,374 - config - [DEBUG] - [columbos1s5] ✅ Ajout de columbo_s01_e07_accident_dvdrip.mp4
+2025-03-21 23:28:16,376 - config - [DEBUG] - [columbos1s5] ✅ Ajout de columbo_s05_e32_la_femme_oubliee.mp4
+2025-03-21 23:28:16,376 - config - [DEBUG] - [columbos1s5] ✅ Ajout de columbo_s02_e13_sos_scotland_yard.mp4
+2025-03-21 23:28:16,376 - config - [DEBUG] - [columbos1s5] ✅ Ajout de columbo_pilote_inculpe_de_meurtre.mp4
+2025-03-21 23:28:16,378 - config - [DEBUG] - [columbos1s5] ✅ Ajout de columbo_s04_e31_etat_d_esprit.mp4
+2025-03-21 23:28:16,379 - config - [DEBUG] - [columbos1s5] ✅ Ajout de columbo_s05_e37_la_montre_temoin.mp4
+2025-03-21 23:28:16,380 - config - [DEBUG] - [columbos1s5] ✅ Ajout de columbo_s03_e18adorable_mais_dangereuse.mp4
+2025-03-21 23:28:16,380 - config - [DEBUG] - [columbos1s5] ✅ Ajout de columbo_s03_e24_le_chant_du_cygne.mp4
+2025-03-21 23:28:16,380 - config - [DEBUG] - [columbos1s5] ✅ Ajout de columbo_s02_e12_le_grain_de_sable.mp4
+2025-03-21 23:28:16,380 - config - [DEBUG] - [columbos1s5] ✅ Ajout de columbo_s04_e26_exercice_fatal.mp4
+2025-03-21 23:28:16,380 - config - [DEBUG] - [columbos1s5] ✅ Ajout de columbo_s04_e30_playback.mp4
+2025-03-21 23:28:16,381 - config - [DEBUG] - 🔄 Modification détectée: /mnt/videos/streaming_awesomeness/content/columbos1s5/_playlist.txt
+2025-03-21 23:28:16,404 - config - [INFO] - [columbos1s5] 🎥 Playlist créée avec 37 fichiers uniques en mode aléatoire
+2025-03-21 23:28:20,173 - config - [INFO] - [columbos6end] - nombre de process : 1 - temps depuis dernier watcher : 46.9s
+CHAÎNES ACTIVES SANS VIEWERS: 9 (columbos6end, defunes, gendarme, guerre, rambo, et 4 autres)
+2025-03-21 23:28:20,747 - config - [INFO] - [columbos1s5] ✅ Durée totale: 176828.24s
+2025-03-21 23:28:20,748 - config - [INFO] - [columbos1s5] ✅ Durée totale calculée: 176828.24s (37 vidéos)
+2025-03-21 23:28:20,748 - config - [DEBUG] - [columbos1s5] ✅ Initialisation complète. Chaîne prête: True, Offset: 0.00s
+2025-03-21 23:28:20,749 - config - [INFO] - [columbos1s5] 🔍 Scan de mise à jour des vidéos en cours...
+2025-03-21 23:28:20,749 - config - [INFO] - ✅ Chaîne columbos1s5 prête pour le streaming
+2025-03-21 23:28:24,892 - config - [DEBUG] - [columbos1s5] ✅ VideoProcessor correctement initialisé
+2025-03-21 23:28:24,894 - config - [INFO] - [columbos1s5] 🔍 37 fichiers MP4 trouvés dans ready_to_stream: ['columbo_s01_e02_faux_temoin_dvdrip.mp4', 'columbo_s03_e21_subconscient.mp4', 'columbo_s01_e05_plein_cadre_dvdrip.mp4', 'columbo_s01_e08_une_ville_fatale_dvdrip.mp4', 'columbo_s04_e27_reaction_negative.mp4', 'columbo_s01_e04_poids_mort_dvdrip.mp4', 'columbo_s04_e31_etat_d_esprit.mp4', 'columbo_s03_e23_au_dela_de_la_folie.mp4', 'columbo_s02_e10_symphonie_en_noir_dvdrip.mp4', 'columbo_s01_e01_rancon_pour_un_homme_mort_dvdrip.mp4', 'columbo_s04_e29_eaux_troubles.mp4', 'columbo_s02_e15_le_specialiste.mp4', 'columbo_s05_e32_la_femme_oubliee.mp4', 'columbo_s03_e25_en_toute_amitie.mp4', 'columbo_pilote_inculpe_de_meurtre.mp4', 'columbo_s03_e19quand_le_vin_est_tire.mp4', 'columbo_s01_e07_accident_dvdrip.mp4', 'columbo_s01_e06_attente_dvdrip.mp4', 'columbo_s02_e11_dites_le_avec_des_fleurs_dvdrip.mp4', 'columbo_s02_e12_le_grain_de_sable.mp4', 'columbo_s03_e20_candidat_au_crime.mp4', 'columbo_s05_e36_tout_n_est_qu_illusion.mp4', 'columbo_s05_e35_question_d_honneur.mp4', 'columbo_s02_e17_double_choc.mp4', 'columbo_s02_e16_match_dangereux.mp4', 'columbo_s04_e28_entre_le_crepuscule_et_l_aube.mp4', 'columbo_s02_e13_sos_scotland_yard.mp4', 'columbo_s03_e24_le_chant_du_cygne.mp4', 'columbo_s03_e18adorable_mais_dangereuse.mp4', 'columbo_s01_e03_le_livre_temoin_dvdrip.mp4', 'columbo_s05_e37_la_montre_temoin.mp4', 'columbo_s02_e14_requiem_pour_une_star.mp4', 'columbo_s05_e33_immunite_diplomatique.mp4', 'columbo_s05_e34_jeu_d_identite.mp4', 'columbo_s04_e30_playback.mp4', 'columbo_s04_e26_exercice_fatal.mp4', 'columbo_s03_e22_edition_tragique.mp4']
+2025-03-21 23:28:25,026 - config - [DEBUG] - 📋 Chaînes disponibles: ['weber', 'defunes', 'brucelee', 'gendarme', 'fela', 'guerre', 'rambo', 'verite', 'rocky', 'columbos6end', 'oss', 'bronzes', 'western', 'belmondo', 'pagnol', 'vandamme', 'visiteurs', 'ufc', 'columbos1s5']
+2025-03-21 23:28:29,236 - config - [INFO] - [columbos1s5] ✅ 37 vidéos valides trouvées dans ready_to_stream
+2025-03-21 23:28:29,236 - config - [INFO] - [columbos1s5] 🔄 Conservation de la durée calculée précédemment: 176828.24s
+2025-03-21 23:28:29,237 - config - [DEBUG] - [columbos1s5] ℹ️ Création de playlist ignorée (dernière: il y a 12.9s)
+2025-03-21 23:28:29,237 - config - [INFO] - [columbos1s5] ✅ Scan de mise à jour terminé. Chaîne prête: True

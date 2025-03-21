@@ -470,6 +470,7 @@ class IPTVManager:
             )
 
     def _watchers_loop(self):
+        logger.info("watchers loop")
         """Surveille l'activité des watchers et arrête les streams inutilisés"""
         last_log_time = 0
         last_health_check = 0
