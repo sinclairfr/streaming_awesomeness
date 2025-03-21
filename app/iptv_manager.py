@@ -150,13 +150,17 @@ class IPTVManager:
         self.running = True
 
         # statistiques
+        # Dans la méthode __init__ de IPTVManager
         self.stats_collector = StatsCollector()
+        # Vérifier si le StatsCollector est correctement initialisé
+        if not hasattr(self.stats_collector, "stats") or not self.stats_collector.stats:
+            logger.warning("⚠️ Réinitialisation du StatsCollector qui était invalide")
+            self.stats_collector = StatsCollector()
 
-        # Thread de rapport de statistiques
-        self.stats_thread = threading.Thread(
-            target=self._stats_reporting_loop, daemon=True
-        )
-        self.stats_thread.start()
+        # Forcer une sauvegarde initiale pour vérifier que tout fonctionne
+        self.stats_collector.save_stats()
+        self.stats_collector.save_user_stats()
+        logger.info("✅ StatsCollector initialisé et vérifié")
 
     def _check_client_monitor(self):
         """Vérifie périodiquement l'état du client_monitor"""

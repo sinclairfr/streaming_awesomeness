@@ -192,59 +192,49 @@ class FFmpegProcessManager:
             pattern = f"/hls/{self.channel_name}/"
             processes_killed = 0
 
-            # Utilise directement ps et grep pour trouver les PID, puis kill -9
-            try:
-                cmd = f"ps aux | grep ffmpeg | grep '{pattern}' | grep -v grep | awk '{{print $2}}'"
-                pids = (
-                    subprocess.check_output(cmd, shell=True)
-                    .decode()
-                    .strip()
-                    .split("\n")
-                )
-
-                for pid in pids:
-                    if pid.strip():
-                        try:
-                            # Kill -9 direct, sans états d'âme
-                            kill_cmd = f"kill -9 {pid}"
-                            subprocess.run(kill_cmd, shell=True)
-                            logger.info(
-                                f"[{self.channel_name}] 🔪 Processus {pid} tué avec kill -9"
-                            )
-                            processes_killed += 1
-
-                            # Petit délai entre les kills pour éviter les cascades
-                            if processes_killed > 0:
-                                time.sleep(0.5)
-                        except Exception as e:
-                            logger.error(
-                                f"[{self.channel_name}] Erreur kill -9 {pid}: {e}"
-                            )
-
-                # Si on a tué des processus, attendre un peu avant de continuer
-                if processes_killed > 0:
-                    time.sleep(1)
-
-            except Exception as e:
-                logger.error(f"[{self.channel_name}] Erreur recherche processus: {e}")
-
-            # Approche alternative avec psutil comme backup
+            # IMPROVED: Use a more robust approach to find and kill processes
             for proc in psutil.process_iter(["pid", "name", "cmdline"]):
                 try:
-                    if "ffmpeg" in proc.info["name"]:
-                        cmdline = " ".join(proc.info["cmdline"] or [])
-                        if pattern in cmdline:
-                            proc.kill()  # SIGKILL directement
-                            logger.info(
-                                f"[{self.channel_name}] 🔪 Processus {proc.info['pid']} tué via psutil"
-                            )
-                            processes_killed += 1
-                            time.sleep(0.5)  # Petit délai
-                except Exception:
-                    pass
+                    # Is it ffmpeg?
+                    if "ffmpeg" not in proc.info["name"].lower():
+                        continue
+
+                    # Is it for our channel?
+                    cmdline = " ".join(proc.info["cmdline"] or [])
+                    if pattern not in cmdline:
+                        continue
+
+                    # Skip our own process if we have one
+                    if self.process and proc.info["pid"] == self.process.pid:
+                        continue
+
+                    # Kill the orphaned process
+                    logger.info(
+                        f"[{self.channel_name}] 🔪 Killing orphaned process {proc.info['pid']}"
+                    )
+                    proc.kill()
+                    processes_killed += 1
+
+                    # Small delay between kills
+                    if processes_killed > 0:
+                        time.sleep(0.5)
+
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+                except Exception as e:
+                    logger.error(f"[{self.channel_name}] Error killing process: {e}")
+
+            if processes_killed > 0:
+                logger.info(
+                    f"[{self.channel_name}] 🧹 Cleaned up {processes_killed} orphaned FFmpeg processes"
+                )
+                # Wait for processes to fully terminate
+                time.sleep(1)
 
         except Exception as e:
-            logger.error(f"[{self.channel_name}] ❌ Erreur nettoyage global: {e}")
+            logger.error(
+                f"[{self.channel_name}] ❌ Error cleaning orphaned processes: {e}"
+            )
 
     def _start_monitoring(self, hls_dir):
         """Démarre le thread de surveillance du processus FFmpeg"""
