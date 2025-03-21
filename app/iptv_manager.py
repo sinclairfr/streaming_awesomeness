@@ -64,6 +64,7 @@ class IPTVManager:
         self.use_gpu = use_gpu
         self.channels = {}
         self.channel_ready_status = {}  # Pour suivre l'état de préparation des chaînes
+        self.log_path = NGINX_ACCESS_LOG  # Ajout du chemin du log
 
         # Queue pour les chaînes à initialiser en parallèle
         self.channel_init_queue = Queue()
@@ -178,7 +179,7 @@ class IPTVManager:
                 ):
                     logger.critical("🚨 client_monitor n'est plus actif!")
                     # Tentative de redémarrage
-                    logger.info("� Tentative de redémarrage du client_monitor...")
+                    logger.info("🔄 Tentative de redémarrage du client_monitor...")
                     self.client_monitor = ClientMonitor(
                         NGINX_ACCESS_LOG, self.update_watchers, self
                     )
@@ -588,6 +589,7 @@ class IPTVManager:
 
     # Et modifions la méthode update_watchers pour appeler notre nouvelle fonction:
     def update_watchers(self, channel_name: str, count: int, request_path: str):
+        logger.info(f"[IPTV_MANAGER] ⏱️ DÉBUT update_watchers - Channel: {channel_name}, Count: {count}, Path: {request_path}")
         """Met à jour les watchers en fonction des requêtes m3u8 et ts"""
         try:
             # Si c'est la playlist principale, pas besoin de traiter
@@ -1016,7 +1018,42 @@ class IPTVManager:
 
             logger.error(traceback.format_exc())
 
+    def _parse_access_log(self, line: str) -> tuple:
+        """Parse une ligne de log nginx pour extraire les informations pertinentes"""
+        try:
+            # Format typique d'une ligne de log nginx :
+            # IP - - [DATE] "METHOD /path HTTP/1.1" STATUS SIZE "REFERER" "USER_AGENT"
+            parts = line.split()
+            if len(parts) < 7:
+                return None, None, None, False, None
+
+            ip = parts[0]
+            request = parts[6]  # La requête complète entre guillemets
+            path = request.split()[1] if len(request.split()) > 1 else ""
+
+            # Vérifier si c'est une requête HLS
+            if not ("/hls/" in path and (".m3u8" in path or ".ts" in path)):
+                return None, None, None, False, None
+
+            # Extraire le nom de la chaîne du chemin
+            # Format attendu: /hls/CHANNEL_NAME/playlist.m3u8 ou /hls/CHANNEL_NAME/segment.ts
+            channel = None
+            if "/hls/" in path:
+                parts = path.split("/")
+                if len(parts) >= 3:
+                    channel = parts[2]
+
+            # Déterminer le type de requête
+            request_type = "m3u8" if ".m3u8" in path else "ts" if ".ts" in path else None
+
+            return ip, channel, request_type, True, path
+
+        except Exception as e:
+            logger.error(f"❌ Erreur parsing log: {e}")
+            return None, None, None, False, None
+
     def process_new_log_lines(self):
+        logger.info(f"[IPTV_MANAGER] 🔄 Début process_new_log_lines")
         """Traite les nouvelles lignes ajoutées au fichier de log nginx"""
         try:
             # Vérification de l'existence du fichier
@@ -1086,46 +1123,61 @@ class IPTVManager:
             return False
 
     def _monitor_nginx_logs(self):
-        """Surveillance des logs nginx en temps réel avec inotify"""
+        """Surveillance des logs nginx en temps réel avec watchdog"""
         try:
-            import pyinotify  # Il faudra ajouter cette dépendance
+            from watchdog.observers import Observer
+            from watchdog.events import FileSystemEventHandler
 
-            # Chemin du log
-            log_path = NGINX_ACCESS_LOG
-
-            # Configuration de l'événement
-            class LogHandler(pyinotify.ProcessEvent):
+            class LogHandler(FileSystemEventHandler):
                 def __init__(self, manager):
                     self.manager = manager
-                    self.client_monitor = manager.client_monitor
+                    self.last_position = 0
+                    self._init_position()
 
-                def process_IN_MODIFY(self, event):
-                    # Le fichier a été modifié, traiter les nouvelles lignes
-                    self.client_monitor.process_new_log_lines()
+                def _init_position(self):
+                    """Initialise la position de lecture"""
+                    if os.path.exists(self.manager.log_path):
+                        with open(self.manager.log_path, "r") as f:
+                            f.seek(0, 2)  # Positionnement à la fin
+                            self.last_position = f.tell()
 
-            # Initialiser le watcher
-            wm = pyinotify.WatchManager()
-            handler = LogHandler(self)
-            notifier = pyinotify.Notifier(wm, handler)
+                def on_modified(self, event):
+                    if event.src_path == self.manager.log_path:
+                        self.manager.process_new_log_lines()
 
-            # Ajouter le fichier à surveiller
-            wm.add_watch(log_path, pyinotify.IN_MODIFY)
+            # Initialiser l'observer
+            observer = Observer()
+            observer.schedule(LogHandler(self), os.path.dirname(self.log_path), recursive=False)
+            observer.start()
+            logger.info(f"🔍 Surveillance des logs nginx démarrée: {self.log_path}")
 
-            logger.info(f"🔍 Surveillance en temps réel des logs nginx: {log_path}")
+            # Boucle de surveillance
+            while True:
+                time.sleep(1)
 
-            # Boucle de surveillance (bloquante)
-            notifier.loop()
-
-        except ImportError:
-            logger.error(
-                "❌ Module pyinotify manquant, fallback au mode de surveillance legacy"
-            )
-            # Fallback à l'ancien système
-            self._legacy_watchers_loop()
         except Exception as e:
             logger.error(f"❌ Erreur surveillance logs: {e}")
-            # Fallback à l'ancien système
+            # Fallback au mode legacy
             self._legacy_watchers_loop()
+
+    def _legacy_watchers_loop(self):
+        """Mode de surveillance legacy quand watchdog n'est pas disponible"""
+        logger.info("🔄 Démarrage du mode de surveillance legacy des logs")
+        last_position = 0
+        
+        while True:
+            try:
+                if os.path.exists(self.log_path):
+                    with open(self.log_path, "r") as f:
+                        f.seek(last_position)
+                        new_lines = f.readlines()
+                        if new_lines:
+                            self.process_new_log_lines()
+                            last_position = f.tell()
+                time.sleep(1)  # Vérification toutes les secondes
+            except Exception as e:
+                logger.error(f"❌ Erreur surveillance legacy: {e}")
+                time.sleep(5)  # Attente plus longue en cas d'erreur
 
     def run(self):
         try:
@@ -1133,6 +1185,11 @@ class IPTVManager:
             if not self.watchers_thread.is_alive():
                 self.watchers_thread.start()
                 logger.info("🔄 Boucle de surveillance des watchers démarrée")
+
+            # Démarrer la surveillance des logs nginx
+            nginx_monitor_thread = threading.Thread(target=self._monitor_nginx_logs, daemon=True)
+            nginx_monitor_thread.start()
+            logger.info("🔍 Surveillance des logs nginx démarrée")
 
             logger.debug("📥 Scan initial des chaînes...")
             self.scan_channels(initial=True)  # Marquer comme scan initial
