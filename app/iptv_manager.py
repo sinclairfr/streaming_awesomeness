@@ -539,6 +539,54 @@ class IPTVManager:
                 logger.error(f"❌ Erreur watchers_loop: {e}")
                 time.sleep(10)
 
+
+    # Puis dans la classe IPTVManager, ajoutons une nouvelle méthode:
+    def force_watch_time_update(self, channel_name=None):
+        """Force l'ajout de temps de visionnage pour TOUTES les chaînes avec des watchers"""
+        try:
+            logger.info("🔥 FORCE WATCH TIME UPDATE 🔥")
+            
+            # Si StatsCollector n'existe pas, rien à faire
+            if not hasattr(self, "stats_collector") or not self.stats_collector:
+                logger.error("❌ PAS DE STATS_COLLECTOR DISPONIBLE!")
+                return False
+                
+            # Si un channel spécifique est demandé
+            if channel_name:
+                if channel_name in self.channels:
+                    count = getattr(self.channels[channel_name], "watchers_count", 0)
+                    if count > 0:
+                        # FORCE 10 secondes de visionnage pour chaque watcher
+                        logger.info(f"🔥 FORCE {10.0 * count} SECONDES POUR {channel_name} (x{count} watchers)")
+                        self.stats_collector.add_watch_time(channel_name, "192.168.0.1", 10.0 * count)
+                        self.stats_collector.save_stats()
+                        self.stats_collector.save_user_stats()
+                        return True
+                return False
+                
+            # Pour toutes les chaînes avec des watchers
+            updates = 0
+            for name, channel in self.channels.items():
+                count = getattr(channel, "watchers_count", 0)
+                if count > 0:
+                    # FORCE 10 secondes de visionnage pour chaque watcher
+                    logger.info(f"🔥 FORCE {10.0 * count} SECONDES POUR {name} (x{count} watchers)")
+                    self.stats_collector.add_watch_time(name, "192.168.0.1", 10.0 * count)
+                    updates += 1
+                    
+            if updates > 0:
+                self.stats_collector.save_stats()
+                self.stats_collector.save_user_stats()
+                return True
+                
+            return False
+        except Exception as e:
+            logger.error(f"❌ Erreur force_watch_time_update: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return False
+
+    # Et modifions la méthode update_watchers pour appeler notre nouvelle fonction:
     def update_watchers(self, channel_name: str, count: int, request_path: str):
         """Met à jour les watchers en fonction des requêtes m3u8 et ts"""
         try:
@@ -564,17 +612,12 @@ class IPTVManager:
             # Pour les requêtes de segments, mettre à jour last_segment_time
             if ".ts" in request_path:
                 channel.last_segment_time = time.time()
-
-                # Si on a un StatsCollector, mettre à jour stats de segment
-                if hasattr(self, "stats_collector") and self.stats_collector:
-                    # Extraction du segment ID
-                    segment_match = re.search(r"segment_(\d+)\.ts", request_path)
-                    if segment_match:
-                        segment_id = segment_match.group(1)
-                        # On ne connaît pas la taille, donc on la fixe à une valeur par défaut
-                        self.stats_collector.update_segment_stats(
-                            channel_name, segment_id, 100000
-                        )
+                
+                # APPEL DIRECT ET EXPLICITE POUR CHAQUE SEGMENT TS
+                # Ajouter 5 secondes de temps de visionnage
+                if count > 0:
+                    logger.info(f"[{channel_name}] 🔥 APPEL EXPLICITE add_watch_time pour SEGMENT TS")
+                    self.force_watch_time_update(channel_name)
 
             old_count = getattr(channel, "watchers_count", 0)
 
@@ -608,8 +651,33 @@ class IPTVManager:
             logger.error(f"❌ Erreur update_watchers: {e}")
             import traceback
 
-            logger.error(f"Stack trace: {traceback.format_exc()}")
+            logger.error(f"Stack trace: {traceback.format_exc()}")    
+    def _get_active_watcher_ips(self, channel_name):
+        """Récupère les IPs des watchers actifs pour une chaîne"""
+        active_ips = []
+        
+        # Si on a accès au client_monitor et ses watchers
+        if hasattr(self, "client_monitor") and hasattr(self.client_monitor, "watchers"):
+            # Parcourir tous les watchers du client_monitor
+            for (ch, ip), data in self.client_monitor.watchers.items():
+                if ch == channel_name:
+                    active_ips.append(ip)
+        
+        return active_ips 
 
+        
+    def _get_active_watcher_ips(self, channel_name):
+        """Récupère les IPs des watchers actifs pour une chaîne"""
+        active_ips = []
+        
+        # Si on a accès au client_monitor et ses watchers
+        if hasattr(self, "client_monitor") and hasattr(self.client_monitor, "watchers"):
+            # Parcourir tous les watchers du client_monitor
+            for (ch, ip), data in self.client_monitor.watchers.items():
+                if ch == channel_name:
+                    active_ips.append(ip)
+        
+        return active_ips
     def _log_channels_summary(self):
         """Génère et affiche un récapitulatif de l'état des chaînes"""
         try:
