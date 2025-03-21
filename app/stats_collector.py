@@ -53,9 +53,36 @@ class StatsCollector:
             f"📊 StatsCollector initialisé (sauvegarde dans {self.stats_file}, user stats dans {self.user_stats_file})"
         )
 
-    def add_watch_time(self, channel, ip, duration):
-        """Ajoute du temps de visionnage pour un watcher"""
+     def add_watch_time(self, channel, ip, duration):
+        """Ajoute du temps de visionnage pour un watcher avec limitation de fréquence"""
         try:
+            current_time = time.time()
+            
+            # Vérifie la dernière mise à jour pour cette paire channel/ip
+            update_key = f"{channel}:{ip}"
+            if not hasattr(self, "_last_update_times"):
+                self._last_update_times = {}
+                
+            # Limite les mises à jour à une fois par seconde maximum
+            if update_key in self._last_update_times:
+                last_update = self._last_update_times[update_key]
+                elapsed = current_time - last_update
+                
+                # Si moins d'une seconde depuis la dernière mise à jour, ajuster la durée
+                if elapsed < 1.0:
+                    # On ignore cette mise à jour trop rapprochée
+                    logger.debug(f"[STATS] Mise à jour trop rapide pour {channel}:{ip} (interval: {elapsed:.2f}s), ignorée")
+                    return
+                
+                # Ajuster la durée en fonction du temps réel écoulé
+                if elapsed < duration and duration > 2.0:
+                    adjusted_duration = max(elapsed, 1.0)  # Au moins 1 seconde
+                    logger.debug(f"[STATS] Durée ajustée pour {channel}:{ip}: {duration:.1f}s → {adjusted_duration:.1f}s")
+                    duration = adjusted_duration
+            
+            # Enregistrer le moment de cette mise à jour
+            self._last_update_times[update_key] = current_time
+            
             # Initialisation des stats si nécessaire
             if channel not in self.stats:
                 self.stats[channel] = {
@@ -98,7 +125,6 @@ class StatsCollector:
             self._update_daily_stats(channel, ip, duration)
 
             # Log concis des mises à jour (uniquement pour les nouvelles IPs ou tous les 5 minutes)
-            current_time = time.time()
             if not hasattr(self, "last_log_time"):
                 self.last_log_time = current_time
                 logger.info(f"[STATS] 📊 Stats initialisées pour {channel}: {len(channel_stats['unique_viewers'])} spectateurs")
@@ -106,10 +132,8 @@ class StatsCollector:
                 logger.info(f"[STATS] 📊 Stats {channel}: {len(channel_stats['unique_viewers'])} spectateurs, {channel_stats['total_watch_time']:.1f}s total")
                 self.last_log_time = current_time
 
-            # Sauvegarde périodique (toutes les 5 minutes)
-            if not hasattr(self, "last_save_time"):
-                self.last_save_time = current_time
-            elif current_time - self.last_save_time > 300:  # 5 minutes
+            # Sauvegarde moins fréquente
+            if not hasattr(self, "last_save_time") or current_time - self.last_save_time > 60:  # 1 minute (au lieu de 5 secondes)
                 self.save_stats()
                 self.save_user_stats()
                 self.last_save_time = current_time
@@ -118,7 +142,6 @@ class StatsCollector:
             logger.error(f"❌ Erreur mise à jour stats: {e}")
             import traceback
             logger.error(traceback.format_exc())
-
     def _save_loop(self):
         """Sauvegarde périodique des statistiques"""
         while not self.stop_save_thread.is_set():

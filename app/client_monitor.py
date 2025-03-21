@@ -288,15 +288,32 @@ class ClientMonitor(threading.Thread):
                     timer = WatcherTimer(channel, ip, self.stats_collector)
                     self.watchers[ip]["timer"] = timer
                     self.watchers[ip]["current_channel"] = channel
+                else:
+                    # Même chaîne, vérifier le temps écoulé depuis la dernière requête
+                    last_seen = self.watchers[ip].get("last_seen", 0)
+                    if current_time - last_seen < 1.0 and request_type == "playlist":
+                        # Ignorer les mises à jour trop rapprochées pour éviter le spam de stats
+                        logger.debug(f"Ignoré mise à jour rapprochée pour {ip} sur {channel} (interval: {current_time - last_seen:.2f}s)")
+                        return
 
                 # Mise à jour des infos
                 self.watchers[ip]["last_seen"] = current_time
                 self.watchers[ip]["type"] = request_type
                 self.watchers[ip]["user_agent"] = user_agent
 
-            # Traiter la requête
+            # Traiter la requête - ajouter du temps de visionnage uniquement pour les segments
+            # ou pour les playlists avec un intervalle raisonnable
             if request_type == "segment":
                 self._handle_segment_request(channel, ip, line, user_agent)
+            elif request_type == "playlist":
+                # Pour les playlists, on n'ajoute du temps que si ça fait au moins 3 secondes
+                # depuis la dernière requête, pour éviter les doublons dus aux rafales de requêtes
+                last_seen = self.watchers[ip].get("last_seen", 0)
+                if current_time - last_seen >= 3.0 and self.stats_collector:
+                    # Ajouter un temps plus raisonnable basé sur l'intervalle réel
+                    elapsed = min(current_time - last_seen, 5.0)
+                    self.stats_collector.add_watch_time(channel, ip, elapsed)
+                    logger.debug(f"[{channel}] Ajout de {elapsed:.1f}s pour {ip} (intervalle: {current_time - last_seen:.1f}s)")
 
             # Mettre à jour le compteur de watchers pour cette chaîne
             active_ips = set()
@@ -313,8 +330,8 @@ class ClientMonitor(threading.Thread):
             # Nombre de segments pour cette chaîne
             segment_count = len(self.segments_by_channel.get(channel, {}))
             
-            # Afficher les watchers actifs
-            if active_ips:
+            # Afficher les watchers actifs (moins fréquemment)
+            if active_ips and (not hasattr(self, "last_watchers_log") or current_time - self.last_watchers_log > 10.0):
                 # Trier par temps de visionnage
                 sorted_ips = sorted(
                     [(ip, ip_times.get(ip, 0)) for ip in active_ips],
@@ -326,16 +343,18 @@ class ClientMonitor(threading.Thread):
                 top_watchers = [f"{ip} ({time:.1f}s)" for ip, time in sorted_ips[:5]]
                 logger.info(f"[{channel}] 👁️ Top watchers: {', '.join(top_watchers)}")
                 
-            # Log total
-            logger.info(
-                f"[{channel}] 📊 {len(active_ips)} watchers actifs, {segment_count} segments"
-            )
+                # Log total
+                logger.info(
+                    f"[{channel}] 📊 {len(active_ips)} watchers actifs, {segment_count} segments"
+                )
+                
+                self.last_watchers_log = current_time
 
             # Appeler le callback du manager avec le nombre de watchers actifs
             if hasattr(self, 'update_watchers') and callable(self.update_watchers):
                 self.update_watchers(channel, len(active_ips), "/hls/")
             else:
-                logger.error(f"[{channel}] ❌ Callback update_watchers non disponible")
+                logger.debug(f"[{channel}] ❌ Callback update_watchers non disponible")
 
     def _check_log_file_exists(self, retry_count, max_retries):
         """Vérifie si le fichier de log existe et est accessible"""
