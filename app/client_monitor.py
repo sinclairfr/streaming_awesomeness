@@ -595,28 +595,22 @@ class ClientMonitor(threading.Thread):
             # Compter les watchers actifs pour cette chaîne
             active_ips = set()
             for ip, data in self.watchers.items():
-                if data.get("current_channel") == channel and isinstance(data, dict) and "timer" in data and data["timer"].is_running():
+                if data.get("current_channel") == channel and "timer" in data and data["timer"].is_running():
                     active_ips.add(ip)
-                    logger.debug(f"👁️ Watcher actif trouvé pour {channel}: {ip} (dernière chaîne: {data.get('last_channel')}, chaîne actuelle: {data.get('current_channel')})")
-
+                    
             # Nombre de watchers
             watcher_count = len(active_ips)
-
-            # Log des watchers actifs avec plus de détails
-            ip_details = []
-            for ip in active_ips:
-                data = self.watchers[ip]
-                timer = data.get("timer")
-                if timer:
-                    ip_details.append(f"{ip} (actif depuis {timer.get_total_time():.1f}s, dernière chaîne: {data.get('last_channel')}, chaîne actuelle: {data.get('current_channel')})")
             
-            ip_str = ", ".join(ip_details) if ip_details else "aucun"
+            logger.info(f"[{channel}] 👁️ Watchers: {watcher_count} actifs - IPs: {', '.join(active_ips)}")
             
-            logger.info(f"[{channel}] 👁️ Watchers: {watcher_count} actifs - IPs: {ip_str}")
-
             # Mise à jour dans le manager
-            self.update_watchers(channel, watcher_count, "/hls/")
-
+            if hasattr(self, 'update_watchers') and callable(self.update_watchers):
+                self.update_watchers(channel, watcher_count, "/hls/")
+            else:
+                logger.error(f"[{channel}] ❌ Callback update_watchers non disponible")
+            else:
+                logger.error(f"[{channel}] ❌ Callback update_watchers non disponible")
+            
     def _prepare_log_file(self):
         """Vérifie que le fichier de log existe et est accessible"""
         if not os.path.exists(self.log_path):

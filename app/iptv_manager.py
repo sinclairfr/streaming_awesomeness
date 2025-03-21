@@ -584,73 +584,51 @@ class IPTVManager:
             logger.error(traceback.format_exc())
             return False
 
-    def update_watchers(self, channel_name: str, count: int, request_path: str):
-        logger.info(f"[IPTV_MANAGER] ⏱️ DÉBUT update_watchers - Channel: {channel_name}, Count: {count}, Path: {request_path}")
-        """Met à jour les watchers en fonction des requêtes m3u8 et ts"""
-        try:
-            # Si c'est la playlist principale, pas besoin de traiter
-            if channel_name == "master_playlist":
-                return
+    def _update_watcher(self, ip, channel, request_type, user_agent, line):
+        logger.info(f"🔄 Mise à jour du watcher: {ip} sur {channel}")
+        """Met à jour les informations d'un watcher spécifique"""
+        with self.lock:
+            current_time = time.time()
+            
+            # Si le watcher n'existe pas, créer un nouveau minuteur
+            if ip not in self.watchers:
+                if self.stats_collector:
+                    timer = WatcherTimer(channel, ip, self.stats_collector)
+                    self.watchers[ip] = {
+                        "timer": timer,
+                        "last_seen": current_time,
+                        "type": request_type,
+                        "user_agent": user_agent,
+                        "last_channel": channel,  # Historique
+                        "current_channel": channel  # Chaîne actuelle
+                    }
+                    logger.info(f"🆕 Nouveau watcher détecté: {ip} sur {channel}")
+            else:
+                # Vérifier si la chaîne a changé
+                old_channel = self.watchers[ip].get("current_channel")
+                if old_channel != channel:
+                    logger.info(f"🔄 Changement de chaîne pour {ip}: {old_channel} -> {channel}")
+                    # Arrêter l'ancien minuteur
+                    if "timer" in self.watchers[ip]:
+                        self.watchers[ip]["timer"].stop()
+                        logger.info(f"⏱️ Arrêt du minuteur pour {ip} sur {old_channel}")
+                    # Créer un nouveau minuteur pour la nouvelle chaîne
+                    timer = WatcherTimer(channel, ip, self.stats_collector)
+                    self.watchers[ip]["timer"] = timer
+                    self.watchers[ip]["last_channel"] = old_channel
+                    self.watchers[ip]["current_channel"] = channel  # MAJ chaîne actuelle
 
-            # Vérifier si la chaîne existe
-            if channel_name not in self.channels:
-                logger.warning(f"❌ Chaîne inconnue: {channel_name}")
-                return
+                # Mise à jour des infos
+                self.watchers[ip]["last_seen"] = current_time
+                self.watchers[ip]["type"] = request_type
+                self.watchers[ip]["user_agent"] = user_agent
 
-            channel = self.channels[channel_name]
+            # Traiter la requête
+            if request_type == "segment":
+                self._handle_segment_request(channel, ip, line, user_agent)
 
-            # Log pour debug
-            logger.info(
-                f"[{channel_name}] 🔄 Mise à jour watchers: {count} watchers, path={request_path}"
-            )
-
-            # Toujours mettre à jour le timestamp de dernière activité
-            channel.last_watcher_time = time.time()
-
-            # Pour les requêtes de segments, mettre à jour last_segment_time
-            if ".ts" in request_path:
-                channel.last_segment_time = time.time()
-                
-                # APPEL DIRECT ET EXPLICITE POUR CHAQUE SEGMENT TS
-                # Ajouter 5 secondes de temps de visionnage
-                if count > 0:
-                    logger.info(f"[{channel_name}] 🔥 APPEL EXPLICITE add_watch_time pour SEGMENT TS")
-                    self.force_watch_time_update(channel_name)
-
-            old_count = getattr(channel, "watchers_count", 0)
-
-            # MAJ du compteur s'il y a changement
-            channel.watchers_count = count  # Toujours mettre à jour
-
-            # Mise à jour des statistiques globales si StatsCollector existe
-            if hasattr(self, "stats_collector") and self.stats_collector:
-                self.stats_collector.update_channel_watchers(channel_name, count)
-
-            # Vérification de l'état de la chaîne après mise à jour
-            logger.debug(
-                f"[{channel_name}] État après MAJ: watchers_count={getattr(channel, 'watchers_count', 0)}, "
-                f"stream_running={channel.process_manager.is_running()}"
-            )
-
-            # Démarrage du stream pour toute requête playlist.m3u8 si le stream n'est pas déjà actif
-            if ".m3u8" in request_path and not channel.process_manager.is_running():
-                logger.info(
-                    f"[{channel_name}] 🚀 Démarrage du stream suite à une requête playlist.m3u8"
-                )
-                channel.start_stream_if_needed()
-            # Si on a des watchers mais pas de stream actif, démarrer aussi
-            elif count > 0 and not channel.process_manager.is_running():
-                logger.info(
-                    f"[{channel_name}] 🚀 Démarrage du stream car {count} watchers actifs"
-                )
-                channel.start_stream_if_needed()
-
-        except Exception as e:
-            logger.error(f"❌ Erreur update_watchers: {e}")
-            import traceback
-
-            logger.error(f"Stack trace: {traceback.format_exc()}")    
-
+            # Mettre à jour le compteur de watchers pour cette chaîne
+            self._update_channel_watchers_count(channel)
     def _get_active_watcher_ips(self, channel_name):
         """Récupère les IPs des watchers actifs pour une chaîne"""
         active_ips = []

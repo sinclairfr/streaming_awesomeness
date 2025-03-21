@@ -169,10 +169,25 @@ class StatsCollector:
                 # Mise à jour du timestamp
                 self.user_stats["last_updated"] = int(time.time())
 
+                # Préparation des données pour la sérialisation JSON
+                # Convertir les ensembles en listes pour les rendre sérialisables
+                serializable_stats = {"users": {}, "last_updated": self.user_stats["last_updated"]}
+                
+                for ip, user_data in self.user_stats.get("users", {}).items():
+                    serializable_user = {}
+                    for key, value in user_data.items():
+                        # Convertir les ensembles en listes
+                        if isinstance(value, set):
+                            serializable_user[key] = list(value)
+                        else:
+                            serializable_user[key] = value
+                    
+                    serializable_stats["users"][ip] = serializable_user
+
                 # Log pour comprendre ce qu'on sauvegarde
-                user_count = len(self.user_stats.get("users", {}))
+                user_count = len(serializable_stats.get("users", {}))
                 watch_times = {}
-                for ip, data in self.user_stats.get("users", {}).items():
+                for ip, data in serializable_stats.get("users", {}).items():
                     watch_times[ip] = data.get("total_watch_time", 0)
 
                 logger.info(
@@ -181,7 +196,7 @@ class StatsCollector:
 
                 # Sauvegarde effective
                 with open(self.user_stats_file, "w") as f:
-                    json.dump(self.user_stats, f, indent=2)
+                    json.dump(serializable_stats, f, indent=2)
 
                 logger.info(
                     f"✅ Stats utilisateurs sauvegardées dans {self.user_stats_file}"
@@ -193,9 +208,7 @@ class StatsCollector:
 
                 logger.error(traceback.format_exc())
                 return False
-
-    # Dans stats_collector.py, modifiez la méthode update_user_stats:
-
+            
     def update_user_stats(self, ip, channel_name, duration, user_agent=None):
         """Met à jour les stats par utilisateur"""
         with self.lock:
