@@ -293,13 +293,10 @@ class ClientMonitor(threading.Thread):
         # MAJ du timestamp uniquement
         try:
             current_time = time.time()
-            logger.debug(f"[CLIENT_MONITOR_DEBUG] Traitement ligne: {line[:100]}...")
-
-            # Créer une structure pour suivre le temps passé par utilisateur/chaîne
-            if not hasattr(self, "watcher_times"):
-                self.watcher_times = {}
+            logger.info(f"[CLIENT_MONITOR] Traitement de: {channel} par {ip} (type: {request_type})")
 
             with self.lock:
+                # Récupérer les anciennes données s'il y en a
                 old_data = self.watchers.get((channel, ip), None)
                 old_time = (
                     old_data.get("time", 0)
@@ -307,14 +304,11 @@ class ClientMonitor(threading.Thread):
                     else old_data if old_data else 0
                 )
 
-                # Calculer le temps écoulé depuis la dernière requête (avec limites raisonnables)
+                # Calculer le temps écoulé depuis la dernière requête
                 elapsed_time = 0
                 if old_time > 0:
-                    elapsed_time = min(
-                        30, current_time - old_time
-                    )  # Max 30 secondes entre requêtes
-                    logger.debug(f"[CLIENT_MONITOR_DEBUG] Temps écoulé depuis dernière requête: {elapsed_time:.1f}s")
-
+                    elapsed_time = min(30, current_time - old_time)  # Max 30 secondes
+                
                 # On stocke des informations complètes pour ce watcher
                 self.watchers[(channel, ip)] = {
                     "time": current_time,
@@ -323,84 +317,44 @@ class ClientMonitor(threading.Thread):
                     "elapsed": elapsed_time,
                 }
 
-                # AMÉLIORATION: Assurer une durée significative selon le type de requête
+                # CORRECTION MAJEURE: Calcul direct des durées avec valeurs garanties positives
                 if request_type == "segment":
-                    # Pour les segments, TOUJOURS au moins 4s (durée typique d'un segment HLS)
-                    duration = max(elapsed_time, 4.0)
-                    if duration <= 0:  # Vérification supplémentaire
-                        duration = 4.0  # Valeur de secours pour les segments
+                    # Pour les segments, TOUJOURS au moins 4s (typique d'un segment HLS)
+                    duration = 4.0  # Valeur fixe et garantie pour chaque segment
                 elif request_type == "playlist":
-                    # Pour les playlists, au moins 0.5s (heartbeat)
-                    duration = max(elapsed_time * 0.5, 0.5)
-                    if duration <= 0:
-                        duration = 0.5  # Valeur de secours pour les playlists
+                    # Pour les playlists, valeur fixe de 0.5s (heartbeat)
+                    duration = 0.5
                 else:
-                    # Pour les autres types, au moins 0.1s
-                    duration = max(elapsed_time * 0.1, 0.1)
-                    if duration <= 0:
-                        duration = 0.1  # Valeur de secours
+                    # Pour les autres types, valeur minimale
+                    duration = 0.1
 
-                # Log détaillé OBLIGATOIRE pour tracer les durées
-                logger.info(
-                    f"[CLIENT_MONITOR] ⏱️ {channel}: Ajout de {duration:.1f}s pour {ip} (elapsed: {elapsed_time:.1f}s, type: {request_type})"
-                )
+                # IMPORTANT - Log très explicite pour tracer ce qu'on ajoute
+                logger.info(f"[CLIENT_MONITOR] ⏱️ DURÉE CALCULÉE: {duration}s pour {ip} sur {channel}")
 
-                # Mise à jour explicite des stats AVEC VÉRIFICATION
-                if (
-                    hasattr(self.manager, "stats_collector")
-                    and self.manager.stats_collector
-                ):
-                    # VÉRIFICATION CRITIQUE: s'assurer que les objets existent
-                    if hasattr(self.manager.stats_collector, "add_watch_time"):
-                        # Ajouter le temps de visionnage
-                        self.manager.stats_collector.add_watch_time(channel, ip, duration)
-                        logger.debug(f"[CLIENT_MONITOR_DEBUG] ✅ add_watch_time({channel}, {ip}, {duration:.1f}) exécuté")
-                    else:
-                        logger.error(f"[CLIENT_MONITOR_ERROR] ❌ Méthode add_watch_time manquante!")
-
-                    # Mettre à jour les stats utilisateur
-                    if hasattr(self.manager.stats_collector, "update_user_stats"):
-                        self.manager.stats_collector.update_user_stats(
-                            ip, channel, duration, user_agent
-                        )
-                        logger.debug(f"[CLIENT_MONITOR_DEBUG] ✅ update_user_stats exécuté")
+                # CORRECTION CRITIQUE: Appel DIRECT au StatsCollector sans passer par _update_stats
+                if hasattr(self.manager, "stats_collector") and self.manager.stats_collector:
+                    # Vérification du type exact
+                    stats_type = type(self.manager.stats_collector).__name__
+                    logger.info(f"[CLIENT_MONITOR] 🔍 Type du StatsCollector: {stats_type}")
                     
-                    # SAUVEGARDE FORCÉE PLUS AGRESSIVE
-                    # Forcer une sauvegarde pour chaque segment (au lieu d'attendre 60s)
-                    if request_type == "segment" or duration >= 2.0:
-                        threading.Thread(
-                            target=self.manager.stats_collector.save_stats, 
-                            daemon=True
-                        ).start()
-                        threading.Thread(
-                            target=self.manager.stats_collector.save_user_stats,
-                            daemon=True
-                        ).start()
-                        logger.info(
-                            f"[CLIENT_MONITOR] 💾 Sauvegarde FORCÉE pour {channel}:{ip} - durée: {duration:.1f}s"
-                        )
-                    # Sauvegarde périodique (ancien code)
-                    else:
-                        watcher_key = f"{channel}:{ip}"
-                        if not hasattr(self, "last_save_times"):
-                            self.last_save_times = {}
-
-                        if (
-                            watcher_key not in self.last_save_times
-                            or current_time - self.last_save_times.get(watcher_key, 0) > 30  # Réduit à 30s
-                        ):
-                            threading.Thread(
-                                target=self.manager.stats_collector.save_stats, 
-                                daemon=True
-                            ).start()
-                            threading.Thread(
-                                target=self.manager.stats_collector.save_user_stats,
-                                daemon=True
-                            ).start()
-                            self.last_save_times[watcher_key] = current_time
-                            logger.info(
-                                f"[CLIENT_MONITOR] 💾 Sauvegarde périodique pour {channel}:{ip}"
-                            )
+                    # Appel direct avec log pour vérifier qu'on entre bien dans la méthode
+                    try:
+                        logger.info(f"[CLIENT_MONITOR] 📞 APPEL DIRECT add_watch_time({channel}, {ip}, {duration})")
+                        self.manager.stats_collector.add_watch_time(channel, ip, duration)
+                        logger.info(f"[CLIENT_MONITOR] ✅ Appel add_watch_time réussi!")
+                    except Exception as e:
+                        logger.error(f"[CLIENT_MONITOR] ❌ ERREUR add_watch_time: {e}")
+                    
+                    # Mettre à jour les stats utilisateur
+                    try:
+                        self.manager.stats_collector.update_user_stats(ip, channel, duration, user_agent)
+                    except Exception as e:
+                        logger.error(f"[CLIENT_MONITOR] ❌ ERREUR update_user_stats: {e}")
+                    
+                    # FORCER une sauvegarde à chaque fois
+                    threading.Thread(target=self.manager.stats_collector.save_stats, daemon=True).start()
+                    threading.Thread(target=self.manager.stats_collector.save_user_stats, daemon=True).start()
+                    logger.info(f"[CLIENT_MONITOR] 💾 SAUVEGARDE FORCÉE pour {channel}:{ip}")
 
                 # Grouper les mises à jour par chaîne
                 if not hasattr(self, "modified_channels"):
@@ -408,9 +362,9 @@ class ClientMonitor(threading.Thread):
                 self.modified_channels.add(channel)
 
         except Exception as e:
-            logger.error(f"[CLIENT_MONITOR_ERROR] ❌ Erreur traitement ligne: {e}")
+            logger.error(f"[CLIENT_MONITOR] ❌ Erreur traitement ligne: {e}")
             import traceback
-            logger.error(f"[CLIENT_MONITOR_ERROR] {traceback.format_exc()}")
+            logger.error(f"[CLIENT_MONITOR] {traceback.format_exc()}")
 
     def _check_log_file_exists(self, retry_count, max_retries):
         """Vérifie si le fichier de log existe et est accessible"""
