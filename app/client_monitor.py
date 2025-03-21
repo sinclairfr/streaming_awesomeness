@@ -932,7 +932,7 @@ class ClientMonitor(threading.Thread):
             self._follow_log_file_legacy()
 
     def run_client_monitor(self):
-        """Démarre le monitoring en mode direct (legacy)"""
+        """Démarre le monitoring en mode moderne avec fallback sur legacy au besoin"""
         logger.info("👀 Démarrage de la surveillance des requêtes...")
 
         try:
@@ -957,8 +957,15 @@ class ClientMonitor(threading.Thread):
                 if last_lines:
                     logger.info(f"📋 Dernière ligne du log: {last_lines[-1][:100]}")
 
-            # Utilisation directe du mode legacy
-            self._follow_log_file_legacy()
+            # Essayer d'utiliser le mode moderne
+            try:
+                logger.info("🔄 Utilisation du mode de surveillance moderne...")
+                self._follow_log_file()
+            except Exception as e:
+                logger.error(f"❌ Erreur mode moderne: {e}")
+                logger.warning("⚠️ Fallback sur le mode legacy")
+                # Fallback au mode legacy en cas d'erreur
+                self._follow_log_file_legacy()
 
         except Exception as e:
             logger.error(f"❌ Erreur démarrage surveillance: {e}")
