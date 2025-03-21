@@ -25,24 +25,38 @@ def load_stats():
     with open(USER_STATS_FILE, 'r') as f:
         user_stats = json.load(f)
     
-    # Nettoyer et normaliser les données utilisateurs (structure imbriquée)
-    cleaned_users = {}
+    # Fonction récursive pour extraire tous les utilisateurs
+    def extract_users(data, result=None):
+        if result is None:
+            result = {}
+        
+        if not isinstance(data, dict):
+            return result
+            
+        for key, value in data.items():
+            if key != "last_updated" and isinstance(value, dict):
+                if "total_watch_time" in value:
+                    # Ce semble être une entrée utilisateur
+                    result[key] = value
+                else:
+                    # Récursion sur la structure imbriquée
+                    extract_users(value, result)
+        
+        return result
     
-    # Parcourir tous les niveaux possibles pour trouver les utilisateurs
+    # Extraire tous les utilisateurs réels quelle que soit la profondeur d'imbrication
+    all_users = {}
+    
     if "users" in user_stats:
-        if isinstance(user_stats["users"], dict):
-            for k, v in user_stats["users"].items():
-                if k == "users" and isinstance(v, dict):
-                    # Niveau supplémentaire trouvé
-                    for sub_k, sub_v in v.items():
-                        if isinstance(sub_v, dict) and "total_watch_time" in sub_v:
-                            cleaned_users[sub_k] = sub_v
-                elif isinstance(v, dict) and "total_watch_time" in v:
-                    # Entrée utilisateur standard
-                    cleaned_users[k] = v
+        all_users = extract_users(user_stats["users"], {})
     
-    return channel_stats, {"users": cleaned_users}
-
+    # Créer une structure correcte
+    cleaned_user_stats = {
+        "users": all_users,
+        "last_updated": user_stats.get("last_updated", 0)
+    }
+    
+    return channel_stats, cleaned_user_stats
 def create_user_activity_df(user_stats):
     """Crée un DataFrame des activités utilisateur avec meilleure détection des chaînes favorites"""
     data = []

@@ -105,43 +105,73 @@ class StatsCollector:
             channel_stats["watchlist"][ip] += duration
 
             # Mise à jour des stats globales
-            self.global_stats["total_watch_time"] += duration
-            self.global_stats["unique_viewers"].add(ip)
-            self.global_stats["last_update"] = time.time()
+            if "global" not in self.stats:
+                self.stats["global"] = {
+                    "total_watch_time": 0.0,
+                    "unique_viewers": set(),
+                    "last_update": time.time()
+                }
+            
+            global_stats = self.stats["global"]
+            global_stats["total_watch_time"] += duration
+            global_stats["unique_viewers"].add(ip)
+            global_stats["last_update"] = time.time()
 
-            # Mise à jour des stats utilisateur
+            # Mise à jour des stats utilisateur (structure PLATE)
             if ip not in self.user_stats:
                 self.user_stats[ip] = {
                     "total_watch_time": 0.0,
                     "channels_watched": set(),
                     "last_seen": time.time(),
-                    "user_agent": None
+                    "user_agent": None,
+                    "channels": {}
                 }
-            self.user_stats[ip]["total_watch_time"] += duration
-            self.user_stats[ip]["channels_watched"].add(channel)
-            self.user_stats[ip]["last_seen"] = time.time()
+            
+            user = self.user_stats[ip]
+            user["total_watch_time"] += duration
+            user["channels_watched"].add(channel)
+            user["last_seen"] = time.time()
+
+            # S'assurer que channels existe
+            if "channels" not in user:
+                user["channels"] = {}
+
+            # Init pour cette chaîne si nécessaire
+            if channel not in user["channels"]:
+                user["channels"][channel] = {
+                    "first_seen": int(time.time()),
+                    "last_seen": int(time.time()),
+                    "total_watch_time": 0,
+                    "favorite": False,
+                }
+
+            # MAJ des stats de la chaîne
+            channel_data = user["channels"][channel]
+            channel_data["last_seen"] = int(time.time())
+            channel_data["total_watch_time"] += duration
+
+            # Détermination de la chaîne favorite
+            if len(user["channels"]) > 1:
+                favorite_channel = max(
+                    user["channels"].items(), key=lambda x: x[1]["total_watch_time"]
+                )[0]
+
+                for ch_name, ch_data in user["channels"].items():
+                    ch_data["favorite"] = ch_name == favorite_channel
 
             # Mise à jour des stats quotidiennes
             self._update_daily_stats(channel, ip, duration)
 
-            # Log concis des mises à jour (uniquement pour les nouvelles IPs ou tous les 5 minutes)
-            if not hasattr(self, "last_log_time"):
-                self.last_log_time = current_time
-                logger.info(f"[STATS] 📊 Stats initialisées pour {channel}: {len(channel_stats['unique_viewers'])} spectateurs")
-            elif current_time - self.last_log_time > 300:  # 5 minutes
-                logger.info(f"[STATS] 📊 Stats {channel}: {len(channel_stats['unique_viewers'])} spectateurs, {channel_stats['total_watch_time']:.1f}s total")
-                self.last_log_time = current_time
-
-            # Sauvegarde moins fréquente
-            if not hasattr(self, "last_save_time") or current_time - self.last_save_time > 60:  # 1 minute (au lieu de 5 secondes)
-                self.save_stats()
-                self.save_user_stats()
+            # Sauvegarde périodique (moins fréquente)
+            if not hasattr(self, "last_save_time") or current_time - self.last_save_time > 60:  # 1 minute
+                threading.Thread(target=self.save_stats, daemon=True).start()
+                threading.Thread(target=self.save_user_stats, daemon=True).start()
                 self.last_save_time = current_time
-
+                
         except Exception as e:
             logger.error(f"❌ Erreur mise à jour stats: {e}")
             import traceback
-            logger.error(traceback.format_exc())
+            logger.error(traceback.format_exc())    
     def _save_loop(self):
         """Sauvegarde périodique des statistiques"""
         while not self.stop_save_thread.is_set():
@@ -163,18 +193,50 @@ class StatsCollector:
         if self.user_stats_file.exists():
             try:
                 with open(self.user_stats_file, "r") as f:
-                    return json.load(f)
+                    loaded_data = json.load(f)
+                    
+                    # Création d'une structure vide
+                    clean_stats = {
+                        "last_updated": int(time.time()),
+                    }
+                    
+                    # Extraction des données utilisateurs depuis n'importe quel niveau d'imbrication
+                    def extract_users(data_obj):
+                        if not isinstance(data_obj, dict):
+                            return {}
+                        
+                        extracted = {}
+                        
+                        # Si l'objet contient une clé "users" qui est un dictionnaire
+                        if "users" in data_obj and isinstance(data_obj["users"], dict):
+                            # Parcourir les utilisateurs de premier niveau
+                            for ip, user_data in data_obj["users"].items():
+                                if ip != "users" and isinstance(user_data, dict):
+                                    # C'est un vrai utilisateur
+                                    extracted[ip] = user_data
+                            
+                            # Récursion pour extraire les utilisateurs des niveaux imbriqués
+                            nested_users = extract_users(data_obj["users"])
+                            # Fusionner avec les utilisateurs déjà extraits
+                            for ip, user_data in nested_users.items():
+                                extracted[ip] = user_data
+                                
+                        return extracted
+                    
+                    # Extraire tous les utilisateurs et les ajouter à clean_stats
+                    users = extract_users(loaded_data)
+                    for ip, user_data in users.items():
+                        clean_stats[ip] = user_data
+                    
+                    return clean_stats
+                    
             except json.JSONDecodeError:
-                logger.warning(
-                    f"⚠️ Fichier stats utilisateurs corrompu, création d'un nouveau"
-                )
+                logger.warning(f"⚠️ Fichier stats utilisateurs corrompu, création d'un nouveau")
 
         # Structure initiale
         return {
-            "users": {},  # Par IP
             "last_updated": int(time.time()),
         }
-
     def save_user_stats(self):
         """Sauvegarde les statistiques par utilisateur"""
         with self.lock:
@@ -186,13 +248,19 @@ class StatsCollector:
                 # S'assurer que le dossier existe
                 os.makedirs(os.path.dirname(self.user_stats_file), exist_ok=True)
 
-                # Préparation des données sérialisables
-                serializable_stats = {"users": {}, "last_updated": int(time.time())}
+                # Préparation des données sérialisables - STRUCTURE SIMPLIFIÉE SANS IMBRICATION
+                serializable_stats = {
+                    "users": {},
+                    "last_updated": int(time.time())
+                }
                 
+                # Parcourir le dictionnaire user_stats pour extraire uniquement les données utilisateurs
                 for ip, user_data in self.user_stats.items():
+                    # Ignorer les clés de métadonnées comme "last_updated"
                     if ip == "last_updated":
-                        continue  # Skip metadata key
+                        continue
                         
+                    # Convertir les données utilisateur en format sérialisable
                     serializable_user = {}
                     for key, val in user_data.items():
                         # Convertir les sets en listes
@@ -201,6 +269,7 @@ class StatsCollector:
                         else:
                             serializable_user[key] = val
                     
+                    # Ajouter cet utilisateur au dictionnaire principal
                     serializable_stats["users"][ip] = serializable_user
 
                 # Sauvegarde effective
@@ -213,7 +282,8 @@ class StatsCollector:
                 logger.error(f"❌ Erreur sauvegarde stats utilisateurs: {e}")
                 import traceback
                 logger.error(traceback.format_exc())
-                return False        
+                return False
+    
     def update_user_stats(self, ip, channel_name, duration, user_agent=None):
         """Met à jour les stats par utilisateur"""
         with self.lock:
