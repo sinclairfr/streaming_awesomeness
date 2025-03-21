@@ -43,35 +43,63 @@ def load_stats():
     return channel_stats, {"users": cleaned_users}
 
 def create_user_activity_df(user_stats):
-    """Crée un DataFrame des activités utilisateur"""
+    """Crée un DataFrame des activités utilisateur avec meilleure détection des chaînes favorites"""
     data = []
     
     for ip, user_data in user_stats.get("users", {}).items():
         # Statistiques globales de l'utilisateur
         total_time = user_data.get("total_watch_time", 0)
         
+        # Détecter la chaîne favorite (plus complexe pour gérer différentes structures)
+        favorite_channel = None
+        
         # Si channels est disponible, parcourir chaque chaîne
         if "channels" in user_data and isinstance(user_data["channels"], dict):
+            # Structure normale - chercher le marqueur "favorite"
             for channel, channel_data in user_data["channels"].items():
+                if channel_data.get("favorite", False):
+                    favorite_channel = channel
+                    break
+                
+            # Si aucun marqueur trouvé, utiliser celle avec le plus de temps
+            if not favorite_channel:
+                max_time = 0
+                for channel, channel_data in user_data["channels"].items():
+                    channel_time = channel_data.get("total_watch_time", 0)
+                    if channel_time > max_time:
+                        max_time = channel_time
+                        favorite_channel = channel
+            
+            # Ajout des données par chaîne
+            for channel, channel_data in user_data["channels"].items():
+                is_favorite = (channel == favorite_channel)
                 data.append({
                     "ip": ip,
                     "channel": channel,
                     "watch_time": channel_data.get("total_watch_time", 0),
-                    "favorite": channel_data.get("favorite", False),
+                    "favorite": is_favorite,
                     "last_seen": datetime.fromtimestamp(channel_data.get("last_seen", 0)),
                 })
         else:
-            # Si pas de détail par chaîne, on utilise channels_watched
-            channels = user_data.get("channels_watched", [])
-            if isinstance(channels, list) and len(channels) > 0:
-                # Distribuer le temps de visionnage entre les chaînes (approximation)
+            # Utiliser channels_watched si disponible
+            channels = []
+            if "channels_watched" in user_data:
+                if isinstance(user_data["channels_watched"], list):
+                    channels = user_data["channels_watched"]
+                elif isinstance(user_data["channels_watched"], set):
+                    channels = list(user_data["channels_watched"])
+            
+            # Si au moins une chaîne, la première est considérée comme favorite (approximation)
+            if channels:
+                favorite_channel = channels[0]
                 time_per_channel = total_time / len(channels)
-                for channel in channels:
+                
+                for i, channel in enumerate(channels):
                     data.append({
                         "ip": ip,
                         "channel": channel,
                         "watch_time": time_per_channel,
-                        "favorite": False,
+                        "favorite": (i == 0),  # Première chaîne = favorite
                         "last_seen": datetime.fromtimestamp(user_data.get("last_seen", 0)),
                     })
     
