@@ -53,7 +53,7 @@ class StatsCollector:
             f"📊 StatsCollector initialisé (sauvegarde dans {self.stats_file}, user stats dans {self.user_stats_file})"
         )
 
-     def add_watch_time(self, channel, ip, duration):
+    def add_watch_time(self, channel, ip, duration):
         """Ajoute du temps de visionnage pour un watcher avec limitation de fréquence"""
         try:
             current_time = time.time()
