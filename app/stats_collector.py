@@ -44,6 +44,14 @@ class StatsCollector:
     def add_watch_time(self, channel_name, ip, duration):
         """Ajoute du temps de visionnage pour une IP sur une chaîne"""
         with self.lock:
+            
+            
+            # Après l'appel à add_watch_time, ajouter:
+            if duration > 2.0:  # Pour les durées significatives
+                # Forcer une sauvegarde immédiate
+                threading.Thread(target=self.manager.stats_collector.save_stats, daemon=True).start()
+                logger.info(f"[CLIENT_MONITOR] 💾 Sauvegarde forcée pour {channel}:{ip} - durée: {duration:.1f}s")
+            
             # Log initial avec la durée reçue
             current_time = int(time.time())
             logger.debug(f"[STATS_COLLECTOR_DEBUG] Début add_watch_time - Channel: {channel_name}, IP: {ip}, Duration: {duration:.1f}s")
