@@ -61,38 +61,6 @@ class ChannelStatusManager:
         except Exception as e:
             logger.error(f"❌ Error cleaning status file: {e}")
     
-    def _update_channel_status(self):
-        """Update the channel status file with current channel information"""
-        if not hasattr(self, "channel_status") or not self.channel_status:
-            return False
-        
-        try:
-            # Debug the current channels list
-            logger.debug(f"Updating channel status with {len(self.channels)} channels: {list(self.channels.keys())}")
-            
-            channels_dict = {}
-            
-            for name, channel in self.channels.items():
-                # Get channel information with safer attribute access
-                is_active = bool(getattr(channel, "ready_for_streaming", False))
-                is_streaming = bool(channel.process_manager.is_running() if hasattr(channel, "process_manager") else False)
-                viewers = getattr(channel, "watchers_count", 0)
-                
-                # Add to dictionary
-                channels_dict[name] = {
-                    "active": is_active,
-                    "streaming": is_streaming,
-                    "viewers": viewers
-                }
-            
-            # Update all channels at once
-            self.channel_status.update_all_channels(channels_dict)
-            return True
-        
-        except Exception as e:
-            logger.error(f"❌ Error updating channel status: {e}")
-            return False    
-
     def _load_status(self):
         """Load channel status from file if it exists"""
         if self.status_file.exists():
