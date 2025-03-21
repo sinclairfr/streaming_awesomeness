@@ -830,7 +830,7 @@ class IPTVManager:
     def scan_channels(self, force: bool = False, initial: bool = False):
         """
         Scanne le contenu pour détecter les nouveaux dossiers (chaînes).
-        Version améliorée avec limitation de fréquence
+        Version améliorée avec limitation de fréquence et debug pour isolation du problème
         """
         # Limiter la fréquence des scans
         current_time = time.time()
@@ -856,11 +856,21 @@ class IPTVManager:
                     logger.error(f"Le dossier {content_path} n'existe pas!")
                     return
 
+                # Debugging: log the directory and its existence
+                logger.info(f"🔍 Scanning content directory: {content_path} (exists: {content_path.exists()})")
+                
+                # Get all subdirectories 
                 channel_dirs = [d for d in content_path.iterdir() if d.is_dir()]
+                
+                # Debug the found directories
+                logger.info(f"📂 Found {len(channel_dirs)} potential channel directories: {[d.name for d in channel_dirs]}")
 
                 logger.info(f"📡 Scan des chaînes disponibles...")
                 for channel_dir in channel_dirs:
                     channel_name = channel_dir.name
+                    
+                    # Debug: check if this directory should be a channel
+                    logger.debug(f"Examining directory: {channel_name} ({channel_dir})")
 
                     if channel_name in self.channels:
                         # Si la chaîne existe déjà, on vérifie son état
@@ -886,7 +896,8 @@ class IPTVManager:
 
             except Exception as e:
                 logger.error(f"Erreur scan des chaînes: {e}")
-
+                import traceback
+                logger.error(traceback.format_exc())
     def ensure_hls_directory(self, channel_name: str = None):
         """Crée et configure les dossiers HLS avec les bonnes permissions"""
         try:
@@ -1233,7 +1244,6 @@ class IPTVManager:
                 logger.error(f"❌ Erreur surveillance legacy: {e}")
                 time.sleep(5)  # Attente plus longue en cas d'erreur
 
-
     def _cleanup_inactive(self):
         """Nettoie les watchers inactifs"""
         current_time = time.time()
@@ -1274,35 +1284,21 @@ class IPTVManager:
             time.sleep(60)  # Vérification toutes les minutes
             self._cleanup_inactive()
 
-# Add this code to iptv_manager.py
-
-    def init_channel_status_manager(self):
-        """Initialize the channel status manager for dashboard"""
-        try:
-            from channel_status_manager import ChannelStatusManager
-            self.channel_status = ChannelStatusManager()
-            logger.info("✅ Channel status manager initialized for dashboard")
-            
-            # Do an initial update with current channels
-            self._update_channel_status()
-        except Exception as e:
-            logger.error(f"❌ Error initializing channel status manager: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-            self.channel_status = None
-
     def _update_channel_status(self):
         """Update the channel status file with current channel information"""
         if not hasattr(self, "channel_status") or not self.channel_status:
             return False
         
         try:
+            # Debug the current channels list
+            logger.debug(f"Updating channel status with {len(self.channels)} channels: {list(self.channels.keys())}")
+            
             channels_dict = {}
             
             for name, channel in self.channels.items():
-                # Get channel information
+                # Get channel information with safer attribute access
                 is_active = bool(getattr(channel, "ready_for_streaming", False))
-                is_streaming = bool(channel.process_manager.is_running())
+                is_streaming = bool(channel.process_manager.is_running() if hasattr(channel, "process_manager") else False)
                 viewers = getattr(channel, "watchers_count", 0)
                 
                 # Add to dictionary
@@ -1314,13 +1310,30 @@ class IPTVManager:
             
             # Update all channels at once
             self.channel_status.update_all_channels(channels_dict)
-            logger.debug(f"📊 Updated channel status for {len(channels_dict)} channels")
             return True
         
         except Exception as e:
             logger.error(f"❌ Error updating channel status: {e}")
             return False
-
+    def init_channel_status_manager(self):
+        """Initialize the channel status manager for dashboard"""
+        try:
+            # Use an explicit relative import to avoid confusion
+            from .channel_status_manager import ChannelStatusManager
+            self.channel_status = ChannelStatusManager()
+            logger.info("✅ Channel status manager initialized for dashboard")
+            
+            # Do an initial update with current channels, but don't fail if empty
+            self._update_channel_status()
+        except ImportError as e:
+            logger.error(f"❌ Could not import ChannelStatusManager: {e}")
+            logger.info("⚠️ Channel status dashboard will be unavailable")
+            self.channel_status = None
+        except Exception as e:
+            logger.error(f"❌ Error initializing channel status manager: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            self.channel_status = None
     def run_manager_loop(self):
         try:
             # NEW: Initialize channel status manager
