@@ -258,6 +258,7 @@ class ClientMonitor(threading.Thread):
             else:
                 duration = 4.0  # Durée par défaut si pas de timestamp précédent
             self.last_segment_time[channel] = current_time
+            logger.debug(f"[{channel}] ⏱️ Ajout de {duration:.1f}s pour {ip} (segment)")
         elif request_type == "playlist":
             # Pour les playlists, on utilise un intervalle plus court car c'est un heartbeat
             if channel in self.last_playlist_time:
@@ -267,9 +268,11 @@ class ClientMonitor(threading.Thread):
             else:
                 duration = 0.5
             self.last_playlist_time[channel] = current_time
+            logger.debug(f"[{channel}] ⏱️ Ajout de {duration:.1f}s pour {ip} (playlist)")
         else:
             # Pour les autres types, on utilise une durée minimale
             duration = 0.1
+            logger.debug(f"[{channel}] ⏱️ Ajout de {duration:.1f}s pour {ip} (autre)")
 
         # Ajout du temps de visionnage
         stats.add_watch_time(channel, ip, duration)
@@ -680,14 +683,20 @@ class ClientMonitor(threading.Thread):
     def _update_watcher(self, ip, channel, request_type, user_agent, line):
         """Met à jour les informations d'un watcher spécifique"""
         with self.lock:
+            current_time = time.time()
+            
             # Stockage précis du type de requête et du temps
             self.watchers[(channel, ip)] = {
-                "time": time.time(),
+                "time": current_time,
                 "type": request_type,
+                "user_agent": user_agent
             }
 
             # Log pour debug
             logger.debug(f"🔍 Requête: {ip} → {channel} ({request_type})")
+
+            # Mise à jour des statistiques AVANT tout autre traitement
+            self._update_stats(ip, channel, request_type)
 
             # Si c'est une requête de segment, on l'enregistre
             if request_type == "segment":
@@ -737,7 +746,7 @@ class ClientMonitor(threading.Thread):
         current_watchers = self.get_channel_watchers(channel)
         if active_watchers != current_watchers:
             logger.info(
-                f"[{channel}] 👁️ MAJ watchers: {active_watchers} (actifs: {list(active_ips)})"
+                f"[{channel}] 👁️ MAJ watchers: {active_watchers} actifs - {list(active_ips)}"
             )
             self.update_watchers(channel, active_watchers, "/hls/")
 
