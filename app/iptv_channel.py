@@ -1009,8 +1009,7 @@ class IPTVChannel:
             
         except Exception as e:
             logger.error(f"[{self.name}] ❌ Error in health check: {e}")
-            return False
-        
+            return False     
     def _verify_processor(self) -> bool:
         """Vérifie que le VideoProcessor est correctement initialisé"""
         try:
@@ -1030,13 +1029,14 @@ class IPTVChannel:
                 return False
 
             ready_to_stream_dir = video_dir / "ready_to_stream"
-            try:
-                ready_to_stream_dir.mkdir(exist_ok=True)
-            except Exception as e:
-                logger.error(
-                    f"[{self.name}] ❌ Impossible de créer {ready_to_stream_dir}: {e}"
-                )
-                return False
+            if not ready_to_stream_dir.exists():
+                try:
+                    ready_to_stream_dir.mkdir(parents=True, exist_ok=True)
+                except Exception as e:
+                    logger.error(
+                        f"[{self.name}] ❌ Impossible de créer {ready_to_stream_dir}: {e}"
+                    )
+                    return False
 
             logger.debug(f"[{self.name}] ✅ VideoProcessor correctement initialisé")
             return True
@@ -1109,13 +1109,17 @@ class IPTVChannel:
             source_dir = Path(self.video_dir)
             ready_to_stream_dir = source_dir / "ready_to_stream"
 
+            # Vérifier d'abord le processeur
+            if not self._verify_processor():
+                logger.error(f"[{self.name}] ❌ Échec de la vérification du processeur")
+                self.ready_for_streaming = False
+                return False
+
             # Création du dossier s'il n'existe pas
             ready_to_stream_dir.mkdir(exist_ok=True)
 
             # Vérifier et déplacer les fichiers invalides dans "ready_to_stream"
             self._check_and_move_invalid_files()
-
-            self._verify_processor()
 
             # On réinitialise la liste des vidéos traitées
             old_processed = self.processed_videos

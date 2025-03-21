@@ -135,7 +135,11 @@ class StatsCollector:
             user["total_watch_time"] = user.get("total_watch_time", 0.0) + duration
             
             # Vérifier si channels_watched existe et l'initialiser si nécessaire
-            if "channels_watched" not in user:
+            if "channels_watched" in user:
+                # Convert list to set if needed
+                if isinstance(user["channels_watched"], list):
+                    user["channels_watched"] = set(user["channels_watched"])
+            else:
                 user["channels_watched"] = set()
             user["channels_watched"].add(channel)
             
@@ -181,6 +185,7 @@ class StatsCollector:
             logger.error(f"❌ Erreur mise à jour stats: {e}")
             import traceback
             logger.error(traceback.format_exc())
+            
     def _save_loop(self):
         """Sauvegarde périodique des statistiques"""
         while not self.stop_save_thread.is_set():

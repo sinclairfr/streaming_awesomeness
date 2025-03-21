@@ -34,6 +34,7 @@ from config import (
     WATCHERS_LOG_CYCLE,
 )
 from stats_collector import StatsCollector
+from channel_status_manager import ChannelStatusManager
 
 
 class IPTVManager:
@@ -123,6 +124,15 @@ class IPTVManager:
         self.stats_collector.save_user_stats()
         logger.info("✅ StatsCollector initialisé et vérifié")
 
+        # status manager
+        try:
+            from channel_status_manager  import ChannelStatusManager
+            self.channel_status = ChannelStatusManager()
+            logger.info("✅ Channel status manager initialized")
+        except Exception as e:
+            logger.error(f"❌ Error initializing channel status manager: {e}")
+            self.channel_status = None
+        
         # Thread de nettoyage des watchers inactifs
         self.cleanup_thread = threading.Thread(target=self._cleanup_thread_loop, daemon=True)
         self.cleanup_thread.start()
@@ -470,7 +480,6 @@ class IPTVManager:
             )
 
     def _watchers_loop(self):
-        logger.info("watchers loop")
         """Surveille l'activité des watchers et arrête les streams inutilisés"""
         last_log_time = 0
         last_health_check = 0
@@ -483,8 +492,8 @@ class IPTVManager:
                 current_time = time.time()
                 channels_to_stop = []
 
-                # Ajout du health check toutes les 5 minutes
-                if current_time - last_health_check > 300:  # 5 minutes
+                # Ajout du health check toutes les minutes
+                if current_time - last_health_check > 60:  # 1 minute
                     for channel_name, channel in self.channels.items():
                         if hasattr(channel, "channel_health_check"):
                             try:
@@ -543,7 +552,6 @@ class IPTVManager:
             except Exception as e:
                 logger.error(f"❌ Erreur watchers_loop: {e}")
                 time.sleep(10)
-
     def force_watch_time_update(self, channel_name=None):
         """Force l'ajout de temps de visionnage pour TOUTES les chaînes avec des watchers"""
         try:
@@ -687,18 +695,29 @@ class IPTVManager:
             self.stats_collector.save_stats()
             self.stats_collector.save_user_stats()
         
-        # NEW: Update the channel status for dashboard
-        if hasattr(self, "channel_status") and self.channel_status:
-            is_active = bool(getattr(channel, "ready_for_streaming", False))
-            is_streaming = bool(channel.process_manager.is_running())
-            
-            self.channel_status.update_channel(
-                channel_name,
-                is_active=is_active,
-                viewers=watcher_count,
-                streaming=is_streaming
-            )
-
+        if hasattr(self, "channel_status") and self.channel_status is not None:
+            channel = self.channels.get(channel_name)
+            if channel:
+                is_active = bool(getattr(channel, "ready_for_streaming", False))
+                is_streaming = bool(channel.process_manager.is_running())
+                
+                self.channel_status.update_channel(
+                    channel_name, 
+                    is_active=is_active,
+                    viewers=watcher_count,
+                    streaming=is_streaming
+                )
+    def _reset_channel_statuses(self):
+        """Reset all channel statuses to inactive with zero viewers at startup"""
+        if hasattr(self, "channel_status"):
+            for name in self.channels:
+                self.channel_status.update_channel(
+                    name,
+                    is_active=False,
+                    viewers=0,
+                    streaming=False
+                )
+            logger.info("🔄 All channel statuses reset at startup")
     def _log_channels_summary(self):
         """Génère et affiche un récapitulatif de l'état des chaînes"""
         try:
@@ -965,7 +984,11 @@ class IPTVManager:
     def cleanup_manager(self):
         """Cleanup everything before shutdown"""
         logger.info("Début du nettoyage...")
-
+        # Add this before other cleanup
+        if hasattr(self, "channel_status"):
+            self.channel_status.stop()
+            logger.info("✅ Channel status manager stopped")
+            
         # Arrêt du StatsCollector
         if hasattr(self, "stats_collector"):
             self.stats_collector.stop()
@@ -1303,7 +1326,6 @@ class IPTVManager:
             # NEW: Initialize channel status manager
             self.init_channel_status_manager()
             
-            # Rest of the existing method...
             # Démarrer la boucle de surveillance des watchers
             if not self.watchers_thread.is_alive():
                 self.watchers_thread.start()
@@ -1314,6 +1336,8 @@ class IPTVManager:
             nginx_monitor_thread.start()
             logger.info("🔍 Surveillance des logs nginx démarrée")
 
+            self._reset_channel_statuses()
+            
             logger.debug("📥 Scan initial des chaînes...")
             self.scan_channels(initial=True)  # Marquer comme scan initial
 

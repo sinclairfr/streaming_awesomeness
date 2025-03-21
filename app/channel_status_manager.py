@@ -5,6 +5,7 @@ import os
 import json
 import time
 import threading
+import shutil
 from pathlib import Path
 from config import logger
 
@@ -31,6 +32,9 @@ class ChannelStatusManager:
             "active_viewers": 0
         }
         
+        # Clean status file at startup
+        self._clean_status_file()
+        
         # Load existing data if available
         self._load_status()
         
@@ -40,6 +44,22 @@ class ChannelStatusManager:
         self.update_thread.start()
         
         logger.info(f"ChannelStatusManager initialized, status file: {self.status_file}")
+    
+    def _clean_status_file(self):
+        """Clean the status file at startup"""
+        try:
+            if self.status_file.exists():
+                # Backup the old file with timestamp
+                backup_file = self.status_file.with_suffix(f'.json.bak.{int(time.time())}')
+                shutil.copy2(self.status_file, backup_file)
+                logger.info(f"✅ Backup of old status file created: {backup_file}")
+                
+                # Create new empty status file
+                with open(self.status_file, 'w') as f:
+                    json.dump(self.status_data, f, indent=2)
+                logger.info("✅ Status file cleaned at startup")
+        except Exception as e:
+            logger.error(f"❌ Error cleaning status file: {e}")
     
     def _load_status(self):
         """Load channel status from file if it exists"""
