@@ -108,10 +108,22 @@ class IPTVManager:
         )
         self.channel_init_thread.start()
 
+        # statistiques
+        self.stats_collector = StatsCollector()
+        # Vérifier si le StatsCollector est correctement initialisé
+        if not hasattr(self.stats_collector, "stats") or not self.stats_collector.stats:
+            logger.warning("⚠️ Réinitialisation du StatsCollector qui était invalide")
+            self.stats_collector = StatsCollector()
+
+        # Forcer une sauvegarde initiale des deux fichiers
+        self.stats_collector.save_stats()
+        self.stats_collector.save_user_stats()
+        logger.info("✅ StatsCollector initialisé et vérifié")
+
         # Moniteur clients
         logger.info(f"🚀 Démarrage du client_monitor avec {NGINX_ACCESS_LOG}")
         self.client_monitor = ClientMonitor(
-            NGINX_ACCESS_LOG, self.update_watchers, self
+            NGINX_ACCESS_LOG, self.update_watchers, self, self.stats_collector
         )
 
         # Vérification explicite qu'on a bien accès au fichier
@@ -127,20 +139,9 @@ class IPTVManager:
             except Exception as e:
                 logger.error(f"❌ Erreur lors de la lecture du fichier de log: {e}")
                 
-        # statistiques
-        self.stats_collector = StatsCollector()
-        # Vérifier si le StatsCollector est correctement initialisé
-        if not hasattr(self.stats_collector, "stats") or not self.stats_collector.stats:
-            logger.warning("⚠️ Réinitialisation du StatsCollector qui était invalide")
-            self.stats_collector = StatsCollector()
-
-        # Forcer une sauvegarde initiale des deux fichiers
-        self.stats_collector.save_stats()
-        self.stats_collector.save_user_stats()
-        logger.info("✅ StatsCollector initialisé et vérifié")
-
         # Démarrage du client_monitor une seule fois
         self.client_monitor.start()
+        logger.info("✅ ClientMonitor démarré")
 
         # Thread de surveillance du log
         self._log_monitor_thread = threading.Thread(
@@ -162,12 +163,6 @@ class IPTVManager:
         self.watchers_thread = threading.Thread(target=self._watchers_loop, daemon=True)
         self.running = True
 
-
-        # Forcer une sauvegarde initiale pour vérifier que tout fonctionne
-        self.stats_collector.save_stats()
-        self.stats_collector.save_user_stats()
-        logger.info("✅ StatsCollector initialisé et vérifié")
-
     def _check_client_monitor(self):
         """Vérifie périodiquement l'état du client_monitor"""
         while True:
@@ -181,7 +176,7 @@ class IPTVManager:
                     # Tentative de redémarrage
                     logger.info("🔄 Tentative de redémarrage du client_monitor...")
                     self.client_monitor = ClientMonitor(
-                        NGINX_ACCESS_LOG, self.update_watchers, self
+                        NGINX_ACCESS_LOG, self.update_watchers, self, self.stats_collector
                     )
                     self.client_monitor.start()
             except Exception as e:
@@ -361,8 +356,8 @@ class IPTVManager:
                 self.channels[channel_name] = channel
                 self.channel_ready_status[channel_name] = False  # Pas encore prête
 
-            # Attente que la chaîne soit prête (max 30 secondes)
-            for _ in range(30):
+            # Attente que la chaîne soit prête (max 5 secondes)
+            for _ in range(5):
                 if (
                     hasattr(channel, "ready_for_streaming")
                     and channel.ready_for_streaming
@@ -390,7 +385,7 @@ class IPTVManager:
         logger.info("🚀 Démarrage automatique des chaînes prêtes...")
 
         # Attendre que plus de chaînes soient prêtes
-        for attempt in range(3):
+        for attempt in range(2):  # Réduit de 3 à 2 tentatives
             ready_channels = []
             with self.scan_lock:
                 for name, is_ready in self.channel_ready_status.items():
@@ -405,9 +400,9 @@ class IPTVManager:
                 break
 
             logger.info(
-                f"⏳ Seulement {len(ready_channels)}/{len(self.channels)} chaînes prêtes, attente supplémentaire ({attempt+1}/3)..."
+                f"⏳ Seulement {len(ready_channels)}/{len(self.channels)} chaînes prêtes, attente supplémentaire ({attempt+1}/2)..."
             )
-            time.sleep(10)  # 10 secondes d'attente par tentative
+            time.sleep(5)  # Réduit de 10 à 5 secondes
 
         # Trier pour prévisibilité
         ready_channels.sort()
@@ -426,7 +421,7 @@ class IPTVManager:
 
             # Démarrer chaque chaîne du groupe avec un petit délai entre elles
             for i, channel_name in enumerate(group):
-                delay = i * 3  # 3 secondes entre chaque chaîne du même groupe
+                delay = i * 1  # Réduit de 3 à 1 seconde entre chaque chaîne
                 threading.Timer(delay, self._start_channel, args=[channel_name]).start()
                 logger.info(
                     f"[{channel_name}] ⏱️ Démarrage programmé dans {delay} secondes"
@@ -434,7 +429,7 @@ class IPTVManager:
 
             # Attendre avant le prochain groupe
             if group_idx < len(groups) - 1:
-                time.sleep(max_parallel * 5)  # 5 secondes par chaîne entre les groupes
+                time.sleep(max_parallel * 2)  # Réduit de 5 à 2 secondes par chaîne entre les groupes
 
         if ready_channels:
             logger.info(
@@ -540,8 +535,6 @@ class IPTVManager:
                 logger.error(f"❌ Erreur watchers_loop: {e}")
                 time.sleep(10)
 
-
-    # Puis dans la classe IPTVManager, ajoutons une nouvelle méthode:
     def force_watch_time_update(self, channel_name=None):
         """Force l'ajout de temps de visionnage pour TOUTES les chaînes avec des watchers"""
         try:
@@ -555,11 +548,13 @@ class IPTVManager:
             # Si un channel spécifique est demandé
             if channel_name:
                 if channel_name in self.channels:
-                    count = getattr(self.channels[channel_name], "watchers_count", 0)
-                    if count > 0:
-                        # FORCE 10 secondes de visionnage pour chaque watcher
-                        logger.info(f"🔥 FORCE {10.0 * count} SECONDES POUR {channel_name} (x{count} watchers)")
-                        self.stats_collector.add_watch_time(channel_name, "192.168.0.1", 10.0 * count)
+                    # Récupérer les IPs actives pour ce canal
+                    active_ips = self._get_active_watcher_ips(channel_name)
+                    if active_ips:
+                        # Ajouter le temps pour chaque IP active
+                        for ip in active_ips:
+                            logger.info(f"🔥 FORCE 10.0 SECONDES POUR {channel_name} (IP: {ip})")
+                            self.stats_collector.add_watch_time(channel_name, ip, 10.0)
                         self.stats_collector.save_stats()
                         self.stats_collector.save_user_stats()
                         return True
@@ -568,11 +563,13 @@ class IPTVManager:
             # Pour toutes les chaînes avec des watchers
             updates = 0
             for name, channel in self.channels.items():
-                count = getattr(channel, "watchers_count", 0)
-                if count > 0:
-                    # FORCE 10 secondes de visionnage pour chaque watcher
-                    logger.info(f"🔥 FORCE {10.0 * count} SECONDES POUR {name} (x{count} watchers)")
-                    self.stats_collector.add_watch_time(name, "192.168.0.1", 10.0 * count)
+                # Récupérer les IPs actives pour ce canal
+                active_ips = self._get_active_watcher_ips(name)
+                if active_ips:
+                    # Ajouter le temps pour chaque IP active
+                    for ip in active_ips:
+                        logger.info(f"🔥 FORCE 10.0 SECONDES POUR {name} (IP: {ip})")
+                        self.stats_collector.add_watch_time(name, ip, 10.0)
                     updates += 1
                     
             if updates > 0:
@@ -587,7 +584,6 @@ class IPTVManager:
             logger.error(traceback.format_exc())
             return False
 
-    # Et modifions la méthode update_watchers pour appeler notre nouvelle fonction:
     def update_watchers(self, channel_name: str, count: int, request_path: str):
         logger.info(f"[IPTV_MANAGER] ⏱️ DÉBUT update_watchers - Channel: {channel_name}, Count: {count}, Path: {request_path}")
         """Met à jour les watchers en fonction des requêtes m3u8 et ts"""
@@ -654,20 +650,7 @@ class IPTVManager:
             import traceback
 
             logger.error(f"Stack trace: {traceback.format_exc()}")    
-    def _get_active_watcher_ips(self, channel_name):
-        """Récupère les IPs des watchers actifs pour une chaîne"""
-        active_ips = []
-        
-        # Si on a accès au client_monitor et ses watchers
-        if hasattr(self, "client_monitor") and hasattr(self.client_monitor, "watchers"):
-            # Parcourir tous les watchers du client_monitor
-            for (ch, ip), data in self.client_monitor.watchers.items():
-                if ch == channel_name:
-                    active_ips.append(ip)
-        
-        return active_ips 
 
-        
     def _get_active_watcher_ips(self, channel_name):
         """Récupère les IPs des watchers actifs pour une chaîne"""
         active_ips = []
@@ -680,6 +663,7 @@ class IPTVManager:
                     active_ips.append(ip)
         
         return active_ips
+
     def _log_channels_summary(self):
         """Génère et affiche un récapitulatif de l'état des chaînes"""
         try:

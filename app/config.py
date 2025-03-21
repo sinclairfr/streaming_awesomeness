@@ -8,7 +8,7 @@ LOG_DIR = os.getenv("LOG_DIR", "/logs")
 CONTENT_DIR = Path(
     os.getenv("CONTENT_DIR", "/mnt/videos/streaming_awesomeness/content")
 )
-NGINX_ACCESS_LOG = os.getenv("NGINX_ACCESS_LOG", "/var/log/nginx/access.log")
+NGINX_ACCESS_LOG = os.getenv("NGINX_ACCESS_LOG", "/app/logs/nginx_access.log")
 SERVER_URL = os.getenv("SERVER_URL", "192.168.10.183")
 
 # Configuration des timeouts

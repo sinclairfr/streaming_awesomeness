@@ -42,6 +42,11 @@ class ResourceMonitor(threading.Thread):
         self.running = True
         self.flush_logs()
 
+    def run(self):
+        """Méthode principale du thread"""
+        logger.info("🚀 Démarrage du ResourceMonitor")
+        self.run_resource_monitor()
+
     def flush_logs(self):
         """Nettoie tous les logs au démarrage"""
         ffmpeg_logs_dir = FFMPEG_LOGS_DIR

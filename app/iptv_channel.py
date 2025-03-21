@@ -188,8 +188,6 @@ class IPTVChannel:
 
         self._scan_in_progress = True
         try:
-            time.sleep(30)  # Attente initiale pour laisser le système se stabiliser
-
             with self.scan_lock:
                 logger.info(
                     f"[{self.name}] 🔍 Scan de mise à jour des vidéos en cours..."

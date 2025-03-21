@@ -22,6 +22,11 @@ class FFmpegMonitor(threading.Thread):
         self.ffmpeg_log_dir = Path("/app/logs/ffmpeg")
         self.ffmpeg_log_dir.mkdir(parents=True, exist_ok=True)
 
+    def run(self):
+        """Méthode principale du thread"""
+        logger.info("🚀 Démarrage du FFmpegMonitor")
+        self.run_monitor_loop()
+
     def _check_all_ffmpeg_processes(self):
         """
         Parcourt tous les processus pour voir lesquels sont liés à FFmpeg,
