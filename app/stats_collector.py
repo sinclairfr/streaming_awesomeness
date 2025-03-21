@@ -156,59 +156,41 @@ class StatsCollector:
         """Sauvegarde les statistiques par utilisateur"""
         with self.lock:
             try:
-                # Vérification avant sauvegarde
+                # Vérifications de base
                 if not hasattr(self, "user_stats") or not self.user_stats:
-                    logger.warning(
-                        "⚠️ user_stats n'existe pas ou est vide lors de la sauvegarde"
-                    )
                     self.user_stats = {"users": {}, "last_updated": int(time.time())}
 
                 # S'assurer que le dossier existe
                 os.makedirs(os.path.dirname(self.user_stats_file), exist_ok=True)
 
-                # Mise à jour du timestamp
-                self.user_stats["last_updated"] = int(time.time())
-
-                # Préparation des données pour la sérialisation JSON
-                # Convertir les ensembles en listes pour les rendre sérialisables
-                serializable_stats = {"users": {}, "last_updated": self.user_stats["last_updated"]}
+                # Préparation des données sérialisables
+                serializable_stats = {"users": {}, "last_updated": int(time.time())}
                 
-                for ip, user_data in self.user_stats.get("users", {}).items():
+                for ip, user_data in self.user_stats.items():
+                    if ip == "last_updated":
+                        continue  # Skip metadata key
+                        
                     serializable_user = {}
-                    for key, value in user_data.items():
-                        # Convertir les ensembles en listes
-                        if isinstance(value, set):
-                            serializable_user[key] = list(value)
+                    for key, val in user_data.items():
+                        # Convertir les sets en listes
+                        if isinstance(val, set):
+                            serializable_user[key] = list(val)
                         else:
-                            serializable_user[key] = value
+                            serializable_user[key] = val
                     
                     serializable_stats["users"][ip] = serializable_user
-
-                # Log pour comprendre ce qu'on sauvegarde
-                user_count = len(serializable_stats.get("users", {}))
-                watch_times = {}
-                for ip, data in serializable_stats.get("users", {}).items():
-                    watch_times[ip] = data.get("total_watch_time", 0)
-
-                logger.info(
-                    f"💾 Sauvegarde des stats utilisateurs: {user_count} utilisateurs avec temps: {watch_times}"
-                )
 
                 # Sauvegarde effective
                 with open(self.user_stats_file, "w") as f:
                     json.dump(serializable_stats, f, indent=2)
 
-                logger.info(
-                    f"✅ Stats utilisateurs sauvegardées dans {self.user_stats_file}"
-                )
+                logger.info(f"✅ Stats utilisateurs sauvegardées dans {self.user_stats_file}")
                 return True
             except Exception as e:
                 logger.error(f"❌ Erreur sauvegarde stats utilisateurs: {e}")
                 import traceback
-
                 logger.error(traceback.format_exc())
-                return False
-            
+                return False        
     def update_user_stats(self, ip, channel_name, duration, user_agent=None):
         """Met à jour les stats par utilisateur"""
         with self.lock:
