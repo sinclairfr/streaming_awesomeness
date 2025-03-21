@@ -125,6 +125,18 @@ class IPTVManager:
                     )
             except Exception as e:
                 logger.error(f"❌ Erreur lors de la lecture du fichier de log: {e}")
+                
+        # statistiques
+        self.stats_collector = StatsCollector()
+        # Vérifier si le StatsCollector est correctement initialisé
+        if not hasattr(self.stats_collector, "stats") or not self.stats_collector.stats:
+            logger.warning("⚠️ Réinitialisation du StatsCollector qui était invalide")
+            self.stats_collector = StatsCollector()
+
+        # Forcer une sauvegarde initiale des deux fichiers
+        self.stats_collector.save_stats()
+        self.stats_collector.save_user_stats()
+        logger.info("✅ StatsCollector initialisé et vérifié")
 
         # Démarrage du client_monitor une seule fois
         self.client_monitor.start()
@@ -149,13 +161,6 @@ class IPTVManager:
         self.watchers_thread = threading.Thread(target=self._watchers_loop, daemon=True)
         self.running = True
 
-        # statistiques
-        # Dans la méthode __init__ de IPTVManager
-        self.stats_collector = StatsCollector()
-        # Vérifier si le StatsCollector est correctement initialisé
-        if not hasattr(self.stats_collector, "stats") or not self.stats_collector.stats:
-            logger.warning("⚠️ Réinitialisation du StatsCollector qui était invalide")
-            self.stats_collector = StatsCollector()
 
         # Forcer une sauvegarde initiale pour vérifier que tout fonctionne
         self.stats_collector.save_stats()
