@@ -12,7 +12,7 @@ class WatcherTimer:
         self.stats_collector = stats_collector
         self.start_time = time.time()
         self.last_update = time.time()
-        self.is_running = True
+        self._running = True
         self._thread = threading.Thread(target=self._timer_loop, daemon=True)
         self._thread.start()
         
@@ -20,10 +20,10 @@ class WatcherTimer:
     
     def stop(self):
         """Arrête le minuteur et enregistre le temps final"""
-        if not self.is_running:
+        if not self._running:
             return
 
-        self.is_running = False
+        self._running = False
         end_time = time.time()
         watch_time = end_time - self.last_update
 
@@ -34,7 +34,7 @@ class WatcherTimer:
     
     def _timer_loop(self):
         """Boucle principale du minuteur"""
-        while self.is_running:
+        while self._running:
             current_time = time.time()
             watch_time = current_time - self.last_update
 
@@ -48,7 +48,7 @@ class WatcherTimer:
     
     def is_running(self) -> bool:
         """Vérifie si le minuteur est actif"""
-        return self.is_running
+        return self._running
     
     def get_total_time(self) -> float:
         """Retourne le temps total de visionnage"""

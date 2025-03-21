@@ -30,7 +30,7 @@ class ClientMonitor(threading.Thread):
         self.stats_collector = stats_collector
 
         # dictionnaire pour stocker les watchers actifs avec leurs minuteurs
-        self.watchers = {}  # {(channel, ip): {"timer": WatcherTimer, "last_seen": time, "type": str}}
+        self.watchers = {}  # {ip: {"timer": WatcherTimer, "last_seen": time, "type": str, "current_channel": str}}
 
         # dictionnaire pour stocker les segments demandés par chaque canal
         self.segments_by_channel = {}  # {channel: {segment_id: last_requested_time}}
@@ -272,8 +272,7 @@ class ClientMonitor(threading.Thread):
                         "last_seen": current_time,
                         "type": request_type,
                         "user_agent": user_agent,
-                        "last_channel": channel,  # Initialisation de la dernière chaîne vue
-                        "current_channel": channel  # Chaîne actuellement regardée
+                        "current_channel": channel
                     }
                     logger.info(f"🆕 Nouveau watcher détecté: {ip} sur {channel}")
             else:
@@ -286,24 +285,57 @@ class ClientMonitor(threading.Thread):
                         self.watchers[ip]["timer"].stop()
                         logger.info(f"⏱️ Arrêt du minuteur pour {ip} sur {old_channel}")
                     # Créer un nouveau minuteur pour la nouvelle chaîne
-                    self.watchers[ip]["timer"] = WatcherTimer(channel, ip, self.stats_collector)
-                    self.watchers[ip]["last_channel"] = old_channel
+                    timer = WatcherTimer(channel, ip, self.stats_collector)
+                    self.watchers[ip]["timer"] = timer
                     self.watchers[ip]["current_channel"] = channel
 
-                # Mise à jour des informations du watcher existant
+                # Mise à jour des infos
                 self.watchers[ip]["last_seen"] = current_time
                 self.watchers[ip]["type"] = request_type
                 self.watchers[ip]["user_agent"] = user_agent
 
-            # Log pour debug
-            logger.debug(f"🔍 Requête: {ip} → {channel} ({request_type})")
-
-            # Si c'est une requête de segment, on l'enregistre
+            # Traiter la requête
             if request_type == "segment":
                 self._handle_segment_request(channel, ip, line, user_agent)
 
-            # Mise à jour du compteur global
-            self._update_channel_watchers_count(channel)
+            # Mettre à jour le compteur de watchers pour cette chaîne
+            active_ips = set()
+            ip_times = {}  # Pour stocker le temps d'activité de chaque IP
+
+            for ip in self.watchers:
+                if self.watchers[ip].get("current_channel") == channel and "timer" in self.watchers[ip]:
+                    # Vérifier si le timer est actif
+                    timer = self.watchers[ip]["timer"]
+                    if timer.is_running():
+                        active_ips.add(ip)
+                        ip_times[ip] = timer.get_total_time()
+            
+            # Nombre de segments pour cette chaîne
+            segment_count = len(self.segments_by_channel.get(channel, {}))
+            
+            # Afficher les watchers actifs
+            if active_ips:
+                # Trier par temps de visionnage
+                sorted_ips = sorted(
+                    [(ip, ip_times.get(ip, 0)) for ip in active_ips],
+                    key=lambda x: x[1],
+                    reverse=True
+                )
+                
+                # Afficher les top 5
+                top_watchers = [f"{ip} ({time:.1f}s)" for ip, time in sorted_ips[:5]]
+                logger.info(f"[{channel}] 👁️ Top watchers: {', '.join(top_watchers)}")
+                
+            # Log total
+            logger.info(
+                f"[{channel}] 📊 {len(active_ips)} watchers actifs, {segment_count} segments"
+            )
+
+            # Appeler le callback du manager avec le nombre de watchers actifs
+            if hasattr(self, 'update_watchers') and callable(self.update_watchers):
+                self.update_watchers(channel, len(active_ips), "/hls/")
+            else:
+                logger.error(f"[{channel}] ❌ Callback update_watchers non disponible")
 
     def _check_log_file_exists(self, retry_count, max_retries):
         """Vérifie si le fichier de log existe et est accessible"""
@@ -472,10 +504,16 @@ class ClientMonitor(threading.Thread):
 
                 # Calcule les watchers actifs pour cette chaîne
                 active_ips = set()
-                for (ch, watcher_ip), last_seen in self.watchers.items():
-                    if ch == channel and current_time - last_seen < 60:
-                        active_ips.add(watcher_ip)
+                ip_times = {}  # Pour stocker le temps d'activité de chaque IP
 
+                for ip, data in self.watchers.items():
+                    if data.get("current_channel") == channel and "timer" in data:
+                        # Vérifier si le timer est actif
+                        timer = data["timer"]
+                        if timer.is_running():
+                            active_ips.add(ip)
+                            ip_times[ip] = timer.get_total_time()
+                
                 # Nombre de watchers pour cette chaîne
                 count = len(active_ips)
 
@@ -513,10 +551,17 @@ class ClientMonitor(threading.Thread):
 
         # Heartbeat périodique
         if current_time - last_heartbeat_time > 60:  # Toutes les minutes
+            active_count = 0
+            for ip, data in self.watchers.items():
+                if isinstance(data, dict) and "timer" in data:
+                    timer = data["timer"]
+                    if timer.is_running():
+                        active_count += 1
+                        
             logger.info(
-                f"💓 ClientMonitor actif, dernière activité il y a {current_time - last_activity_time:.1f}s"
+                f"💓 Heartbeat: {active_count} watchers actifs, {len(self.segments_by_channel)} chaînes en suivi"
             )
-            tasks_executed = True
+            last_heartbeat_time = current_time
 
             # Vérification périodique du fichier
             if not self._verify_log_file_integrity(file_handle):
@@ -563,9 +608,8 @@ class ClientMonitor(threading.Thread):
             # Vérifier si c'est la même chaîne que la dernière vue par cette IP
             # On utilise uniquement l'IP comme clé pour le suivi des chaînes
             if ip in self.watchers:
-                last_channel = self.watchers[ip].get("last_channel")
-                current_channel = self.watchers[ip].get("current_channel")
-                logger.debug(f"📊 Traitement segment pour {ip}: dernière chaîne={last_channel}, chaîne actuelle={current_channel}, segment={segment_id}")
+                last_channel = self.watchers[ip].get("current_channel")
+                logger.debug(f"📊 Traitement segment pour {ip}: dernière chaîne={last_channel}, chaîne actuelle={channel}, segment={segment_id}")
                 
                 if last_channel != channel:
                     # Si la chaîne a changé, on arrête l'ancien minuteur
@@ -574,7 +618,7 @@ class ClientMonitor(threading.Thread):
                         logger.info(f"⏱️ Arrêt du minuteur pour {ip} sur {last_channel}")
                     
                     # On met à jour la dernière chaîne vue
-                    self.watchers[ip]["last_channel"] = channel
+                    self.watchers[ip]["current_channel"] = channel
                     logger.info(f"🔄 Changement de chaîne détecté pour {ip}: {last_channel} -> {channel}")
             
             logger.debug(f"📈 Ajout de {segment_duration}s de temps de visionnage pour {ip} sur {channel}")
@@ -594,10 +638,16 @@ class ClientMonitor(threading.Thread):
         with self.lock:
             # Compter les watchers actifs pour cette chaîne
             active_ips = set()
+            ip_times = {}  # Pour stocker le temps d'activité de chaque IP
+
             for ip, data in self.watchers.items():
-                if data.get("current_channel") == channel and "timer" in data and data["timer"].is_running():
-                    active_ips.add(ip)
-                    
+                if data.get("current_channel") == channel and "timer" in data:
+                    # Vérifier si le timer est actif
+                    timer = data["timer"]
+                    if timer.is_running():
+                        active_ips.add(ip)
+                        ip_times[ip] = timer.get_total_time()
+            
             # Nombre de watchers
             watcher_count = len(active_ips)
             
@@ -608,9 +658,7 @@ class ClientMonitor(threading.Thread):
                 self.update_watchers(channel, watcher_count, "/hls/")
             else:
                 logger.error(f"[{channel}] ❌ Callback update_watchers non disponible")
-            else:
-                logger.error(f"[{channel}] ❌ Callback update_watchers non disponible")
-            
+
     def _prepare_log_file(self):
         """Vérifie que le fichier de log existe et est accessible"""
         if not os.path.exists(self.log_path):
@@ -759,12 +807,8 @@ class ClientMonitor(threading.Thread):
             active_ips = set()
             ip_times = {}  # Pour stocker le temps d'activité de chaque IP
 
-            for (ch, ip), data in self.watchers.items():
-                if ch != channel:
-                    continue
-
-                # Vérifier que c'est un dictionnaire avec un timer
-                if isinstance(data, dict) and "timer" in data and data["timer"].is_running():
+            for ip, data in self.watchers.items():
+                if data.get("current_channel") == channel:
                     active_ips.add(ip)
                     ip_times[ip] = data["timer"].get_total_time()
 
@@ -844,10 +888,15 @@ class ClientMonitor(threading.Thread):
 
                 # Heartbeat périodique
                 if current_time - last_heartbeat_time > 60:
-                    active_count = len(set(ch for (ch, _), data in self.watchers.items() 
-                                         if isinstance(data, dict) and "timer" in data and data["timer"].is_running()))
+                    active_count = 0
+                    for ip, data in self.watchers.items():
+                        if isinstance(data, dict) and "timer" in data:
+                            timer = data["timer"]
+                            if timer.is_running():
+                                active_count += 1
+                    
                     logger.info(
-                        f"💓 ClientMonitor actif (pos: {position}/{current_size}), {active_count} chaînes actives"
+                        f"💓 Heartbeat: {active_count} watchers actifs, {len(self.segments_by_channel)} chaînes en suivi"
                     )
                     last_heartbeat_time = current_time
 

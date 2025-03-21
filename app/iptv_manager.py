@@ -65,6 +65,9 @@ class IPTVManager:
         self.channels = {}
         self.channel_ready_status = {}  # Pour suivre l'état de préparation des chaînes
         self.log_path = NGINX_ACCESS_LOG  # Ajout du chemin du log
+        self._active_watchers = {}  # Dictionnaire pour stocker les IPs actives par chaîne
+        self.watchers = {}  # Dictionnaire pour stocker les watchers avec timestamp
+        self.lock = threading.Lock()  # Verrou pour éviter les accès concurrents
 
         # Queue pour les chaînes à initialiser en parallèle
         self.channel_init_queue = Queue()
@@ -119,6 +122,11 @@ class IPTVManager:
         self.stats_collector.save_stats()
         self.stats_collector.save_user_stats()
         logger.info("✅ StatsCollector initialisé et vérifié")
+
+        # Thread de nettoyage des watchers inactifs
+        self.cleanup_thread = threading.Thread(target=self._cleanup_thread_loop, daemon=True)
+        self.cleanup_thread.start()
+        logger.info("🧹 Thread de nettoyage des watchers démarré")
 
         # Moniteur clients
         logger.info(f"🚀 Démarrage du client_monitor avec {NGINX_ACCESS_LOG}")
@@ -563,8 +571,13 @@ class IPTVManager:
             # Pour toutes les chaînes avec des watchers
             updates = 0
             for name, channel in self.channels.items():
-                # Récupérer les IPs actives pour ce canal
-                active_ips = self._get_active_watcher_ips(name)
+                # Récupérer les IPs actives pour cette chaîne
+                active_ips = set()
+                if hasattr(self, 'client_monitor') and hasattr(self.client_monitor, 'watchers'):
+                    for ip, data in self.client_monitor.watchers.items():
+                        if data.get("current_channel") == name:
+                            active_ips.add(ip)
+                
                 if active_ips:
                     # Ajouter le temps pour chaque IP active
                     for ip in active_ips:
@@ -585,62 +598,93 @@ class IPTVManager:
             return False
 
     def _update_watcher(self, ip, channel, request_type, user_agent, line):
-        logger.info(f"🔄 Mise à jour du watcher: {ip} sur {channel}")
         """Met à jour les informations d'un watcher spécifique"""
         with self.lock:
             current_time = time.time()
             
-            # Si le watcher n'existe pas, créer un nouveau minuteur
-            if ip not in self.watchers:
-                if self.stats_collector:
-                    timer = WatcherTimer(channel, ip, self.stats_collector)
-                    self.watchers[ip] = {
-                        "timer": timer,
-                        "last_seen": current_time,
-                        "type": request_type,
-                        "user_agent": user_agent,
-                        "last_channel": channel,  # Historique
-                        "current_channel": channel  # Chaîne actuelle
-                    }
-                    logger.info(f"🆕 Nouveau watcher détecté: {ip} sur {channel}")
-            else:
-                # Vérifier si la chaîne a changé
-                old_channel = self.watchers[ip].get("current_channel")
-                if old_channel != channel:
-                    logger.info(f"🔄 Changement de chaîne pour {ip}: {old_channel} -> {channel}")
-                    # Arrêter l'ancien minuteur
-                    if "timer" in self.watchers[ip]:
-                        self.watchers[ip]["timer"].stop()
-                        logger.info(f"⏱️ Arrêt du minuteur pour {ip} sur {old_channel}")
-                    # Créer un nouveau minuteur pour la nouvelle chaîne
-                    timer = WatcherTimer(channel, ip, self.stats_collector)
-                    self.watchers[ip]["timer"] = timer
-                    self.watchers[ip]["last_channel"] = old_channel
-                    self.watchers[ip]["current_channel"] = channel  # MAJ chaîne actuelle
-
-                # Mise à jour des infos
-                self.watchers[ip]["last_seen"] = current_time
-                self.watchers[ip]["type"] = request_type
-                self.watchers[ip]["user_agent"] = user_agent
-
+            # Si le channel n'est pas dans _active_watchers, l'initialiser
+            if channel not in self._active_watchers:
+                self._active_watchers[channel] = set()
+                
+            # Ajouter l'IP aux watchers actifs pour ce channel
+            self._active_watchers[channel].add(ip)
+            
+            # Mettre à jour le timestamp pour ce watcher
+            self.watchers[(channel, ip)] = current_time
+                
+            # Log pour debug
+            logger.debug(f"🔄 Mise à jour du watcher: {ip} sur {channel} (type: {request_type})")
+            
             # Traiter la requête
-            if request_type == "segment":
-                self._handle_segment_request(channel, ip, line, user_agent)
+            if request_type == "segment" and hasattr(self, "stats_collector") and self.stats_collector:
+                # Ajouter du temps de visionnage (4 secondes par segment est une bonne estimation)
+                self.stats_collector.add_watch_time(channel, ip, 4.0)
 
             # Mettre à jour le compteur de watchers pour cette chaîne
-            self._update_channel_watchers_count(channel)
+            watcher_count = len(self._active_watchers[channel])
+            if channel in self.channels:
+                channel_obj = self.channels[channel]
+                channel_obj.watchers_count = watcher_count
+                channel_obj.last_watcher_time = current_time
+                
+            logger.info(f"[{channel}] 👁️ Watchers: {watcher_count} actifs - IPs: {', '.join(self._active_watchers[channel])}")
+
     def _get_active_watcher_ips(self, channel_name):
-        """Récupère les IPs des watchers actifs pour une chaîne"""
-        active_ips = []
-        
-        # Si on a accès au client_monitor et ses watchers
-        if hasattr(self, "client_monitor") and hasattr(self.client_monitor, "watchers"):
-            # Parcourir tous les watchers du client_monitor
-            for (ch, ip), data in self.client_monitor.watchers.items():
-                if ch == channel_name:
-                    active_ips.append(ip)
-        
-        return active_ips
+        """Récupère la liste des IPs actives pour une chaîne"""
+        with self.lock:
+            # Si la chaîne est dans notre dictionnaire, renvoyer les IPs actifs
+            if channel_name in self._active_watchers:
+                return self._active_watchers[channel_name]
+            
+            # Sinon, tenter de récupérer depuis client_monitor
+            if hasattr(self, 'client_monitor') and hasattr(self.client_monitor, 'watchers'):
+                active_ips = set()
+                for ip, data in self.client_monitor.watchers.items():
+                    if data.get("current_channel") == channel_name:
+                        active_ips.add(ip)
+                return active_ips
+                
+            # Aucune information trouvée
+            return set()
+
+    def update_watchers(self, channel_name: str, watcher_count: int, path: str = "/hls/"):
+        """Met à jour le nombre de watchers pour une chaîne"""
+        if channel_name not in self.channels:
+            logger.warning(f"⚠️ Tentative de mise à jour des watchers pour une chaîne inexistante: {channel_name}")
+            return
+
+        # Mise à jour du compteur de watchers
+        channel = self.channels[channel_name]
+        channel.watchers_count = watcher_count
+        channel.last_watcher_time = time.time()
+
+        # Si la chaîne n'a plus de watchers et le timeout est dépassé, on l'arrête
+        if watcher_count == 0 and time.time() - channel.last_watcher_time > TIMEOUT_NO_VIEWERS:
+            logger.info(f"[{channel_name}] ⏱️ Plus de watchers depuis {TIMEOUT_NO_VIEWERS}s, arrêt de la chaîne")
+            self._stop_channel(channel_name)
+
+        # Mise à jour des statistiques si le stats_collector est disponible
+        if hasattr(self, 'stats_collector') and self.stats_collector and watcher_count > 0:
+            # Récupérer les IPs actives pour cette chaîne depuis le client_monitor
+            active_ips = set()
+            if hasattr(self, 'client_monitor') and hasattr(self.client_monitor, 'watchers'):
+                for ip, data in self.client_monitor.watchers.items():
+                    if data.get("current_channel") == channel_name:
+                        active_ips.add(ip)
+            
+            # Si pas d'IPs depuis client_monitor, utiliser notre propre dictionnaire
+            if not active_ips and channel_name in self._active_watchers:
+                active_ips = self._active_watchers[channel_name]
+            
+            # Mise à jour du temps de visionnage pour chaque IP active
+            if active_ips:
+                logger.debug(f"[{channel_name}] 🔄 Mise à jour temps de visionnage pour {len(active_ips)} IPs")
+                for ip in active_ips:
+                    self.stats_collector.add_watch_time(channel_name, ip, 5.0)  # 5 secondes de visionnage
+            
+            # Sauvegarder les statistiques
+            self.stats_collector.save_stats()
+            self.stats_collector.save_user_stats()
 
     def _log_channels_summary(self):
         """Génère et affiche un récapitulatif de l'état des chaînes"""
@@ -1180,3 +1224,43 @@ class IPTVManager:
         except Exception as e:
             logger.error(f"🔥 Erreur manager : {e}")
             self.cleanup_manager()
+
+    def _cleanup_inactive(self):
+        """Nettoie les watchers inactifs"""
+        current_time = time.time()
+        inactive_watchers = []
+
+        # Identifier les watchers inactifs
+        with self.lock:
+            for (channel, ip), last_seen_time in self.watchers.items():
+                # Si pas d'activité depuis plus de 60 secondes
+                if current_time - last_seen_time > 60:  # 1 minute d'inactivité
+                    inactive_watchers.append((channel, ip))
+                    logger.debug(f"⏱️ Watcher {ip} inactif depuis {current_time - last_seen_time:.1f}s sur {channel}")
+
+            # Supprimer les watchers inactifs et mettre à jour les chaînes affectées
+            channels_to_update = set()
+            for (channel, ip) in inactive_watchers:
+                # Supprimer des watchers
+                if (channel, ip) in self.watchers:
+                    del self.watchers[(channel, ip)]
+                
+                # Supprimer de _active_watchers
+                if channel in self._active_watchers and ip in self._active_watchers[channel]:
+                    self._active_watchers[channel].remove(ip)
+                    channels_to_update.add(channel)
+                    logger.info(f"🧹 Suppression du watcher inactif: {ip} sur {channel}")
+
+            # Mettre à jour les compteurs de watchers pour les chaînes affectées
+            for channel in channels_to_update:
+                if channel in self.channels:
+                    watcher_count = len(self._active_watchers.get(channel, set()))
+                    self.channels[channel].watchers_count = watcher_count
+                    self.channels[channel].last_watcher_time = current_time
+                    logger.info(f"[{channel}] 👁️ Mise à jour après nettoyage: {watcher_count} watchers actifs")
+
+    def _cleanup_thread_loop(self):
+        """Thread de nettoyage des watchers inactifs"""
+        while True:
+            time.sleep(60)  # Vérification toutes les minutes
+            self._cleanup_inactive()
