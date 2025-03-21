@@ -4,6 +4,8 @@ import subprocess
 import psutil
 from config import logger
 import os
+from pathlib import Path
+import shutil
 from config import (
     RESOURCES_CHECK_INTERVAL,
     CPU_CHECK_INTERVAL,

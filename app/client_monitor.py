@@ -7,8 +7,15 @@ from typing import Dict, Tuple, List, Set
 import re
 from config import TIMEOUT_NO_VIEWERS
 
+os.environ['TZ'] = 'Europe/Paris'
+time.tzset()  # Applique le changement
 
 class ClientMonitor(threading.Thread):
+
+    # Timeouts pour les différents types de requêtes (en secondes)
+    SEGMENT_TIMEOUT = 30
+    PLAYLIST_TIMEOUT = 20
+    UNKNOWN_TIMEOUT = 25
 
     def __init__(self, log_path, update_watchers_callback, manager):
         super().__init__(daemon=True)
@@ -55,83 +62,65 @@ class ClientMonitor(threading.Thread):
 
     def _cleanup_inactive(self):
         """Version optimisée du nettoyage avec détection rapide des watchers inactifs"""
-        now = time.time()
-
-        # Timeouts spécifiques par type de requête - plus courts qu'avant
-        segment_timeout = 30  # 30 secondes (avant: 60)
-        playlist_timeout = 20  # 20 secondes (avant: 30)
-        unknown_timeout = 25  # 25 secondes (avant: 45)
-
-        to_remove = []
+        current_time = time.time()
         affected_channels = set()
 
-        with self.lock:
-            # Trouver les watchers inactifs
-            for (channel, ip), data in self.watchers.items():
-                # Déterminer le type de requête et le timestamp
-                if isinstance(data, dict):
-                    last_seen = data.get("time", 0)
-                    req_type = data.get("type", "unknown")
-                else:
-                    last_seen = data
-                    req_type = "unknown"
+        for (channel, ip), data in list(self.watchers.items()):
+            if isinstance(data, dict):
+                last_seen = data.get("time", 0)
+                req_type = data.get("type", "unknown")
+            else:
+                last_seen = data
+                req_type = "unknown"
 
-                # Appliquer le timeout approprié selon le type
-                timeout = (
-                    segment_timeout
-                    if req_type == "segment"
-                    else playlist_timeout if req_type == "playlist" else unknown_timeout
+            timeout = (
+                self.SEGMENT_TIMEOUT
+                if req_type == "segment"
+                else (
+                    self.PLAYLIST_TIMEOUT
+                    if req_type == "playlist"
+                    else self.UNKNOWN_TIMEOUT
                 )
+            )
 
-                # Marquer pour suppression si inactif
-                if now - last_seen > timeout:
-                    to_remove.append((channel, ip))
-                    if channel != "master_playlist":
-                        affected_channels.add(channel)
+            if current_time - last_seen > timeout:
+                del self.watchers[(channel, ip)]
+                affected_channels.add(channel)
 
-            # Supprimer les watchers inactifs
-            for key in to_remove:
-                if key in self.watchers:
-                    if key[0] != "master_playlist":
-                        logger.info(
-                            f"🗑️ Watcher supprimé: {key[1]} → {key[0]} (inactif depuis {now - self.watchers[key]:.1f}s)"
+        # Recalculer le nombre de watchers pour chaque chaîne affectée
+        for channel in affected_channels:
+            # Compter les viewers actifs
+            active_ips = set()
+            for (ch, ip), data in self.watchers.items():
+                if ch == channel:
+                    # Refaire la vérification pour être cohérent
+                    if isinstance(data, dict):
+                        last_seen = data.get("time", 0)
+                        req_type = data.get("type", "unknown")
+                    else:
+                        last_seen = data
+                        req_type = "unknown"
+
+                    timeout = (
+                        self.SEGMENT_TIMEOUT
+                        if req_type == "segment"
+                        else (
+                            self.PLAYLIST_TIMEOUT
+                            if req_type == "playlist"
+                            else self.UNKNOWN_TIMEOUT
                         )
-                    del self.watchers[key]
-
-            # Recalculer le nombre de watchers pour chaque chaîne affectée
-            for channel in affected_channels:
-                # Compter les viewers actifs
-                active_ips = set()
-                for (ch, ip), data in self.watchers.items():
-                    if ch == channel:
-                        # Refaire la vérification pour être cohérent
-                        if isinstance(data, dict):
-                            last_seen = data.get("time", 0)
-                            req_type = data.get("type", "unknown")
-                        else:
-                            last_seen = data
-                            req_type = "unknown"
-
-                        timeout = (
-                            segment_timeout
-                            if req_type == "segment"
-                            else (
-                                playlist_timeout
-                                if req_type == "playlist"
-                                else unknown_timeout
-                            )
-                        )
-
-                        if now - last_seen <= timeout:
-                            active_ips.add(ip)
-
-                count = len(active_ips)
-                if count > 0 or channel in self.manager.channels:
-                    # On force la mise à jour, même si count=0
-                    logger.info(
-                        f"[{channel}] 🔄 Mise à jour après nettoyage: {count} watchers actifs"
                     )
-                    self.update_watchers(channel, count, "/hls/")
+
+                    if current_time - last_seen <= timeout:
+                        active_ips.add(ip)
+
+            count = len(active_ips)
+            if count > 0 or channel in self.manager.channels:
+                # On force la mise à jour, même si count=0
+                logger.info(
+                    f"[{channel}] 🔄 Mise à jour après nettoyage: {count} watchers actifs"
+                )
+                self.update_watchers(channel, count, "/hls/")
 
     def _print_channels_summary(self):
         """Affiche un récapitulatif des chaînes et de leur état"""
@@ -247,24 +236,39 @@ class ClientMonitor(threading.Thread):
 
     def _update_stats(self, ip, channel, request_type, segment_id=None):
         """Mise à jour des statistiques via le StatsCollector"""
-        if (
-            not hasattr(self.manager, "stats_collector")
-            or not self.manager.stats_collector
-        ):
+        if not hasattr(self.manager, "stats_collector") or not self.manager.stats_collector:
             return
 
         stats = self.manager.stats_collector
+        current_time = time.time()
+
+        # Initialisation des dictionnaires de timestamps si nécessaire
+        if not hasattr(self, "last_segment_time"):
+            self.last_segment_time = {}
+        if not hasattr(self, "last_playlist_time"):
+            self.last_playlist_time = {}
 
         # Déterminer la durée à ajouter selon le type de requête
         if request_type == "segment":
-            # Les segments sont typiquement de 2-4 secondes
-            duration = 4.0
-            # ...
+            # Pour les segments, on utilise la durée réelle depuis la dernière requête
+            if channel in self.last_segment_time:
+                duration = current_time - self.last_segment_time[channel]
+                # On limite la durée maximale à 10 secondes pour éviter les anomalies
+                duration = min(duration, 10.0)
+            else:
+                duration = 4.0  # Durée par défaut si pas de timestamp précédent
+            self.last_segment_time[channel] = current_time
         elif request_type == "playlist":
-            # Les playlists sont des heartbeats, on ajoute une petite durée
-            duration = 0.5
+            # Pour les playlists, on utilise un intervalle plus court car c'est un heartbeat
+            if channel in self.last_playlist_time:
+                duration = current_time - self.last_playlist_time[channel]
+                # On limite la durée maximale à 5 secondes pour les heartbeats
+                duration = min(duration, 5.0)
+            else:
+                duration = 0.5
+            self.last_playlist_time[channel] = current_time
         else:
-            # Pour les autres types, on ajoute une durée minimale
+            # Pour les autres types, on utilise une durée minimale
             duration = 0.1
 
         # Ajout du temps de visionnage
@@ -286,6 +290,7 @@ class ClientMonitor(threading.Thread):
         # MAJ du timestamp uniquement
         try:
             current_time = time.time()
+            logger.debug(f"[CLIENT_MONITOR_DEBUG] Traitement ligne: {line[:100]}...")
 
             # Créer une structure pour suivre le temps passé par utilisateur/chaîne
             if not hasattr(self, "watcher_times"):
@@ -305,6 +310,7 @@ class ClientMonitor(threading.Thread):
                     elapsed_time = min(
                         30, current_time - old_time
                     )  # Max 30 secondes entre requêtes
+                    logger.debug(f"[CLIENT_MONITOR_DEBUG] Temps écoulé depuis dernière requête: {elapsed_time:.1f}s")
 
                 # On stocke des informations complètes pour ce watcher
                 self.watchers[(channel, ip)] = {
@@ -319,16 +325,19 @@ class ClientMonitor(threading.Thread):
                 if request_type == "segment":
                     # Si c'est un segment, la durée est soit le temps écoulé, soit au moins 4s par segment
                     duration = max(elapsed_time, 4.0)
+                    logger.debug(f"[CLIENT_MONITOR_DEBUG] Segment détecté - Durée calculée: {duration:.1f}s")
                 elif request_type == "playlist":
                     # Pour les playlists, c'est un heartbeat: au moins 0.5s
                     duration = max(elapsed_time * 0.5, 0.5)
+                    logger.debug(f"[CLIENT_MONITOR_DEBUG] Playlist détectée - Durée calculée: {duration:.1f}s")
                 else:
                     # Pour les autres types, au moins 0.1s
                     duration = max(elapsed_time * 0.1, 0.1)
+                    logger.debug(f"[CLIENT_MONITOR_DEBUG] Autre type de requête - Durée calculée: {duration:.1f}s")
 
                 # Ajouter un log détaillé pour comprendre ce qui se passe
                 logger.info(
-                    f"⏱️ {channel}: Ajout de {duration:.1f}s pour {ip} (elapsed: {elapsed_time:.1f}s, type: {request_type})"
+                    f"[CLIENT_MONITOR] ⏱️ {channel}: Ajout de {duration:.1f}s pour {ip} (elapsed: {elapsed_time:.1f}s, type: {request_type})"
                 )
 
                 # CRITICAL FIX: Mise à jour explicite des stats ici
@@ -337,6 +346,7 @@ class ClientMonitor(threading.Thread):
                     hasattr(self.manager, "stats_collector")
                     and self.manager.stats_collector
                 ):
+                    logger.debug(f"[CLIENT_MONITOR_DEBUG] Mise à jour des stats via stats_collector")
                     self.manager.stats_collector.add_watch_time(channel, ip, duration)
                     self.manager.stats_collector.update_user_stats(
                         ip, channel, duration, user_agent
@@ -360,7 +370,7 @@ class ClientMonitor(threading.Thread):
                         ).start()
                         self.last_save_times[watcher_key] = current_time
                         logger.info(
-                            f"💾 Sauvegarde forcée des stats pour {channel}:{ip}"
+                            f"[CLIENT_MONITOR] 💾 Sauvegarde forcée des stats pour {channel}:{ip}"
                         )
 
                 # Grouper les mises à jour par chaîne
@@ -368,13 +378,10 @@ class ClientMonitor(threading.Thread):
                     self.modified_channels = set()
                 self.modified_channels.add(channel)
 
-                # Extraction du segment_id reste inchangée...
-
         except Exception as e:
-            logger.error(f"❌ Erreur traitement ligne: {e}")
+            logger.error(f"[CLIENT_MONITOR_ERROR] ❌ Erreur traitement ligne: {e}")
             import traceback
-
-            logger.error(traceback.format_exc())
+            logger.error(f"[CLIENT_MONITOR_ERROR] {traceback.format_exc()}")
 
     def _check_log_file_exists(self, retry_count, max_retries):
         """Vérifie si le fichier de log existe et est accessible"""
@@ -702,6 +709,7 @@ class ClientMonitor(threading.Thread):
         """Calcule et met à jour le nombre de watchers actifs pour une chaîne"""
         # Calcul des watchers actifs par IP
         active_ips = set()
+        current_time = time.time()
 
         for (ch, watcher_ip), data in self.watchers.items():
             if ch != channel:
@@ -713,12 +721,14 @@ class ClientMonitor(threading.Thread):
                 data.get("type", "unknown") if isinstance(data, dict) else "unknown"
             )
 
-            # Différents délais selon le type de requête
-            if (
-                (watcher_type == "segment" and time.time() - watcher_time < 60)
-                or (watcher_type == "playlist" and time.time() - watcher_time < 30)
-                or (watcher_type == "unknown" and time.time() - watcher_time < 45)
-            ):
+            # Utiliser les mêmes timeouts que dans _cleanup_inactive
+            timeout = (
+                self.SEGMENT_TIMEOUT
+                if watcher_type == "segment"
+                else self.PLAYLIST_TIMEOUT if watcher_type == "playlist" else self.UNKNOWN_TIMEOUT
+            )
+
+            if current_time - watcher_time <= timeout:
                 active_ips.add(watcher_ip)
 
         active_watchers = len(active_ips)

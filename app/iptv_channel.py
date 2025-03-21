@@ -1089,6 +1089,7 @@ class IPTVChannel:
             logger.error(f"[{self.name}] ❌ Erreur vérification VideoProcessor: {e}")
             return False
 
+
     def _handle_process_died(self, return_code):
         """Gère la mort du processus FFmpeg"""
         logger.error(
@@ -1124,16 +1125,17 @@ class IPTVChannel:
                 else False
             )
 
-        # CHANGEMENT: Ne pas traiter SIGKILL (-9) différemment des autres codes
-        # On utilise l'error handler pour tous les cas de mort du processus
+        # Même sans spectateurs, on traite l'erreur dans handler
         if hasattr(self, "error_handler"):
-            self.error_handler.add_error("PROCESS_DIED")
-        return (
-            parent_channel._restart_stream()
-            if hasattr(parent_channel, "_restart_stream")
-            else False
-        )
-
+            self.error_handler.add_error(f"PROCESS_DIED_{return_code}")
+        
+        # Si pas de spectateurs et que le code est normal (0), on ne fait rien
+        if return_code == 0:
+            logger.info(f"[{self.channel_name}] ✅ Processus terminé normalement avec code 0")
+            return True
+        
+        # Pour les autres erreurs sans spectateurs, on peut redémarrer uniquement si channel le demande explicitement
+        return False
     def _handle_segment_created(self, segment_path, size):
         """Gère la création d'un nouveau segment HLS"""
         if self.logger:

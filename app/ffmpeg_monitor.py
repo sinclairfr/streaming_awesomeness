@@ -30,10 +30,7 @@ class FFmpegMonitor(threading.Thread):
         """
         # Limiter la fréquence d'exécution
         current_time = time.time()
-        if (
-            hasattr(self, "last_check_time")
-            and current_time - self.last_check_time < 30
-        ):
+        if hasattr(self, "last_check_time") and current_time - self.last_check_time < 30:
             # Au maximum toutes les 30 secondes
             return
 
@@ -72,10 +69,7 @@ class FFmpegMonitor(threading.Thread):
             if not hasattr(self, "last_inspect_time"):
                 self.last_inspect_time = {}
 
-            if (
-                channel_name not in self.last_inspect_time
-                or current_time - self.last_inspect_time[channel_name] > 300
-            ):
+            if channel_name not in self.last_inspect_time or current_time - self.last_inspect_time[channel_name] > 300:
                 logger.info(
                     f"[{channel_name}] - nombre de process : {len(pids)} - temps depuis dernier watcher : {time_since_last_watcher:.1f}s"
                 )
@@ -89,8 +83,10 @@ class FFmpegMonitor(threading.Thread):
                     )
                 elif time_since_last_watcher > TIMEOUT_NO_VIEWERS:
                     logger.warning(
-                        f"⚠️ {channel_name}: Processus FFmpeg inactif depuis {time_since_last_watcher:.1f}s"
+                        f"⚠️ {channel_name}: Processus FFmpeg inactif depuis {time_since_last_watcher:.1f}s, arrêt programmé"
                     )
+                    # Ajout critique - on arrête le stream directement, sans passer par la fonction  
+                    channel.stop_stream_if_needed()  # AJOUT IMPORTANT
 
                 # Ajouter un délai aléatoire avant le nettoyage pour éviter les cascades
                 jitter = random.uniform(0.5, 3.0)
@@ -105,13 +101,32 @@ class FFmpegMonitor(threading.Thread):
     def _watchers_loop(self):
         """Surveille l'activité des watchers et arrête les streams inutilisés"""
         last_log_time = 0
-        log_cycle = WATCHERS_LOG_CYCLE
+        last_health_check = 0
+        last_summary_time = 0  # Nouveau compteur pour le récapitulatif
+        log_cycle = WATCHERS_LOG_CYCLE  # Augmenter à 60s au lieu de 10s
+        summary_cycle = SUMMARY_CYCLE  # 5 minutes par défaut
 
         while True:
             try:
                 current_time = time.time()
-                channels_checked = set()
                 channels_to_stop = []
+
+                # Ajout du health check toutes les 5 minutes
+                if current_time - last_health_check > 300:  # 5 minutes
+                    for channel_name, channel in self.channels.items():
+                        if hasattr(channel, "channel_health_check"):
+                            try:
+                                channel.channel_health_check()
+                            except Exception as e:
+                                logger.error(
+                                    f"[{channel_name}] ❌ Erreur health check: {e}"
+                                )
+                    last_health_check = current_time
+
+                # Générer le récapitulatif des chaînes
+                if current_time - last_summary_time > summary_cycle:
+                    self._log_channels_summary()
+                    last_summary_time = current_time
 
                 # Pour chaque chaîne, on vérifie l'inactivité
                 for channel_name, channel in self.channels.items():
@@ -128,36 +143,41 @@ class FFmpegMonitor(threading.Thread):
                                 f"[{channel_name}] ⚠️ Stream inactif depuis {inactivity_duration:.1f}s, arrêt programmé"
                             )
                             channels_to_stop.append(channel)
+                            
+                            # CORRECTION: Forcer l'arrêt immédiat pour les streams très inactifs
+                            if inactivity_duration > TIMEOUT_NO_VIEWERS * 2:  # Double timeout = forcer l'arrêt
+                                logger.error(
+                                    f"[{channel_name}] 🔥 Inactivité CRITIQUE ({inactivity_duration:.1f}s), arrêt forcé"
+                                )
+                                channel.stop_stream_if_needed()
 
-                    channels_checked.add(channel_name)
-
-                # Arrêt des chaînes sans watchers avec délai
+                # Arrêt des chaînes sans watchers (avec un délai pour éviter les cascades)
                 for i, channel in enumerate(channels_to_stop):
-                    # Délai pour éviter arrêt en cascade
+                    # Ajout d'un petit délai entre les arrêts (0.5s entre chaque)
                     time.sleep(i * 0.5)
                     channel.stop_stream_if_needed()
 
-                # Log périodique condensé seulement pour les chaînes avec viewers
+                # Log périodique des watchers actifs (moins fréquent)
                 if current_time - last_log_time > log_cycle:
                     active_channels = []
                     for name, channel in sorted(self.channels.items()):
-                        count = getattr(channel, "watchers_count", 0)
-                        if count > 0:
-                            active_channels.append(f"{name}: {count}")
+                        if (
+                            hasattr(channel, "watchers_count")
+                            and channel.watchers_count > 0
+                        ):
+                            active_channels.append(f"{name}: {channel.watchers_count}")
 
-                    if active_channels:  # Ne loggue que s'il y a des viewers actifs
+                    if active_channels:
                         logger.info(
                             f"👥 Chaînes avec viewers: {', '.join(active_channels)}"
                         )
-
                     last_log_time = current_time
 
-                time.sleep(10)  # On garde 10s pour réagir rapidement
+                time.sleep(10)  # Vérification toutes les 10s
 
             except Exception as e:
                 logger.error(f"❌ Erreur watchers_loop: {e}")
                 time.sleep(10)
-
     def _save_stats_periodically(self):
         """Sauvegarde périodiquement les statistiques"""
         if hasattr(self.channels, "stats_collector") and self.channels.stats_collector:
