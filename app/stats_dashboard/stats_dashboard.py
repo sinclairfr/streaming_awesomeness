@@ -8,6 +8,7 @@ import json
 import os
 from datetime import datetime, timedelta
 import numpy as np
+import time
 
 # Chemin vers les fichiers de statistiques
 STATS_DIR = "/app/stats"
@@ -128,6 +129,58 @@ def format_time(seconds):
     seconds = int(seconds % 60)
     return f"{hours:02d}h {minutes:02d}m {seconds:02d}s"
 
+def create_channels_grid(channel_stats):
+    """Creates a grid of channel cards with status indicators"""
+    
+    # Process channel data
+    current_time = time.time()
+    channels_data = []
+    
+    for channel, stats in channel_stats.get("channels", {}).items():
+        last_update = stats.get("last_update", 0)
+        viewers = len(stats.get("unique_viewers", []))
+        # Une chaîne est active si elle a au moins un spectateur
+        is_active = viewers > 0
+        watch_time = stats.get("total_watch_time", 0)
+        last_seen = datetime.fromtimestamp(last_update).strftime('%H:%M:%S')
+        
+        channels_data.append({
+            "name": channel,
+            "active": is_active,
+            "viewers": viewers,
+            "watch_time": watch_time,
+            "last_seen": last_seen
+        })
+    
+    # Sort channels: active ones first, then alphabetically
+    channels_data.sort(key=lambda x: (not x["active"], x["name"].lower()))
+    
+    # Create grid of cards
+    cards = []
+    for ch in channels_data:
+        status_color = "#2ecc71" if ch["active"] else "#e74c3c"  # Green or red
+        status_text = "ACTIVE" if ch["active"] else "INACTIVE"
+        
+        card = html.Div([
+            html.Div([
+                html.Div(status_text, className="channel-status-badge", 
+                         style={"backgroundColor": status_color}),
+                html.H3(ch["name"], className="channel-card-title"),
+                html.Div([
+                    html.P(f"{ch['viewers']} {'viewers' if ch['viewers'] != 1 else 'viewer'}", 
+                           className="channel-card-stat"),
+                    html.P(f"Last activity: {ch['last_seen']}", 
+                           className="channel-card-stat"),
+                    html.P(f"Total watch time: {format_time(ch['watch_time'])}", 
+                           className="channel-card-stat")
+                ], className="channel-card-stats")
+            ], className="channel-card-content")
+        ], className="channel-card")
+        
+        cards.append(card)
+    
+    return html.Div(cards, className="channel-grid")
+
 # Initialiser l'application Dash
 app = dash.Dash(__name__, 
                 title="IPTV Stats Dashboard",
@@ -165,6 +218,13 @@ app.layout = html.Div([
         html.Div([
             html.H2("Détails par Utilisateur"),
             html.Div(id="user-details", className="stats-container")
+        ], className="twelve columns")
+    ], className="row"),
+
+    html.Div([
+        html.Div([
+            html.H2("Statut des Chaînes en Direct"),
+            html.Div(id="live-channels-container", className="live-channels-container")
         ], className="twelve columns")
     ], className="row"),
     
@@ -283,6 +343,20 @@ def update_dashboard(n):
     
     return global_stats, pie_fig, bar_fig, user_fig, user_details
 
+# Callback pour mettre à jour le statut des chaînes en direct
+@app.callback(
+    Output("live-channels-container", "children"),
+    [Input("interval-component", "n_intervals")]
+)
+def update_live_channels(n):
+    # Charger les données
+    channel_stats, _ = load_stats()
+    
+    # Créer la grille de chaînes
+    grid = create_channels_grid(channel_stats)
+    
+    return grid
+
 # CSS pour le dashboard
 app.index_string = '''
 <!DOCTYPE html>
@@ -369,6 +443,58 @@ app.index_string = '''
             .user-detail-box p {
                 margin: 5px 0;
                 color: #7f8c8d;
+            }
+            .live-channels-container {
+                background-color: #fff;
+                border-radius: 5px;
+                box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+                padding: 15px;
+                overflow-x: auto;
+            }
+            .channel-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+                gap: 15px;
+            }
+            .channel-card {
+                background-color: #fff;
+                border-radius: 5px;
+                box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+                overflow: hidden;
+                transition: transform 0.2s, box-shadow 0.2s;
+            }
+            .channel-card:hover {
+                transform: translateY(-5px);
+                box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+            }
+            .channel-card-content {
+                padding: 15px;
+                position: relative;
+            }
+            .channel-status-badge {
+                position: absolute;
+                top: 10px;
+                right: 10px;
+                padding: 5px 10px;
+                border-radius: 3px;
+                font-size: 12px;
+                font-weight: bold;
+                color: white;
+            }
+            .channel-card-title {
+                margin-top: 5px;
+                margin-bottom: 15px;
+                color: #2c3e50;
+                font-size: 18px;
+                font-weight: bold;
+            }
+            .channel-card-stats {
+                margin-top: 10px;
+            }
+            .channel-card-stat {
+                margin: 5px 0;
+                color: #7f8c8d;
+                font-size: 14px;
             }
             @media (max-width: 768px) {
                 .six.columns {
