@@ -20,6 +20,7 @@ from config import (
     logger,
     CONTENT_DIR,
     USE_GPU,
+    CRASH_THRESHOLD,
 )
 from video_processor import verify_file_ready, get_accurate_duration
 
@@ -419,13 +420,13 @@ class IPTVChannel:
             logger.error(f"[{self.name}] Erreur analyse segments: {e}")
             return {"success": False, "error": str(e), "segments": []}
 
-    def _handle_timeouts(self, current_time=None, crash_threshold=60):
+    def _handle_timeouts(self, current_time=None, crash_threshold=None):
         """
         Gère les timeouts et redémarre le stream si nécessaire
 
         Args:
             current_time: Temps actuel (calculé automatiquement si None)
-            crash_threshold: Seuil en secondes pour considérer un crash
+            crash_threshold: Seuil en secondes pour considérer un crash (utilise CRASH_THRESHOLD si None)
 
         Returns:
             bool: True si action entreprise, False sinon
@@ -433,6 +434,10 @@ class IPTVChannel:
         # Si pas de temps fourni, on prend le temps actuel
         if current_time is None:
             current_time = time.time()
+
+        # Utiliser le seuil fourni ou celui de l'environnement
+        if crash_threshold is None:
+            crash_threshold = CRASH_THRESHOLD
 
         # On vérifie que last_segment_time existe
         if not hasattr(self, "last_segment_time"):
@@ -753,7 +758,7 @@ class IPTVChannel:
                 current_time = time.time()
 
                 # Vérification des timeouts toutes les 10 secondes
-                self._handle_timeouts(current_time, crash_threshold=60)
+                self._handle_timeouts(current_time)
 
                 # Health check toutes les 30 secondes
                 if not hasattr(self, "last_health_check") or current_time - self.last_health_check >= 30:
@@ -943,7 +948,14 @@ class IPTVChannel:
                 self._health_check_count = 0
             self._health_check_count += 1
             
-            logger.info(f"[{self.name}] 🩺 Health check #{self._health_check_count} - Stream running: {self.process_manager.is_running()}, Watchers: {getattr(self, 'watchers_count', 0)}")
+            # Add startup grace period tracking
+            if not hasattr(self, "_startup_time"):
+                self._startup_time = time.time()
+            
+            current_time = time.time()
+            startup_duration = current_time - self._startup_time
+            
+            logger.info(f"[{self.name}] 🩺 Health check #{self._health_check_count} - Stream running: {self.process_manager.is_running()}, Watchers: {getattr(self, 'watchers_count', 0)}, Startup duration: {startup_duration:.1f}s")
             
             # 1. Check if the process is running
             if not self.process_manager.is_running():
@@ -959,61 +971,95 @@ class IPTVChannel:
             hls_dir = Path(f"/app/hls/{self.name}")
             segments = list(hls_dir.glob("*.ts")) if hls_dir.exists() else []
             
+            # Check playlist.m3u8 with startup grace period
+            playlist_path = hls_dir / "playlist.m3u8"
+            if not playlist_path.exists():
+                # During startup grace period, be more lenient with playlist generation
+                if startup_duration < 180:  # 3 minutes grace period
+                    logger.info(f"[{self.name}] ℹ️ Still in startup grace period ({startup_duration:.1f}s), waiting for playlist.m3u8...")
+                    return True
+                else:
+                    logger.error(f"[{self.name}] ❌ playlist.m3u8 introuvable après {startup_duration:.1f}s")
+            
             if not segments:
                 logger.warning(f"[{self.name}] ⚠️ No segments found even though process is running")
                 
-                # Restart the stream if there are watchers
-                if hasattr(self, "watchers_count") and self.watchers_count > 0:
-                    logger.info(f"[{self.name}] 🔄 Auto-restarting stream due to missing segments")
-                    self.stop_stream_if_needed()
-                    time.sleep(2)  # Wait for cleanup
-                    return self.start_stream()
-            else:
-                # Check if segments are recent and consistent
-                newest_segment = max(segments, key=lambda p: p.stat().st_mtime)
-                segment_age = time.time() - newest_segment.stat().st_mtime
-                
-                # Check segment sizes for consistency
-                segment_sizes = [p.stat().st_size for p in segments[-5:]]  # Last 5 segments
-                if segment_sizes:
-                    avg_size = sum(segment_sizes) / len(segment_sizes)
-                    size_variation = max(abs(s - avg_size) for s in segment_sizes)
-                    
-                    # If segment sizes vary too much, it might indicate a problem
-                    if size_variation > avg_size * 0.5:  # 50% variation threshold
-                        logger.warning(f"[{self.name}] ⚠️ Inconsistent segment sizes detected (variation: {size_variation:.1f} bytes)")
-                        if hasattr(self, "watchers_count") and self.watchers_count > 0:
-                            logger.info(f"[{self.name}] 🔄 Auto-restarting stream due to inconsistent segments")
-                            self.stop_stream_if_needed()
-                            time.sleep(2)
-                            return self.start_stream()
-                
-                if segment_age > 60:  # No new segments in 1 minute
-                    logger.warning(f"[{self.name}] ⚠️ Segments too old (last: {segment_age:.1f}s ago)")
-                    
-                    # Restart if there are watchers
-                    if hasattr(self, "watchers_count") and self.watchers_count > 0:
-                        logger.info(f"[{self.name}] 🔄 Auto-restarting stream due to stale segments")
-                        self.stop_stream_if_needed()
-                        time.sleep(2)
-                        return self.start_stream()
-                
-                # Check playlist.m3u8 for consistency
-                playlist_path = hls_dir / "playlist.m3u8"
+                # Check if playlist.m3u8 exists and is valid
                 if playlist_path.exists():
                     try:
                         with open(playlist_path, 'r') as f:
                             playlist_content = f.read()
-                            # Check if playlist has proper structure and recent segments
-                            if "#EXTM3U" not in playlist_content or "#EXT-X-VERSION" not in playlist_content:
-                                logger.warning(f"[{self.name}] ⚠️ Invalid playlist.m3u8 structure detected")
-                                if hasattr(self, "watchers_count") and self.watchers_count > 0:
-                                    logger.info(f"[{self.name}] 🔄 Auto-restarting stream due to invalid playlist")
-                                    self.stop_stream_if_needed()
-                                    time.sleep(2)
-                                    return self.start_stream()
+                            if "#EXTM3U" in playlist_content:
+                                logger.info(f"[{self.name}] ℹ️ playlist.m3u8 exists and is valid, waiting for segments...")
+                                return True
                     except Exception as e:
                         logger.error(f"[{self.name}] ❌ Error reading playlist.m3u8: {e}")
+                
+                # During startup grace period, be more lenient
+                if startup_duration < 180:  # 3 minutes grace period
+                    logger.info(f"[{self.name}] ℹ️ Still in startup grace period ({startup_duration:.1f}s), waiting for segments...")
+                    return True
+                
+                # If we have active watchers and outside grace period, restart the stream
+                if hasattr(self, "watchers_count") and self.watchers_count > 0:
+                    logger.info(f"[{self.name}] 🔄 Auto-restarting stream due to missing segments")
+                    return self.start_stream()
+                return False
+            
+            # Check segment age with different thresholds based on startup phase
+            if segments:
+                # Extract segment numbers and sort them
+                segment_numbers = []
+                for seg in segments:
+                    try:
+                        # Extract number from filename (e.g., "segment_123.ts" -> 123)
+                        num = int(seg.stem.split('_')[1])
+                        segment_numbers.append((num, seg))
+                    except (ValueError, IndexError):
+                        continue
+                
+                if segment_numbers:
+                    # Sort by segment number
+                    segment_numbers.sort(key=lambda x: x[0])
+                    
+                    # Get the latest segment number and file
+                    latest_num, latest_segment = segment_numbers[-1]
+                    
+                    # Check if we have a reasonable number of segments
+                    if len(segment_numbers) >= 2:
+                        # Get the second latest segment
+                        second_latest_num, second_latest_segment = segment_numbers[-2]
+                        
+                        # Calculate the gap between segments
+                        gap = latest_num - second_latest_num
+                        
+                        # If gap is reasonable (1 or 2), use the latest segment
+                        if gap <= 2:
+                            segment_age = current_time - latest_segment.stat().st_mtime
+                        else:
+                            # If gap is too large, use the second latest segment
+                            segment_age = current_time - second_latest_segment.stat().st_mtime
+                    else:
+                        # If we only have one segment, use it
+                        segment_age = current_time - latest_segment.stat().st_mtime
+                    
+                    # More lenient threshold during startup
+                    threshold = 180 if startup_duration < 180 else 120  # 3 minutes during startup, 2 minutes after
+                    
+                    if segment_age > threshold:
+                        logger.warning(f"[{self.name}] ⚠️ Segments too old (last: {segment_age:.1f}s ago, threshold: {threshold}s)")
+                        
+                        # During startup grace period, be more lenient
+                        if startup_duration < 180:
+                            logger.info(f"[{self.name}] ℹ️ Still in startup grace period ({startup_duration:.1f}s), waiting for segments...")
+                            return True
+                        
+                        # Restart if there are watchers and outside grace period
+                        if hasattr(self, "watchers_count") and self.watchers_count > 0:
+                            logger.info(f"[{self.name}] 🔄 Auto-restarting stream due to stale segments")
+                            self.stop_stream_if_needed()
+                            time.sleep(2)
+                            return self.start_stream()
             
             return True
             

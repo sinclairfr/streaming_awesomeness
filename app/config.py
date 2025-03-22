@@ -23,6 +23,7 @@ VIDEO_EXTENSIONS = os.getenv("VIDEO_EXTENSIONS", ".mp4,.avi,.mkv,.mov, .m4v").sp
 SEGMENT_AGE_THRESHOLD = int(os.getenv("SEGMENT_AGE_THRESHOLD", "120"))
 WATCHERS_LOG_CYCLE = int(os.getenv("WATCHERS_LOG_CYCLE", "300"))  # 5 minutes par défaut
 SUMMARY_CYCLE = int(os.getenv("SUMMARY_CYCLE", "300"))  # 5 minutes par défaut
+CRASH_THRESHOLD = int(os.getenv("CRASH_THRESHOLD", "120"))  # Seuil en secondes pour considérer un crash de stream
 
 
 def get_log_level(level_str: str) -> int:

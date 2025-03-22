@@ -338,10 +338,33 @@ class FFmpegProcessManager:
                 self.stop_process()
                 time.sleep(2)  # Attendre que le processus soit bien arrêté
             
+            # Vérifier que le processus est bien arrêté
+            if self.process and self.process.poll() is None:
+                logger.warning(f"[{self.channel_name}] ⚠️ Le processus n'est pas arrêté, tentative de kill forcé")
+                try:
+                    self.process.kill()
+                    time.sleep(1)
+                except Exception as e:
+                    logger.error(f"[{self.channel_name}] ❌ Erreur lors du kill forcé: {e}")
+            
             # Redémarrer avec le même offset
             if self.process:
                 command = self.process.args
                 hls_dir = command[-1].rsplit('/', 1)[0]  # Extraire le dossier HLS du chemin de sortie
+                
+                # Vérifier que le dossier HLS existe
+                if not os.path.exists(hls_dir):
+                    logger.warning(f"[{self.channel_name}] ⚠️ Dossier HLS introuvable, création: {hls_dir}")
+                    os.makedirs(hls_dir, exist_ok=True)
+                
+                # Nettoyer les anciens segments
+                for f in os.listdir(hls_dir):
+                    if f.endswith('.ts'):
+                        try:
+                            os.remove(os.path.join(hls_dir, f))
+                        except Exception as e:
+                            logger.warning(f"[{self.channel_name}] ⚠️ Erreur suppression segment {f}: {e}")
+                
                 success = self.start_process(command, hls_dir)
                 
                 if success:

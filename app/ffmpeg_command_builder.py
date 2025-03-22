@@ -51,6 +51,7 @@ class FFmpegCommandBuilder:
             # Assemblage de la commande complète
             command = input_params + encoding_params + hls_params
 
+
             # Vérification et correction du chemin de sortie
             output_file = command[-1]
             if not output_file.startswith("/app/hls/"):
