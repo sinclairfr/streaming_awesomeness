@@ -14,6 +14,7 @@ import time
 STATS_DIR = "/app/stats"
 USER_STATS_FILE = os.path.join(STATS_DIR, "user_stats.json")
 CHANNEL_STATS_FILE = os.path.join(STATS_DIR, "channel_stats.json")
+CHANNELS_STATUS_FILE = os.path.join(STATS_DIR, "channels_status.json")
 
 def load_stats():
     """Charge et nettoie les données de statistiques"""
@@ -151,18 +152,16 @@ def create_channels_grid(channel_stats):
     channels_data = []
     
     for channel, stats in channel_stats.get("channels", {}).items():
-        last_update = stats.get("last_update", 0)
-        viewers = len(stats.get("unique_viewers", []))
-        # Une chaîne est active si elle a au moins un spectateur
-        is_active = viewers > 0
-        watch_time = stats.get("total_watch_time", 0)
-        last_seen = datetime.fromtimestamp(last_update).strftime('%H:%M:%S')
+        is_active = stats.get("active", False)
+        is_streaming = stats.get("streaming", False)
+        viewers = stats.get("viewers", 0)
+        last_seen = datetime.fromtimestamp(stats.get("last_update", current_time)).strftime('%H:%M:%S')
         
         channels_data.append({
             "name": channel,
-            "active": is_active,
+            "active": is_active and is_streaming,  # Une chaîne est active si elle est active ET en streaming
+            "streaming": is_streaming,
             "viewers": viewers,
-            "watch_time": watch_time,
             "last_seen": last_seen
         })
     
@@ -172,8 +171,16 @@ def create_channels_grid(channel_stats):
     # Create grid of cards
     cards = []
     for ch in channels_data:
-        status_color = "#2ecc71" if ch["active"] else "#e74c3c"  # Green or red
-        status_text = "ACTIVE" if ch["active"] else "INACTIVE"
+        # Déterminer la couleur du badge en fonction du statut
+        if ch["viewers"] > 0:
+            status_color = "#2ecc71"  # Vert pour actif avec viewers
+            status_text = "ACTIVE"
+        elif ch["active"]:
+            status_color = "#f1c40f"  # Jaune pour actif sans viewers
+            status_text = "NO VIEWERS"
+        else:
+            status_color = "#e74c3c"  # Rouge pour inactif
+            status_text = "INACTIVE"
         
         card = html.Div([
             html.Div([
@@ -184,8 +191,6 @@ def create_channels_grid(channel_stats):
                     html.P(f"{ch['viewers']} {'viewers' if ch['viewers'] != 1 else 'viewer'}", 
                            className="channel-card-stat"),
                     html.P(f"Last activity: {ch['last_seen']}", 
-                           className="channel-card-stat"),
-                    html.P(f"Total watch time: {format_time(ch['watch_time'])}", 
                            className="channel-card-stat")
                 ], className="channel-card-stats")
             ], className="channel-card-content")
@@ -244,7 +249,7 @@ app.layout = html.Div([
     
     dcc.Interval(
         id='interval-component',
-        interval=10*1000,  # 10 secondes en millisecondes
+        interval=2*1000,  # 2 secondes en millisecondes
         n_intervals=0
     )
 ], className="dashboard-container")
@@ -363,11 +368,15 @@ def update_dashboard(n):
     [Input("interval-component", "n_intervals")]
 )
 def update_live_channels(n):
-    # Charger les données
-    channel_stats, _ = load_stats()
+    # Charger les données de statut en direct
+    try:
+        with open(CHANNELS_STATUS_FILE, 'r') as f:
+            channel_status = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        channel_status = {"channels": {}}
     
     # Créer la grille de chaînes
-    grid = create_channels_grid(channel_stats)
+    grid = create_channels_grid(channel_status)
     
     return grid
 

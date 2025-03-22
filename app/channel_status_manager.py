@@ -20,7 +20,7 @@ class ChannelStatusManager:
         self.stats_dir = Path(stats_dir)
         self.status_file = self.stats_dir / "channels_status.json"
         self.lock = threading.Lock()
-        self.update_interval = 10  # Update every 10 seconds
+        self.update_interval = 2  # Update every 2 seconds
         
         # Create stats dir if needed
         self.stats_dir.mkdir(parents=True, exist_ok=True)
