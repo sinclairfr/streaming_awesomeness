@@ -290,7 +290,7 @@ class StatsCollector:
                 with open(self.user_stats_file, "w") as f:
                     json.dump(serializable_stats, f, indent=2)
 
-                logger.info(f"✅ Stats utilisateurs sauvegardées dans {self.user_stats_file}")
+                logger.debug(f"✅ Stats utilisateurs sauvegardées dans {self.user_stats_file}")
                 return True
             except Exception as e:
                 logger.error(f"❌ Erreur sauvegarde stats utilisateurs: {e}")
@@ -302,7 +302,7 @@ class StatsCollector:
         """Met à jour les stats par utilisateur"""
         with self.lock:
             # Log initial
-            logger.info(f"👤 Mise à jour stats utilisateur: {ip} sur {channel_name} (+{duration:.1f}s)")
+            logger.debug(f"👤 Mise à jour stats utilisateur: {ip} sur {channel_name} (+{duration:.1f}s)")
 
             # S'assurer que user_stats et users existent
             if not hasattr(self, "user_stats"):
@@ -488,7 +488,7 @@ class StatsCollector:
                     self.last_daily_save = now
                     logger.info(f"📊 Sauvegarde quotidienne des stats: {daily_file}")
 
-                logger.info(
+                logger.debug(
                     f"📊 Statistiques sauvegardées ({len(self.stats)} chaînes, {len(self.global_stats['unique_viewers'])} spectateurs uniques)"
                 )
                 return True

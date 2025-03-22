@@ -49,3 +49,18 @@ services:
     depends_on:
       - iptv-manager
     restart: unless-stopped
+
+  stats-dashboard:
+    build: 
+      context: ./app/stats_dashboard
+      dockerfile: Dockerfile
+    container_name: iptv-stats-dashboard
+    ports:
+      - "8050:8050"
+    volumes:
+      - ./app/stats:/app/stats
+    environment:
+      - TZ=Europe/Paris
+    depends_on:
+      - iptv-manager
+    restart: unless-stopped

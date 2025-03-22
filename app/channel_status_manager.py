@@ -49,10 +49,10 @@ class ChannelStatusManager:
         """Clean the status file at startup"""
         try:
             if self.status_file.exists():
-                # Backup the old file with timestamp
-                backup_file = self.status_file.with_suffix(f'.json.bak.{int(time.time())}')
-                shutil.copy2(self.status_file, backup_file)
-                logger.info(f"✅ Backup of old status file created: {backup_file}")
+                # # Backup the old file with timestamp
+                # backup_file = self.status_file.with_suffix(f'.json.bak.{int(time.time())}')
+                # shutil.copy2(self.status_file, backup_file)
+                # logger.info(f"✅ Backup of old status file created: {backup_file}")
                 
                 # Create new empty status file
                 with open(self.status_file, 'w') as f:
@@ -173,7 +173,7 @@ class ChannelStatusManager:
                 # Force save immediately
                 success = self._save_status()
                 if success:
-                    logger.info(f"✅ Statuts sauvegardés avec succès: {total_viewers} viewers au total")
+                    logger.debug(f"✅ Statuts sauvegardés avec succès: {total_viewers} viewers au total")
                 else:
                     logger.error("❌ Échec de la sauvegarde des statuts")
                 

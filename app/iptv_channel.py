@@ -1211,29 +1211,17 @@ class IPTVChannel:
             return False
 
     def _notify_manager_ready(self):
-        """Notifie le manager que cette chaîne est prête"""
+        """Notifie le manager que cette chaîne est prête pour le streaming"""
         try:
-            # Trouve le manager dans les frames
-            import inspect
-
-            frame = inspect.currentframe()
-            while frame:
-                if "self" in frame.f_locals:
-                    obj = frame.f_locals["self"]
-                    if hasattr(obj, "channels") and hasattr(
-                        obj, "channel_ready_status"
-                    ):
-                        manager = obj
-                        with manager.scan_lock:
-                            manager.channel_ready_status[self.name] = True
-                        logger.info(
-                            f"[{self.name}] ✅ Statut 'prêt' mis à jour dans le manager"
-                        )
-                        # Forcer la mise à jour de la playlist
-                        threading.Thread(
-                            target=manager._manage_master_playlist, daemon=True
-                        ).start()
+            # On cherche le manager dans le registre global des chaînes
+            if hasattr(FFmpegProcessManager, "all_channels"):
+                for name, channel in FFmpegProcessManager.all_channels.items():
+                    if name == self.name:
+                        # On met à jour le statut dans le manager
+                        if hasattr(channel, "manager") and channel.manager:
+                            with channel.manager.scan_lock:
+                                channel.manager.channel_ready_status[self.name] = True
+                            logger.info(f"[{self.name}] ✅ Statut 'prêt' mis à jour dans le manager")
                         break
-                frame = frame.f_back
         except Exception as e:
             logger.error(f"[{self.name}] ❌ Erreur notification manager: {e}")

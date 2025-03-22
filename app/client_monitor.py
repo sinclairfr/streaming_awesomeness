@@ -655,6 +655,11 @@ class ClientMonitor(threading.Thread):
     def _update_channel_watchers_count(self, channel):
         """Calcule et met à jour le nombre de watchers pour une chaîne"""
         with self.lock:
+            # Vérifier si on doit logger (au moins 2 secondes entre les logs)
+            current_time = time.time()
+            if hasattr(self, "last_watchers_log") and current_time - self.last_watchers_log < 2.0:
+                return
+                
             # Compter les watchers actifs pour cette chaîne
             active_ips = set()
             ip_times = {}  # Pour stocker le temps d'activité de chaque IP
@@ -670,7 +675,14 @@ class ClientMonitor(threading.Thread):
             # Nombre de watchers
             watcher_count = len(active_ips)
             
-            logger.info(f"[{channel}] 👁️ Watchers: {watcher_count} actifs - IPs: {', '.join(active_ips)}")
+            # Log uniquement si le nombre a changé
+            if not hasattr(self, "last_watcher_counts"):
+                self.last_watcher_counts = {}
+            
+            if channel not in self.last_watcher_counts or self.last_watcher_counts[channel] != watcher_count:
+                logger.info(f"[{channel}] 👁️ Watchers: {watcher_count} actifs - IPs: {', '.join(active_ips)}")
+                self.last_watcher_counts[channel] = watcher_count
+                self.last_watchers_log = current_time
             
             # Mise à jour dans le manager
             if hasattr(self, 'update_watchers') and callable(self.update_watchers):

@@ -70,10 +70,21 @@ class IPTVManager:
         self._active_watchers = {}  # Dictionnaire pour stocker les IPs actives par chaîne
         self.watchers = {}  # Dictionnaire pour stocker les watchers avec timestamp
         self.lock = threading.Lock()  # Verrou pour éviter les accès concurrents
+        
+        # Initialisation de last_position pour le suivi des logs
+        self.last_position = 0
+        if os.path.exists(self.log_path):
+            with open(self.log_path, "r") as f:
+                f.seek(0, 2)  # Se positionner à la fin du fichier
+                self.last_position = f.tell()
+                logger.info(f"📝 Position initiale de lecture des logs: {self.last_position} bytes")
+
+        self.watchers = {}  # Dictionnaire pour stocker les watchers avec timestamp
+        self.lock = threading.Lock()  # Verrou pour éviter les accès concurrents
 
         # Queue pour les chaînes à initialiser en parallèle
         self.channel_init_queue = Queue()
-        self.max_parallel_inits = 3  # Nombre max d'initialisations parallèles
+        self.max_parallel_inits = 5  # Augmenté de 3 à 5 pour plus de parallélisation
         self.active_init_threads = 0
         self.init_threads_lock = threading.Lock()
 
@@ -370,6 +381,9 @@ class IPTVManager:
                 stats_collector=self.stats_collector,  # Ajout du stats_collector
             )
 
+            # Ajoute la référence au manager
+            channel.manager = self
+
             # Ajoute la chaîne au dictionnaire
             with self.scan_lock:
                 self.channels[channel_name] = channel
@@ -412,48 +426,44 @@ class IPTVManager:
                         channel = self.channels[name]
                         if channel.ready_for_streaming:
                             ready_channels.append(name)
+                            logger.info(f"✅ Chaîne {name} prête pour le démarrage automatique")
 
-            if (
-                len(ready_channels) >= len(self.channels) * 0.5
-            ):  # Au moins 50% des chaînes sont prêtes
+            if len(ready_channels) >= len(self.channels) * 0.5:  # Au moins 50% des chaînes sont prêtes
                 break
 
-            logger.info(
-                f"⏳ Seulement {len(ready_channels)}/{len(self.channels)} chaînes prêtes, attente supplémentaire ({attempt+1}/2)..."
-            )
+            logger.info(f"⏳ Seulement {len(ready_channels)}/{len(self.channels)} chaînes prêtes, attente supplémentaire ({attempt+1}/2)...")
             time.sleep(5)  # Réduit de 10 à 5 secondes
 
         # Trier pour prévisibilité
         ready_channels.sort()
+        logger.info(f"📋 Liste des chaînes à démarrer: {ready_channels}")
 
         # Limiter le CPU pour éviter saturation
         max_parallel = 4
-        groups = [
-            ready_channels[i : i + max_parallel]
-            for i in range(0, len(ready_channels), max_parallel)
-        ]
+        groups = [ready_channels[i:i + max_parallel] for i in range(0, len(ready_channels), max_parallel)]
 
         for group_idx, group in enumerate(groups):
-            logger.info(
-                f"🚀 Démarrage du groupe {group_idx+1}/{len(groups)} ({len(group)} chaînes)"
-            )
+            logger.info(f"🚀 Démarrage du groupe {group_idx+1}/{len(groups)} ({len(group)} chaînes)")
 
             # Démarrer chaque chaîne du groupe avec un petit délai entre elles
             for i, channel_name in enumerate(group):
                 delay = i * 1  # Réduit de 3 à 1 seconde entre chaque chaîne
-                threading.Timer(delay, self._start_channel, args=[channel_name]).start()
-                logger.info(
-                    f"[{channel_name}] ⏱️ Démarrage programmé dans {delay} secondes"
-                )
+                logger.info(f"[{channel_name}] ⏱️ Démarrage programmé dans {delay} secondes")
+                
+                # Vérifier que la chaîne est toujours prête avant de la démarrer
+                if channel_name in self.channels and self.channels[channel_name].ready_for_streaming:
+                    threading.Timer(delay, self._start_channel, args=[channel_name]).start()
+                else:
+                    logger.warning(f"⚠️ La chaîne {channel_name} n'est plus prête pour le démarrage")
 
             # Attendre avant le prochain groupe
             if group_idx < len(groups) - 1:
-                time.sleep(max_parallel * 2)  # Réduit de 5 à 2 secondes par chaîne entre les groupes
+                wait_time = max_parallel * 2  # Réduit de 5 à 2 secondes par chaîne entre les groupes
+                logger.info(f"⏳ Attente de {wait_time}s avant le prochain groupe...")
+                time.sleep(wait_time)
 
         if ready_channels:
-            logger.info(
-                f"✅ {len(ready_channels)} chaînes programmées pour démarrage automatique"
-            )
+            logger.info(f"✅ {len(ready_channels)} chaînes programmées pour démarrage automatique")
         else:
             logger.warning("⚠️ Aucune chaîne prête à démarrer")
 
@@ -468,17 +478,15 @@ class IPTVManager:
                     if success:
                         logger.info(f"[{channel_name}] ✅ Démarrage automatique réussi")
                     else:
-                        logger.error(
-                            f"[{channel_name}] ❌ Échec du démarrage automatique"
-                        )
+                        logger.error(f"[{channel_name}] ❌ Échec du démarrage automatique")
                 else:
-                    logger.warning(
-                        f"[{channel_name}] ⚠️ Non prête pour le streaming, démarrage ignoré"
-                    )
+                    logger.warning(f"[{channel_name}] ⚠️ Non prête pour le streaming, démarrage ignoré")
+            else:
+                logger.error(f"[{channel_name}] ❌ Chaîne non trouvée dans le dictionnaire")
         except Exception as e:
-            logger.error(
-                f"[{channel_name}] ❌ Erreur lors du démarrage automatique: {e}"
-            )
+            logger.error(f"[{channel_name}] ❌ Erreur lors du démarrage automatique: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
 
     def _get_current_watchers(self):
         """Get current watchers from nginx logs and client_monitor"""
@@ -598,7 +606,7 @@ class IPTVManager:
                 # Log uniquement si des changements ont été effectués
                 active_channels = len([c for c in stats_data["channels"].values() if c["unique_viewers"]])
                 total_viewers = len(stats_data["global"]["unique_viewers"])
-                logger.info(f"📊 Statistiques sauvegardées ({active_channels} chaînes actives, {total_viewers} spectateurs uniques)")
+                logger.debug(f"📊 Statistiques sauvegardées ({active_channels} chaînes actives, {total_viewers} spectateurs uniques)")
             
         except Exception as e:
             logger.error(f"❌ Erreur lors de la mise à jour des stats: {e}")
@@ -924,30 +932,27 @@ class IPTVManager:
             logger.error(f"❌ Erreur génération récapitulatif: {e}")
 
     def _clean_startup(self):
-        """Nettoie avant de démarrer"""
+        """Nettoyage initial optimisé"""
         try:
             logger.info("🧹 Nettoyage initial...")
-            patterns_to_clean = [
-                ("/app/hls/**/*", "Fichiers HLS"),
-                ("/app/content/**/_playlist.txt", "Playlists"),
-                ("/app/content/**/*.vtt", "Fichiers VTT"),
-                ("/app/content/**/temp_*", "Fichiers temporaires"),
-            ]
-            for pattern, desc in patterns_to_clean:
-                count = 0
-                for f in glob.glob(pattern, recursive=True):
-                    try:
-                        if os.path.isfile(f):
-                            os.remove(f)
-                        elif os.path.isdir(f):
-                            shutil.rmtree(f)
-                        count += 1
-                    except Exception as e:
-                        logger.error(f"Erreur nettoyage {f}: {e}")
-                logger.info(f"✨ {count} {desc} supprimés")
-            os.makedirs("/app/hls", exist_ok=True)
+            
+            # Nettoyage des dossiers HLS en parallèle avec l'initialisation
+            hls_cleanup_thread = threading.Thread(
+                target=self.hls_cleaner.initial_cleanup,
+                daemon=True
+            )
+            hls_cleanup_thread.start()
+            
+            # On lance immédiatement le scan des chaînes sans attendre le nettoyage
+            self.scan_channels(force=True, initial=True)
+            
+            # On attend la fin du nettoyage HLS
+            hls_cleanup_thread.join(timeout=30)  # Timeout de 30 secondes
+            
+            logger.info("✅ Nettoyage initial terminé")
+            
         except Exception as e:
-            logger.error(f"Erreur nettoyage initial: {e}")
+            logger.error(f"❌ Erreur lors du nettoyage initial: {e}")
 
     def scan_channels(self, force: bool = False, initial: bool = False):
         """
@@ -1235,28 +1240,13 @@ class IPTVManager:
             return None, None, None, False, None
 
     def process_iptv_log_lines(self):
-        logger.info(f"[IPTV_MANAGER] 🔄 Début process_iptv_log_lines")
-        """Traite les nouvelles lignes ajoutées au fichier de log nginx"""
+        logger.debug(f"[IPTV_MANAGER] 🔄 Début process_iptv_log_lines")
+
         try:
-            # Vérification de l'existence du fichier
-            if not os.path.exists(self.log_path):
-                logger.error(f"❌ Fichier log introuvable: {self.log_path}")
-                return False
-
-            # Initialisation de la position si c'est la première exécution
-            if not hasattr(self, "last_position"):
-                # On se met à la fin du fichier pour ne traiter que les nouvelles lignes
-                with open(self.log_path, "r") as f:
-                    f.seek(0, 2)  # Positionnement à la fin
-                    self.last_position = f.tell()
+            # Vérifier si on doit logger (au moins 2 secondes entre les logs)
+            current_time = time.time()
+            if hasattr(self, "last_log_time") and current_time - self.last_log_time < 2.0:
                 return True
-
-            file_size = os.path.getsize(self.log_path)
-
-            # Si le fichier a été rotaté (taille plus petite qu'avant)
-            if file_size < self.last_position:
-                logger.warning(f"⚠️ Détection rotation log: {self.log_path}")
-                self.last_position = 0  # On repart du début
 
             # Lecture des nouvelles lignes
             with open(self.log_path, "r") as f:
@@ -1290,11 +1280,18 @@ class IPTVManager:
                 # Mise à jour groupée par chaîne
                 for channel, ips in channel_updates.items():
                     count = len(ips)
-                    logger.info(
-                        f"[{channel}] 👁️ MAJ watchers: {count} actifs - {list(ips)}"
-                    )
-                    self.update_watchers(channel, count, "/hls/")
+                    # Log uniquement si le nombre a changé
+                    if not hasattr(self, "last_watcher_counts"):
+                        self.last_watcher_counts = {}
+                    
+                    if channel not in self.last_watcher_counts or self.last_watcher_counts[channel] != count:
+                        logger.info(
+                            f"[{channel}] 👁️ MAJ watchers: {count} actifs - {list(ips)}"
+                        )
+                        self.last_watcher_counts[channel] = count
+                        self.update_watchers(channel, count, "/hls/")
 
+                self.last_log_time = current_time
                 return True
 
         except Exception as e:
