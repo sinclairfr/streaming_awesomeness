@@ -113,6 +113,13 @@ class IPTVManager:
             f"👁️ Observer configuré pour surveiller {self.content_dir} en mode récursif"
         )
 
+        # NOUVEAU: Démarrage du scan périodique
+        self.periodic_scan_interval = 300  # 5 minutes
+        self.stop_periodic_scan = threading.Event()
+        self.periodic_scan_thread = threading.Thread(target=self._periodic_scan, daemon=True)
+        self.periodic_scan_thread.start()
+        logger.info(f"🔄 Scan périodique configuré (intervalle: {self.periodic_scan_interval}s)")
+
         # NOUVEAU: Observer pour les dossiers ready_to_stream
         self.ready_observer = Observer()
         self.ready_event_handler = ReadyContentHandler(self)
@@ -916,7 +923,10 @@ class IPTVManager:
 
             # Nombre total de chaînes arrêtées
             if stopped_channels:
-                summary_lines.append(f"CHAÎNES ARRÊTÉES: {len(stopped_channels)}")
+                stopped_names = [ch['name'] for ch in stopped_channels]
+                summary_lines.append(f"CHAÎNES ARRÊTÉES: {len(stopped_channels)} ({', '.join(stopped_names)})")
+            else:
+                summary_lines.append("CHAÎNES ARRÊTÉES: Aucune")
 
             # Stats globales
             total_viewers = sum(ch["watchers"] for ch in active_with_viewers)
@@ -1542,3 +1552,25 @@ class IPTVManager:
         except Exception as e:
             logger.error(f"🔥 Erreur manager : {e}")
             self.cleanup_manager()
+
+    def _periodic_scan(self):
+        """Effectue un scan périodique des chaînes disponibles"""
+        while not self.stop_periodic_scan.is_set():
+            try:
+                logger.info("🔍 Démarrage du scan périodique des chaînes...")
+                self.scan_channels(force=True)
+                logger.info("✅ Scan périodique terminé")
+            except Exception as e:
+                logger.error(f"❌ Erreur lors du scan périodique: {e}")
+            
+            # Attend l'intervalle défini ou jusqu'à l'arrêt du service
+            self.stop_periodic_scan.wait(self.periodic_scan_interval)
+
+    def stop(self):
+        """Arrête proprement le gestionnaire IPTV"""
+        logger.info("🛑 Arrêt du gestionnaire IPTV...")
+        
+        # Arrêt du scan périodique
+        self.stop_periodic_scan.set()
+        if hasattr(self, 'periodic_scan_thread'):
+            self.periodic_scan_thread.join(timeout=5)

@@ -190,16 +190,31 @@ class IPTVChannel:
 
     def _handle_position_update(self, position):
         """Reçoit les mises à jour de position du ProcessManager"""
-        # On se contente de loguer les sauts de position sans redémarrer
-        if (
-            hasattr(self, "last_logged_position")
-            and abs(position - self.last_logged_position) > 30
-        ):
-            logger.info(
-                f"[{self.name}] 📊 Saut détecté: {self.last_logged_position:.2f}s → {position:.2f}s"
-            )
+        try:
+            # On se contente de loguer les sauts de position sans redémarrer
+            if hasattr(self, "last_logged_position"):
+                if abs(position - self.last_logged_position) > 30:
+                    logger.info(f"[{self.name}] 📊 Saut détecté: {self.last_logged_position:.2f}s → {position:.2f}s")
+                    
+                    # Vérifier si on a des erreurs de DTS
+                    if position < self.last_logged_position:
+                        logger.warning(f"[{self.name}] ⚠️ DTS non-monotone détecté")
+                        self.last_dts_error_time = time.time()
+                        
+                        # Si on a trop d'erreurs DTS, on force un redémarrage
+                        if hasattr(self, "dts_error_count"):
+                            self.dts_error_count += 1
+                            if self.dts_error_count >= 3:
+                                logger.error(f"[{self.name}] ❌ Trop d'erreurs DTS, redémarrage forcé")
+                                self.process_manager.restart_process()
+                                self.dts_error_count = 0
+                        else:
+                            self.dts_error_count = 1
 
-        self.last_logged_position = position
+            self.last_logged_position = position
+            
+        except Exception as e:
+            logger.error(f"[{self.name}] ❌ Erreur dans _handle_position_update: {e}")
 
     def _scan_videos_async(self):
         """Scanne les vidéos en tâche de fond pour les mises à jour ultérieures"""
@@ -711,12 +726,20 @@ class IPTVChannel:
             # Vérifier si on est proche de la fin d'un fichier
             for file_path in playlist_files:
                 duration = get_accurate_duration(Path(file_path))
-                if duration and current_position >= duration - 10:  # Augmenté à 10 secondes pour plus de marge
+                if duration and current_position >= duration - 15:  # Augmenté à 15 secondes pour plus de marge
                     logger.info(f"[{self.name}] 🔄 Transition vers le fichier suivant: {Path(file_path).name}")
+                    
+                    # Vérifier si on a des erreurs de DTS
+                    if hasattr(self, "last_dts_error_time"):
+                        if time.time() - self.last_dts_error_time < 60:  # Si on a eu une erreur DTS récente
+                            logger.warning(f"[{self.name}] ⚠️ Erreur DTS récente détectée, on force un redémarrage propre")
+                            self.process_manager.restart_process()
+                            return
+                    
                     # Forcer une mise à jour de la playlist
                     self._create_concat_file()
                     # Ajouter un délai pour s'assurer que FFmpeg a le temps de gérer la transition
-                    time.sleep(2)
+                    time.sleep(3)  # Augmenté à 3 secondes
                     break
 
         except Exception as e:

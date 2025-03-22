@@ -547,12 +547,10 @@ class ReadyContentHandler(FileSystemEventHandler):
                 hasattr(channel, "process_manager")
                 and channel.process_manager.is_running()
             ):
-                if hasattr(channel, "position_manager"):
-                    offset = channel.position_manager.get_start_offset()
-                    channel.process_manager.set_playback_offset(offset)
-                    logger.info(
-                        f"[{channel_name}] 🔄 Offset de lecture mis à jour: {offset:.2f}s"
-                    )
+                # On ne fait plus de mise à jour d'offset, on recrée juste la playlist si nécessaire
+                if hasattr(channel, "_create_concat_file"):
+                    channel._create_concat_file()
+                    logger.info(f"[{channel_name}] 🔄 Playlist mise à jour suite aux changements")
 
             logger.info(
                 f"✅ Mises à jour initiées pour {channel_name} suite à changement dans ready_to_stream"

@@ -129,25 +129,21 @@ class FFmpegCommandBuilder:
         params.extend(
             [
                 "-thread_queue_size",
-                "32768",  # Augmenté pour plus de stabilité
+                "8192",  # Réduit pour plus de stabilité
                 "-analyzeduration",
-                "60M",  # Augmenté
+                "20M",  # Réduit pour un démarrage plus rapide
                 "-probesize",
-                "60M",  # Augmenté
+                "20M",  # Réduit pour un démarrage plus rapide
             ]
         )
 
-        # Application du -ss AVANT l'input pour un seeking rapide
-        # if playback_offset > 0:
-        #    params.extend(["-ss", f"{playback_offset:.2f}"])
-
         params.extend(
             [
-                "-re",
+                "-re",  # Lecture en temps réel
                 "-stream_loop",
-                "-1",
+                "-1",  # Boucle infinie
                 "-fflags",
-                "+genpts+igndts+discardcorrupt+fastseek",
+                "+genpts+igndts+discardcorrupt",  # Simplifié
                 "-threads",
                 "4",
                 "-avoid_negative_ts",
@@ -170,14 +166,14 @@ class FFmpegCommandBuilder:
             "-f",
             "hls",
             "-hls_time",
-            "4",  # Segments plus longs (4s au lieu de 2s)
+            "2",  # Réduit pour plus de réactivité
             "-hls_list_size",
-            "30",  # Plus de segments dans la playlist
+            "15",  # Réduit pour plus de stabilité
             "-hls_delete_threshold",
-            "5",  # Équilibré
+            "2",  # Réduit pour plus de stabilité
             # Flags HLS optimisés
             "-hls_flags",
-            "append_list+delete_segments+independent_segments+program_date_time+discont_start",
+            "delete_segments+append_list+independent_segments",  # Simplifié
             # Cache autorisé
             "-hls_allow_cache",
             "1",
@@ -188,9 +184,9 @@ class FFmpegCommandBuilder:
             "mpegts",
             # Paramètres de latence réduite
             "-max_delay",
-            "5000000",  # Buffer plus important
+            "2000000",  # Réduit pour plus de stabilité
             "-hls_init_time",
-            "4",  # Correspond à hls_time
+            "2",  # Correspond à hls_time
             # Nom des segments
             "-hls_segment_filename",
             f"{output_dir}/segment_%d.ts",
@@ -205,7 +201,6 @@ class FFmpegCommandBuilder:
         )
 
         # Par défaut, on privilégie la copie directe
-        # dans build_encoding_params()
         params = [
             "-c:v",
             "copy",
@@ -218,12 +213,12 @@ class FFmpegCommandBuilder:
             "-map",
             "0:a:0?",
             "-max_muxing_queue_size",
-            "4096",
+            "2048",  # Déplacé ici car c'est un paramètre d'encodage
+            "-fps_mode",
+            "passthrough",  # Déplacé ici car c'est un paramètre de sortie
         ]
 
         # Si on détecte un fichier MKV, on ajuste les paramètres
-
-        # Ajustements pour MKV si nécessaire
         if has_mkv:
             logger.info(
                 f"[{self.channel_name}] ⚠️ Fichier MKV détecté, ajustement des paramètres"
@@ -243,7 +238,9 @@ class FFmpegCommandBuilder:
                 "-map",
                 "0:a:0?",
                 "-max_muxing_queue_size",
-                "8192",  # Buffer encore plus grand pour MKV
+                "4096",  # Buffer plus grand pour MKV
+                "-fps_mode",
+                "passthrough",  # Déplacé ici car c'est un paramètre de sortie
             ]
 
         return params

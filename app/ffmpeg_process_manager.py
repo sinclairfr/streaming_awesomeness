@@ -323,3 +323,38 @@ class FFmpegProcessManager:
         # Vérifie si le processus FFmpeg est en cours d'exécution
         """
         return self.process is not None and self.process.poll() is None
+
+    def restart_process(self):
+        """Redémarre proprement le processus FFmpeg"""
+        try:
+            logger.info(f"[{self.channel_name}] 🔄 Redémarrage propre du processus FFmpeg")
+            
+            # Sauvegarder l'état actuel
+            was_running = self.is_running()
+            current_offset = self.get_playback_offset() if was_running else 0
+            
+            # Arrêter proprement le processus actuel
+            if was_running:
+                self.stop_process()
+                time.sleep(2)  # Attendre que le processus soit bien arrêté
+            
+            # Redémarrer avec le même offset
+            if self.process:
+                command = self.process.args
+                hls_dir = command[-1].rsplit('/', 1)[0]  # Extraire le dossier HLS du chemin de sortie
+                success = self.start_process(command, hls_dir)
+                
+                if success:
+                    # Restaurer la position de lecture
+                    self.set_playback_offset(current_offset)
+                    logger.info(f"[{self.channel_name}] ✅ Redémarrage réussi, position restaurée: {current_offset:.2f}s")
+                    return True
+                else:
+                    logger.error(f"[{self.channel_name}] ❌ Échec du redémarrage")
+                    return False
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"[{self.channel_name}] ❌ Erreur lors du redémarrage: {e}")
+            return False
