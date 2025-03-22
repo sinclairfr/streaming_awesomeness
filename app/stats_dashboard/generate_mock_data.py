@@ -128,17 +128,71 @@ def generate_channel_stats(user_stats):
     
     return {"channels": channels_data, "global": global_stats}
 
-# Générer et sauvegarder les données
-user_stats = generate_user_stats()
-channel_stats = generate_channel_stats(user_stats)
+def generate_channel_status():
+    """Génère des données de test pour channels_status.json"""
+    current_time = int(time.time())
+    
+    # Liste des chaînes disponibles
+    channels = ["pagnol", "weber", "belmondo", "defunes", "gendarme", "guerre", "western", "brucelee", "rambo", "bronzes", "columbos6end", "verite"]
+    
+    # Générer des données aléatoires pour chaque chaîne
+    channels_data = {}
+    total_viewers = 0
+    
+    for channel in channels:
+        # Générer des données aléatoires
+        is_active = random.random() < 0.7  # 70% de chance d'être actif
+        is_streaming = random.random() < 0.8  # 80% de chance d'être en streaming
+        viewers = random.randint(0, 5)  # 0 à 5 viewers aléatoires
+        
+        if is_active and is_streaming:
+            total_viewers += viewers
+        
+        channels_data[channel] = {
+            "active": is_active,
+            "streaming": is_streaming,
+            "viewers": viewers,
+            "last_update": current_time
+        }
+    
+    # Créer la structure finale
+    status_data = {
+        "channels": channels_data,
+        "last_updated": current_time,
+        "active_viewers": total_viewers
+    }
+    
+    # Sauvegarder dans le fichier
+    status_file = os.path.join(STATS_DIR, "channels_status.json")
+    with open(status_file, 'w') as f:
+        json.dump(status_data, f, indent=2)
+    
+    print(f"✅ Données de test générées pour channels_status.json")
 
-with open(USER_STATS_FILE, 'w') as f:
-    json.dump(user_stats, f, indent=2)
+def main():
+    """Fonction principale pour générer toutes les données de test"""
+    # Créer le dossier stats s'il n'existe pas
+    os.makedirs(STATS_DIR, exist_ok=True)
+    
+    # Générer les données de test
+    print("Génération des données de test...")
+    user_stats = generate_user_stats()
+    channel_stats = generate_channel_stats(user_stats)
+    
+    # Sauvegarder les données
+    with open(USER_STATS_FILE, 'w') as f:
+        json.dump(user_stats, f, indent=2)
+    
+    with open(CHANNEL_STATS_FILE, 'w') as f:
+        json.dump(channel_stats, f, indent=2)
+    
+    # Générer les statuts en direct
+    generate_channel_status()
+    
+    print(f"✅ Données générées avec succès!")
+    print(f"- {len(user_stats['users'])} utilisateurs")
+    print(f"- {len(channel_stats['channels'])} chaînes")
+    print(f"- {channel_stats['global']['total_watch_time']:.2f} secondes de visionnage total")
 
-with open(CHANNEL_STATS_FILE, 'w') as f:
-    json.dump(channel_stats, f, indent=2)
-
-print(f"Données générées avec succès!")
-print(f"- {len(user_stats['users'])} utilisateurs")
-print(f"- {len(channel_stats['channels'])} chaînes")
-print(f"- {channel_stats['global']['total_watch_time']:.2f} secondes de visionnage total")
+if __name__ == "__main__":
+    main()

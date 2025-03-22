@@ -429,6 +429,21 @@ class StatsCollector:
         """Sauvegarde les statistiques dans le fichier JSON"""
         with self.lock:
             try:
+                # Calculate global statistics from all channels
+                total_watch_time = 0.0
+                all_viewers = set()
+                
+                for channel_name, channel_data in self.stats.items():
+                    if channel_name == "global":  # Skip the global entry itself
+                        continue
+                    total_watch_time += channel_data.get("total_watch_time", 0)
+                    all_viewers.update(channel_data.get("unique_viewers", set()))
+                
+                # Update global stats
+                self.global_stats["total_watch_time"] = total_watch_time
+                self.global_stats["unique_viewers"] = all_viewers
+                self.global_stats["last_update"] = time.time()
+                
                 # Préparation des données à sauvegarder
                 stats_to_save = {
                     "channels": {},
