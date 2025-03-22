@@ -51,22 +51,55 @@ class ClientMonitor(threading.Thread):
 
     def _cleanup_loop(self):
         """Nettoie les watchers inactifs et vérifie l'état des logs"""
-        last_health_check = 0
-
-        while True:
+        while not self.stop_event.is_set():
             try:
-                time.sleep(10)
-                self._cleanup_inactive()
-
-                # Vérification périodique des logs (toutes les  minutes)
                 current_time = time.time()
-                if current_time - last_health_check > 60:  #1 minute
-                    self.check_log_status()
-                    last_health_check = current_time
+                inactive_watchers = []
+
+                # Identifier les watchers inactifs
+                for ip, watcher in list(self.watchers.items()):
+                    last_activity = watcher.get("last_activity", 0)
+                    if current_time - last_activity > self.SEGMENT_TIMEOUT:
+                        inactive_watchers.append(ip)
+                        logger.info(f"⏱️ Watcher inactif détecté: {ip} sur {watcher.get('current_channel', 'unknown')} (dernière activité: {current_time - last_activity:.1f}s)")
+
+                # Supprimer les watchers inactifs
+                for ip in inactive_watchers:
+                    watcher = self.watchers[ip]
+                    channel = watcher.get("current_channel", "unknown")
+                    
+                    # Arrêter le minuteur si présent
+                    if "timer" in watcher:
+                        watcher["timer"].stop()
+                        logger.info(f"⏱️ Arrêt du minuteur pour {ip} sur {channel}")
+                    
+                    # Supprimer le watcher
+                    del self.watchers[ip]
+                    logger.info(f"🧹 Suppression du watcher inactif: {ip} de {channel}")
+
+                    # Mettre à jour le compteur de watchers pour la chaîne
+                    if channel != "unknown":
+                        self._update_channel_watchers_count(channel)
+
+                # Log périodique des watchers actifs
+                if not hasattr(self, "last_cleanup_log") or current_time - self.last_cleanup_log > 30:
+                    active_channels = {}
+                    for ip, watcher in self.watchers.items():
+                        channel = watcher.get("current_channel", "unknown")
+                        if channel not in active_channels:
+                            active_channels[channel] = set()
+                        active_channels[channel].add(ip)
+
+                    for channel, watchers in active_channels.items():
+                        logger.info(f"[{channel}] 👥 {len(watchers)} watchers actifs: {', '.join(watchers)}")
+                    
+                    self.last_cleanup_log = current_time
+
+                time.sleep(5)  # Vérification toutes les 5s
 
             except Exception as e:
-                logger.error(f"❌ Erreur dans cleanup_loop: {e}")
-                time.sleep(30)  # Pause plus longue en cas d'erreur
+                logger.error(f"❌ Erreur cleanup_loop: {e}")
+                time.sleep(5)
 
     def _cleanup_inactive(self):
         """Nettoie les watchers inactifs"""

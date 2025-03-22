@@ -173,7 +173,7 @@ class FFmpegCommandBuilder:
             "2",  # Réduit pour plus de stabilité
             # Flags HLS optimisés
             "-hls_flags",
-            "delete_segments+append_list+independent_segments",  # Simplifié
+            "delete_segments+append_list+independent_segments+omit_endlist",  # Ajout de omit_endlist pour éviter les problèmes de boucle
             # Cache autorisé
             "-hls_allow_cache",
             "1",
@@ -200,7 +200,7 @@ class FFmpegCommandBuilder:
             f"[{self.channel_name}] 📼 Paramètres optimisés pour la copie directe"
         )
 
-        # Par défaut, on privilégie la copie directe
+        # Par défaut, on privilégie la copie directe avec des paramètres optimisés
         params = [
             "-c:v",
             "copy",
@@ -213,9 +213,15 @@ class FFmpegCommandBuilder:
             "-map",
             "0:a:0?",
             "-max_muxing_queue_size",
-            "2048",  # Déplacé ici car c'est un paramètre d'encodage
+            "2048",  # Buffer augmenté pour plus de stabilité
             "-fps_mode",
-            "passthrough",  # Déplacé ici car c'est un paramètre de sortie
+            "passthrough",
+            "-fflags",
+            "+genpts+igndts+discardcorrupt",  # Flags pour une meilleure gestion des timestamps
+            "-thread_queue_size",
+            "8192",  # Queue size augmentée pour plus de stabilité
+            "-avoid_negative_ts",
+            "make_zero",  # Évite les timestamps négatifs
         ]
 
         # Si on détecte un fichier MKV, on ajuste les paramètres
@@ -240,7 +246,13 @@ class FFmpegCommandBuilder:
                 "-max_muxing_queue_size",
                 "4096",  # Buffer plus grand pour MKV
                 "-fps_mode",
-                "passthrough",  # Déplacé ici car c'est un paramètre de sortie
+                "passthrough",
+                "-fflags",
+                "+genpts+igndts+discardcorrupt",
+                "-thread_queue_size",
+                "16384",  # Queue size encore plus grande pour MKV
+                "-avoid_negative_ts",
+                "make_zero",
             ]
 
         return params

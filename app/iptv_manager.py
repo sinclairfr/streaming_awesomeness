@@ -508,10 +508,20 @@ class IPTVManager:
                         if channel not in current_watchers:
                             current_watchers[channel] = set()
                         current_watchers[channel].add(ip)
+                        logger.debug(f"👁️ Watcher actif: {ip} sur {channel}")
             
             # If no watchers from client_monitor, use our own _active_watchers
             if not current_watchers and hasattr(self, '_active_watchers'):
                 current_watchers = self._active_watchers
+                logger.debug("ℹ️ Utilisation des _active_watchers comme fallback")
+            
+            # Log le nombre total de watchers
+            total_watchers = sum(len(watchers) for watchers in current_watchers.values())
+            logger.info(f"📊 Total watchers actifs: {total_watchers} sur {len(current_watchers)} chaînes")
+            
+            # Log détaillé par chaîne
+            for channel, watchers in current_watchers.items():
+                logger.info(f"[{channel}] 👥 {len(watchers)} watchers: {', '.join(watchers)}")
             
             return current_watchers
             
@@ -801,8 +811,27 @@ class IPTVManager:
 
         # Mise à jour du compteur de watchers
         channel = self.channels[channel_name]
+        old_count = getattr(channel, 'watchers_count', 0)
         channel.watchers_count = watcher_count
         channel.last_watcher_time = time.time()
+
+        # Log du changement de watchers
+        if old_count != watcher_count:
+            logger.info(f"[{channel_name}] 👥 Changement watchers: {old_count} → {watcher_count}")
+
+        # Vérifier si la chaîne est arrêtée mais devrait être active
+        if watcher_count > 0 and not channel.process_manager.is_running():
+            logger.warning(f"[{channel_name}] ⚠️ Chaîne arrêtée avec {watcher_count} watchers actifs")
+            
+            # Vérifier si la chaîne est prête pour le streaming
+            if channel.ready_for_streaming:
+                logger.info(f"[{channel_name}] 🔄 Redémarrage automatique de la chaîne (watchers actifs: {watcher_count})")
+                if channel.start_stream():
+                    logger.info(f"[{channel_name}] ✅ Chaîne redémarrée avec succès")
+                else:
+                    logger.error(f"[{channel_name}] ❌ Échec du redémarrage de la chaîne")
+            else:
+                logger.warning(f"[{channel_name}] ⚠️ Chaîne non prête pour le streaming, redémarrage impossible")
 
         # Si la chaîne n'a plus de watchers et le timeout est dépassé, on l'arrête
         if watcher_count == 0 and time.time() - channel.last_watcher_time > TIMEOUT_NO_VIEWERS:
@@ -844,6 +873,7 @@ class IPTVManager:
                     viewers=watcher_count,
                     streaming=is_streaming
                 )
+
     def _reset_channel_statuses(self):
         """Reset all channel statuses to inactive with zero viewers at startup"""
         if hasattr(self, "channel_status"):
@@ -855,6 +885,7 @@ class IPTVManager:
                     streaming=False
                 )
             logger.info("🔄 All channel statuses reset at startup")
+
     def _log_channels_summary(self):
         """Génère et affiche un récapitulatif de l'état des chaînes"""
         try:
@@ -1035,6 +1066,7 @@ class IPTVManager:
                 logger.error(f"Erreur scan des chaînes: {e}")
                 import traceback
                 logger.error(traceback.format_exc())
+
     def ensure_hls_directory(self, channel_name: str = None):
         """Crée et configure les dossiers HLS avec les bonnes permissions"""
         try:
@@ -1175,6 +1207,7 @@ class IPTVManager:
             logger.info("✅ Status update thread will terminate with process")
 
         logger.info("Nettoyage terminé")
+
     def _setup_ready_observer(self):
         """Configure l'observateur pour les dossiers ready_to_stream de chaque chaîne"""
         try:

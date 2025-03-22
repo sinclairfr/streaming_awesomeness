@@ -755,6 +755,11 @@ class IPTVChannel:
                 # Vérification des timeouts toutes les 10 secondes
                 self._handle_timeouts(current_time, crash_threshold=60)
 
+                # Health check toutes les 30 secondes
+                if not hasattr(self, "last_health_check") or current_time - self.last_health_check >= 30:
+                    self.channel_health_check()
+                    self.last_health_check = current_time
+
                 # Analyse des segments toutes les 30 secondes
                 if (
                     not hasattr(self, "last_segment_check")
@@ -964,9 +969,24 @@ class IPTVChannel:
                     time.sleep(2)  # Wait for cleanup
                     return self.start_stream()
             else:
-                # Check if segments are recent
+                # Check if segments are recent and consistent
                 newest_segment = max(segments, key=lambda p: p.stat().st_mtime)
                 segment_age = time.time() - newest_segment.stat().st_mtime
+                
+                # Check segment sizes for consistency
+                segment_sizes = [p.stat().st_size for p in segments[-5:]]  # Last 5 segments
+                if segment_sizes:
+                    avg_size = sum(segment_sizes) / len(segment_sizes)
+                    size_variation = max(abs(s - avg_size) for s in segment_sizes)
+                    
+                    # If segment sizes vary too much, it might indicate a problem
+                    if size_variation > avg_size * 0.5:  # 50% variation threshold
+                        logger.warning(f"[{self.name}] ⚠️ Inconsistent segment sizes detected (variation: {size_variation:.1f} bytes)")
+                        if hasattr(self, "watchers_count") and self.watchers_count > 0:
+                            logger.info(f"[{self.name}] 🔄 Auto-restarting stream due to inconsistent segments")
+                            self.stop_stream_if_needed()
+                            time.sleep(2)
+                            return self.start_stream()
                 
                 if segment_age > 60:  # No new segments in 1 minute
                     logger.warning(f"[{self.name}] ⚠️ Segments too old (last: {segment_age:.1f}s ago)")
@@ -977,12 +997,30 @@ class IPTVChannel:
                         self.stop_stream_if_needed()
                         time.sleep(2)
                         return self.start_stream()
-                    
+                
+                # Check playlist.m3u8 for consistency
+                playlist_path = hls_dir / "playlist.m3u8"
+                if playlist_path.exists():
+                    try:
+                        with open(playlist_path, 'r') as f:
+                            playlist_content = f.read()
+                            # Check if playlist has proper structure and recent segments
+                            if "#EXTM3U" not in playlist_content or "#EXT-X-VERSION" not in playlist_content:
+                                logger.warning(f"[{self.name}] ⚠️ Invalid playlist.m3u8 structure detected")
+                                if hasattr(self, "watchers_count") and self.watchers_count > 0:
+                                    logger.info(f"[{self.name}] 🔄 Auto-restarting stream due to invalid playlist")
+                                    self.stop_stream_if_needed()
+                                    time.sleep(2)
+                                    return self.start_stream()
+                    except Exception as e:
+                        logger.error(f"[{self.name}] ❌ Error reading playlist.m3u8: {e}")
+            
             return True
             
         except Exception as e:
             logger.error(f"[{self.name}] ❌ Error in health check: {e}")
-            return False     
+            return False
+
     def _verify_processor(self) -> bool:
         """Vérifie que le VideoProcessor est correctement initialisé"""
         try:
@@ -1264,6 +1302,15 @@ class IPTVChannel:
                     f"[{self.name}] ❌ Échec du démarrage FFmpeg (première tentative)."
                 )
                 return False
+
+            # 6) Démarrer la boucle de surveillance des segments en arrière-plan
+            if not hasattr(self, "_segment_monitor_thread") or not self._segment_monitor_thread.is_alive():
+                self._segment_monitor_thread = threading.Thread(
+                    target=self._segment_monitor_loop,
+                    daemon=True
+                )
+                self._segment_monitor_thread.start()
+                logger.info(f"[{self.name}] 🔍 Boucle de surveillance des segments démarrée")
 
             logger.info(
                 f"[{self.name}] ✅ FFmpeg démarré avec PID: {self.process_manager.process.pid}"
