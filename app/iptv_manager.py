@@ -145,7 +145,7 @@ class IPTVManager:
 
         # status manager
         try:
-            from channel_status_manager  import ChannelStatusManager
+            from channel_status_manager import ChannelStatusManager
             self.channel_status = ChannelStatusManager()
             logger.info("✅ Channel status manager initialized")
         except Exception as e:
