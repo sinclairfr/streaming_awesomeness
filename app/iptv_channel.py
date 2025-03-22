@@ -200,7 +200,6 @@ class IPTVChannel:
             )
 
         self.last_logged_position = position
-        self.position_manager.update_from_progress(self.logger.get_progress_file())
 
     def _scan_videos_async(self):
         """Scanne les vidéos en tâche de fond pour les mises à jour ultérieures"""
@@ -704,8 +703,9 @@ class IPTVChannel:
                 return
 
             # Vérifier la position actuelle de lecture
-            current_position = self.position_manager.get_current_position()
-            if current_position is None:
+            if hasattr(self, "last_logged_position"):
+                current_position = self.last_logged_position
+            else:
                 return
 
             # Vérifier si on est proche de la fin d'un fichier
