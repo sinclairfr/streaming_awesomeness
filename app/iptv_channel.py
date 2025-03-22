@@ -92,8 +92,8 @@ class IPTVChannel:
         self.initial_scan_complete = True
         self.ready_for_streaming = len(self.processed_videos) > 0
 
-        logger.debug(
-            f"[{self.name}] ✅ Initialisation complète. Chaîne prête: {self.ready_for_streaming}, Offset: {self.position_manager.last_known_position:.2f}s"
+        logger.info(
+            f"[{self.name}] ✅ Initialisation complète. Chaîne prête: {self.ready_for_streaming}"
         )
 
         # Scan asynchrone en arrière-plan
@@ -797,20 +797,7 @@ class IPTVChannel:
                 self._create_concat_file()
                 time.sleep(1)  # Attendre que le fichier soit écrit
 
-            # 4. Recalculer l'offset de lecture
-            if hasattr(self, "position_manager"):
-                start_offset = self.position_manager.get_start_offset()
-                logger.info(
-                    f"[{self.name}] 🔄 Redémarrage avec offset recalculé: {start_offset:.2f}s"
-                )
-
-                # On passe l'information au process_manager pour la commande ffmpeg
-                self.process_manager.set_total_duration(
-                    self.position_manager.total_duration
-                )
-                self.process_manager.set_playback_offset(start_offset)
-
-            # 5. Nettoyer les anciens segments pour éviter les problèmes
+            # 4. Nettoyer les anciens segments pour éviter les problèmes
             if hls_dir.exists():
                 for old_file in hls_dir.glob("*.ts"):
                     try:
@@ -828,7 +815,7 @@ class IPTVChannel:
                     except Exception:
                         pass
 
-            # 6. Lancer un nouveau stream frais
+            # 5. Lancer un nouveau stream frais
             return self.start_stream()
 
         except Exception as e:
@@ -1191,8 +1178,7 @@ class IPTVChannel:
 
     def start_stream(self) -> bool:
         """
-        Démarre le flux HLS pour cette chaîne via FFmpeg,
-        en appliquant l'offset si la durée totale est > 0.
+        Démarre le flux HLS pour cette chaîne via FFmpeg.
         """
         try:
             # 1) Vérifier qu'on a des vidéos prêtes
@@ -1202,17 +1188,7 @@ class IPTVChannel:
                 )
                 return False
 
-            # 2) Vérifier la durée pour éviter offset = 0 (si total_duration = 0, le modulo forcera l'offset à 0)
-            if self.position_manager.total_duration <= 0:
-                # On réessaye de calculer la durée (par exemple, forcer un scan)
-                recalculated = self._calculate_total_duration()
-                if recalculated <= 0:
-                    logger.error(
-                        f"[{self.name}] ❌ Durée totale introuvable. Impossible d'appliquer un offset correct."
-                    )
-                    return False
-
-            # 3) Nettoyer le dossier HLS (playlist/segments) avant de lancer FFmpeg
+            # 2) Nettoyer le dossier HLS (playlist/segments) avant de lancer FFmpeg
             hls_dir = Path(f"/app/hls/{self.name}")
             if hls_dir.exists():
                 # Supprime d'abord les segments existants
@@ -1236,22 +1212,7 @@ class IPTVChannel:
             else:
                 hls_dir.mkdir(parents=True, exist_ok=True)
 
-            # 4) Calculer ou récupérer l'offset initial
-            start_offset = (
-                self.position_manager.get_start_offset()
-            )  # renvoie 0 si total_duration=0
-            if start_offset > 0:
-                self.position_manager.set_playback_offset(start_offset)
-                self.process_manager.set_playback_offset(start_offset)
-            else:
-                logger.info(f"[{self.name}] Offset = 0s (lecture depuis le début).")
-
-            # 5) Définir la durée totale dans le process_manager (pour le modulo, etc.)
-            self.process_manager.set_total_duration(
-                self.position_manager.total_duration
-            )
-
-            # 6) Vérifier l'existence du _playlist.txt de concat
+            # 3) Vérifier l'existence du _playlist.txt de concat
             concat_file = Path(self.video_dir) / "_playlist.txt"
             if not concat_file.exists():
                 # On essaie de le recréer si besoin
@@ -1262,18 +1223,18 @@ class IPTVChannel:
                     )
                     return False
 
-            # 7) Construire la commande FFmpeg
+            # 4) Construire la commande FFmpeg
             command = self.command_builder.build_command(
                 input_file=concat_file,
                 output_dir=hls_dir,
-                playback_offset=self.process_manager.get_playback_offset(),
+                playback_offset=0,  # On démarre toujours depuis le début
                 progress_file=self.logger.get_progress_file(),
                 has_mkv=self.command_builder.detect_mkv_in_playlist(concat_file),
             )
 
             logger.info(f"[{self.name}] 🚀 Lancement FFmpeg: {' '.join(command)}")
 
-            # 8) Démarrer le process FFmpeg via le FFmpegProcessManager
+            # 5) Démarrer le process FFmpeg via le FFmpegProcessManager
             success = self.process_manager.start_process(command, str(hls_dir))
             if not success:
                 logger.error(
@@ -1284,9 +1245,7 @@ class IPTVChannel:
             logger.info(
                 f"[{self.name}] ✅ FFmpeg démarré avec PID: {self.process_manager.process.pid}"
             )
-            logger.info(
-                f"[{self.name}] ✅ Stream démarré avec succès à {start_offset:.2f}s."
-            )
+            logger.info(f"[{self.name}] ✅ Stream démarré avec succès.")
             return True
 
         except Exception as e:
