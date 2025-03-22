@@ -140,24 +140,39 @@ class IPTVChannel:
 
             # On mélange les fichiers pour plus de variété
             import random
-
             random.shuffle(ready_files)
 
+            # Vérifier que tous les fichiers existent et sont accessibles
+            valid_files = []
+            for video in ready_files:
+                if video.exists() and os.access(video, os.R_OK):
+                    valid_files.append(video)
+                else:
+                    logger.warning(f"[{self.name}] ⚠️ Fichier ignoré: {video.name} (non accessible)")
+
+            if not valid_files:
+                logger.error(f"[{self.name}] ❌ Aucun fichier valide pour la playlist")
+                return None
+
             logger.info(
-                f"[{self.name}] 🛠️ Création de _playlist.txt avec {len(ready_files)} fichiers uniques"
+                f"[{self.name}] 🛠️ Création de _playlist.txt avec {len(valid_files)} fichiers uniques"
             )
-            concat_file = Path(self.video_dir) / "_playlist.txt"
 
-            logger.debug(f"[{self.name}] 📝 Écriture de _playlist.txt")
-
+            # Créer le fichier de concaténation avec des options FFmpeg pour une meilleure transition
             with open(concat_file, "w", encoding="utf-8") as f:
-                for video in ready_files:
+                for video in valid_files:
                     escaped_path = str(video.absolute()).replace("'", "'\\''")
+                    # Ajouter des options FFmpeg pour une meilleure transition
                     f.write(f"file '{escaped_path}'\n")
+                    f.write("inpoint 0\n")  # Point d'entrée
+                    f.write("outpoint -1\n")  # Point de sortie (fin du fichier)
+                    # Ajouter des options pour gérer les timestamps
+                    f.write("duration -1\n")  # Durée complète du fichier
+                    f.write("stream_loop -1\n")  # Pas de boucle sur le fichier
                     logger.debug(f"[{self.name}] ✅ Ajout de {video.name}")
 
             logger.info(
-                f"[{self.name}] 🎥 Playlist créée avec {len(ready_files)} fichiers uniques en mode aléatoire"
+                f"[{self.name}] 🎥 Playlist créée avec {len(valid_files)} fichiers uniques en mode aléatoire"
             )
             return concat_file
 
@@ -608,8 +623,6 @@ class IPTVChannel:
                 logger.error(f"[{self.channel_name}] ❌ _playlist.txt n'existe pas")
                 return False
 
-            # Reste de la méthode inchangé...
-
             with open(playlist_path, "r") as f:
                 lines = f.readlines()
 
@@ -649,123 +662,57 @@ class IPTVChannel:
             logger.error(f"[{self.name}] ❌ Erreur vérification playlist: {e}")
             return False
 
-    def start_stream(self) -> bool:
-        """
-        Démarre le flux HLS pour cette chaîne via FFmpeg,
-        en appliquant l'offset si la durée totale est > 0.
-        """
+    def _monitor_playlist_transition(self):
+        """Surveille la transition entre les fichiers de la playlist"""
         try:
-            # 1) Vérifier qu'on a des vidéos prêtes
-            if not self.ready_for_streaming:
-                logger.warning(
-                    f"[{self.name}] ⚠️ Chaîne non prête (pas de vidéos). Annulation du démarrage."
-                )
-                return False
+            if not self.process_manager.is_running():
+                return
 
-            # 2) Vérifier la durée pour éviter offset = 0 (si total_duration = 0, le modulo forcera l'offset à 0)
-            if self.position_manager.total_duration <= 0:
-                # On réessaye de calculer la durée (par exemple, forcer un scan)
-                # si vous avez une fonction _calculate_total_duration()
-                # si vous avez une fonction _calculate_total_duration()
-                recalculated = self._calculate_total_duration()
-                if recalculated <= 0:
-                    logger.error(
-                        f"[{self.name}] ❌ Durée totale introuvable. Impossible d'appliquer un offset correct."
-                    )
-                    return False
+            # Vérifier la playlist actuelle
+            playlist_path = Path(self.video_dir) / "_playlist.txt"
+            if not playlist_path.exists():
+                logger.error(f"[{self.name}] ❌ Playlist introuvable")
+                return
 
-            # 3) Nettoyer le dossier HLS (playlist/segments) avant de lancer FFmpeg
-            hls_dir = Path(f"/app/hls/{self.name}")
-            if hls_dir.exists():
-                # Supprime d'abord les segments existants
-                for seg in hls_dir.glob("*.ts"):
-                    try:
-                        seg.unlink()
-                    except Exception as e:
-                        logger.warning(
-                            f"[{self.name}] Erreur suppression segment {seg.name}: {e}"
-                        )
+            # Lire la playlist
+            with open(playlist_path, "r") as f:
+                lines = f.readlines()
+                playlist_files = [line.strip().split("'")[1] for line in lines if line.strip().startswith("file")]
 
-                # Supprime l'ancienne playlist
-                old_playlist = hls_dir / "playlist.m3u8"
-                if old_playlist.exists():
-                    try:
-                        old_playlist.unlink()
-                    except Exception as e:
-                        logger.warning(
-                            f"[{self.name}] Erreur suppression playlist: {e}"
-                        )
-            else:
-                hls_dir.mkdir(parents=True, exist_ok=True)
+            if not playlist_files:
+                logger.error(f"[{self.name}] ❌ Playlist vide")
+                return
 
-            # 4) Calculer ou récupérer l'offset initial
-            start_offset = (
-                self.position_manager.get_start_offset()
-            )  # renvoie 0 si total_duration=0
-            if start_offset > 0:
-                self.position_manager.set_playback_offset(start_offset)
-                self.process_manager.set_playback_offset(start_offset)
-            else:
-                logger.info(f"[{self.name}] Offset = 0s (lecture depuis le début).")
+            # Vérifier que tous les fichiers existent
+            missing_files = []
+            for file_path in playlist_files:
+                if not Path(file_path).exists():
+                    missing_files.append(file_path)
 
-            # 5) Définir la durée totale dans le process_manager (pour le modulo, etc.)
-            self.process_manager.set_total_duration(
-                self.position_manager.total_duration
-            )
+            if missing_files:
+                logger.error(f"[{self.name}] ❌ Fichiers manquants dans la playlist: {missing_files}")
+                # Recréer la playlist sans les fichiers manquants
+                self._create_concat_file()
+                return
 
-            # 6) Vérifier l'existence du _playlist.txt de concat
-            concat_file = Path(self.video_dir) / "_playlist.txt"
-            if not concat_file.exists():
-                # On essaie de le recréer si besoin
-                new_concat = self._create_concat_file()
-                if not new_concat or not new_concat.exists():
-                    logger.error(
-                        f"[{self.name}] ❌ Impossible de lancer: _playlist.txt introuvable."
-                    )
-                    return False
+            # Vérifier la position actuelle de lecture
+            current_position = self.position_manager.get_current_position()
+            if current_position is None:
+                return
 
-            # 7) Construire la commande FFmpeg
-            #    (on suppose que build_command() inclut déjà l'option -ss <offset>
-            #     avant l'input, selon self.process_manager.playback_offset)
-            command = self.command_builder.build_command(
-                input_file=concat_file,
-                output_dir=hls_dir,
-                playback_offset=self.process_manager.get_playback_offset(),
-                progress_file=self.logger.get_progress_file(),
-                has_mkv=self.command_builder.detect_mkv_in_playlist(concat_file),
-            )
-
-            logger.info(f"[{self.name}] 🚀 Lancement FFmpeg: {' '.join(command)}")
-
-            # 8) Démarrer le process FFmpeg via le FFmpegProcessManager
-            success = self.process_manager.start_process(command, str(hls_dir))
-            if not success:
-                logger.error(
-                    f"[{self.name}] ❌ Échec du démarrage FFmpeg (première tentative)."
-                )
-
-                # Fallback éventuel si usage GPU -> re-tenter en CPU
-                # ...exemple:
-                # self.command_builder.use_gpu = False
-                # cpu_command = self.command_builder.build_command(...)
-                # success = self.process_manager.start_process(cpu_command, str(hls_dir))
-                # if not success:
-                #     logger.error(f"[{self.name}] ❌ Échec démarrage FFmpeg en CPU.")
-                #     return False
-
-                return False
-
-            logger.info(
-                f"[{self.name}] ✅ FFmpeg démarré avec PID: {self.process_manager.process.pid}"
-            )
-            logger.info(
-                f"[{self.name}] ✅ Stream démarré avec succès à {start_offset:.2f}s."
-            )
-            return True
+            # Vérifier si on est proche de la fin d'un fichier
+            for file_path in playlist_files:
+                duration = get_accurate_duration(Path(file_path))
+                if duration and current_position >= duration - 10:  # Augmenté à 10 secondes pour plus de marge
+                    logger.info(f"[{self.name}] 🔄 Transition vers le fichier suivant: {Path(file_path).name}")
+                    # Forcer une mise à jour de la playlist
+                    self._create_concat_file()
+                    # Ajouter un délai pour s'assurer que FFmpeg a le temps de gérer la transition
+                    time.sleep(2)
+                    break
 
         except Exception as e:
-            logger.error(f"[{self.name}] ❌ Erreur start_stream: {e}")
-            return False
+            logger.error(f"[{self.name}] ❌ Erreur surveillance transition playlist: {e}")
 
     def _segment_monitor_loop(self):
         """Boucle de surveillance des segments"""
@@ -791,8 +738,16 @@ class IPTVChannel:
                         for jump in segments_info.get("jumps", []):
                             self.report_segment_jump(jump["from"], jump["to"])
 
+                # Vérification de la transition playlist toutes les 5 secondes
+                if (
+                    not hasattr(self, "last_playlist_check")
+                    or current_time - self.last_playlist_check >= 5
+                ):
+                    self._monitor_playlist_transition()
+                    self.last_playlist_check = current_time
+
                 # On attend un peu avant la prochaine vérification
-                time.sleep(10)
+                time.sleep(1)
 
         except Exception as e:
             logger.error(
