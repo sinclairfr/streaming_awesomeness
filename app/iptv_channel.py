@@ -146,7 +146,15 @@ class IPTVChannel:
             valid_files = []
             for video in ready_files:
                 if video.exists() and os.access(video, os.R_OK):
-                    valid_files.append(video)
+                    # Vérifier que le fichier est un MP4 valide
+                    try:
+                        duration = get_accurate_duration(video)
+                        if duration and duration > 0:
+                            valid_files.append(video)
+                        else:
+                            logger.warning(f"[{self.name}] ⚠️ Fichier ignoré: {video.name} (durée invalide)")
+                    except Exception as e:
+                        logger.warning(f"[{self.name}] ⚠️ Fichier ignoré: {video.name} (erreur validation: {e})")
                 else:
                     logger.warning(f"[{self.name}] ⚠️ Fichier ignoré: {video.name} (non accessible)")
 
@@ -158,18 +166,18 @@ class IPTVChannel:
                 f"[{self.name}] 🛠️ Création de _playlist.txt avec {len(valid_files)} fichiers uniques"
             )
 
-            # Créer le fichier de concaténation avec des options FFmpeg pour une meilleure transition
+            # Créer le fichier de concaténation avec une syntaxe simplifiée
             with open(concat_file, "w", encoding="utf-8") as f:
                 for video in valid_files:
                     escaped_path = str(video.absolute()).replace("'", "'\\''")
-                    # Ajouter des options FFmpeg pour une meilleure transition
+                    # Utiliser une syntaxe simple pour la concaténation
                     f.write(f"file '{escaped_path}'\n")
-                    f.write("inpoint 0\n")  # Point d'entrée
-                    f.write("outpoint -1\n")  # Point de sortie (fin du fichier)
-                    # Ajouter des options pour gérer les timestamps
-                    f.write("duration -1\n")  # Durée complète du fichier
-                    f.write("stream_loop -1\n")  # Pas de boucle sur le fichier
                     logger.debug(f"[{self.name}] ✅ Ajout de {video.name}")
+
+            # Vérifier que le fichier a été créé correctement
+            if not concat_file.exists() or concat_file.stat().st_size == 0:
+                logger.error(f"[{self.name}] ❌ Erreur: playlist vide ou non créée")
+                return None
 
             logger.info(
                 f"[{self.name}] 🎥 Playlist créée avec {len(valid_files)} fichiers uniques en mode aléatoire"
@@ -1180,3 +1188,107 @@ class IPTVChannel:
                         break
         except Exception as e:
             logger.error(f"[{self.name}] ❌ Erreur notification manager: {e}")
+
+    def start_stream(self) -> bool:
+        """
+        Démarre le flux HLS pour cette chaîne via FFmpeg,
+        en appliquant l'offset si la durée totale est > 0.
+        """
+        try:
+            # 1) Vérifier qu'on a des vidéos prêtes
+            if not self.ready_for_streaming:
+                logger.warning(
+                    f"[{self.name}] ⚠️ Chaîne non prête (pas de vidéos). Annulation du démarrage."
+                )
+                return False
+
+            # 2) Vérifier la durée pour éviter offset = 0 (si total_duration = 0, le modulo forcera l'offset à 0)
+            if self.position_manager.total_duration <= 0:
+                # On réessaye de calculer la durée (par exemple, forcer un scan)
+                recalculated = self._calculate_total_duration()
+                if recalculated <= 0:
+                    logger.error(
+                        f"[{self.name}] ❌ Durée totale introuvable. Impossible d'appliquer un offset correct."
+                    )
+                    return False
+
+            # 3) Nettoyer le dossier HLS (playlist/segments) avant de lancer FFmpeg
+            hls_dir = Path(f"/app/hls/{self.name}")
+            if hls_dir.exists():
+                # Supprime d'abord les segments existants
+                for seg in hls_dir.glob("*.ts"):
+                    try:
+                        seg.unlink()
+                    except Exception as e:
+                        logger.warning(
+                            f"[{self.name}] Erreur suppression segment {seg.name}: {e}"
+                        )
+
+                # Supprime l'ancienne playlist
+                old_playlist = hls_dir / "playlist.m3u8"
+                if old_playlist.exists():
+                    try:
+                        old_playlist.unlink()
+                    except Exception as e:
+                        logger.warning(
+                            f"[{self.name}] Erreur suppression playlist: {e}"
+                        )
+            else:
+                hls_dir.mkdir(parents=True, exist_ok=True)
+
+            # 4) Calculer ou récupérer l'offset initial
+            start_offset = (
+                self.position_manager.get_start_offset()
+            )  # renvoie 0 si total_duration=0
+            if start_offset > 0:
+                self.position_manager.set_playback_offset(start_offset)
+                self.process_manager.set_playback_offset(start_offset)
+            else:
+                logger.info(f"[{self.name}] Offset = 0s (lecture depuis le début).")
+
+            # 5) Définir la durée totale dans le process_manager (pour le modulo, etc.)
+            self.process_manager.set_total_duration(
+                self.position_manager.total_duration
+            )
+
+            # 6) Vérifier l'existence du _playlist.txt de concat
+            concat_file = Path(self.video_dir) / "_playlist.txt"
+            if not concat_file.exists():
+                # On essaie de le recréer si besoin
+                new_concat = self._create_concat_file()
+                if not new_concat or not new_concat.exists():
+                    logger.error(
+                        f"[{self.name}] ❌ Impossible de lancer: _playlist.txt introuvable."
+                    )
+                    return False
+
+            # 7) Construire la commande FFmpeg
+            command = self.command_builder.build_command(
+                input_file=concat_file,
+                output_dir=hls_dir,
+                playback_offset=self.process_manager.get_playback_offset(),
+                progress_file=self.logger.get_progress_file(),
+                has_mkv=self.command_builder.detect_mkv_in_playlist(concat_file),
+            )
+
+            logger.info(f"[{self.name}] 🚀 Lancement FFmpeg: {' '.join(command)}")
+
+            # 8) Démarrer le process FFmpeg via le FFmpegProcessManager
+            success = self.process_manager.start_process(command, str(hls_dir))
+            if not success:
+                logger.error(
+                    f"[{self.name}] ❌ Échec du démarrage FFmpeg (première tentative)."
+                )
+                return False
+
+            logger.info(
+                f"[{self.name}] ✅ FFmpeg démarré avec PID: {self.process_manager.process.pid}"
+            )
+            logger.info(
+                f"[{self.name}] ✅ Stream démarré avec succès à {start_offset:.2f}s."
+            )
+            return True
+
+        except Exception as e:
+            logger.error(f"[{self.name}] ❌ Erreur start_stream: {e}")
+            return False
