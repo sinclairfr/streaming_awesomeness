@@ -141,27 +141,49 @@ class ChannelStatusManager:
             channels_dict: Dictionary mapping channel names to status dicts
                            with 'active', 'viewers', 'streaming' keys
         """
-        with self.lock:
-            current_time = int(time.time())
-            total_viewers = 0
-            
-            for channel_name, status in channels_dict.items():
-                viewers = status.get("viewers", 0)
-                total_viewers += viewers
+        try:
+            with self.lock:
+                current_time = int(time.time())
+                total_viewers = 0
                 
-                self.update_channel(
-                    channel_name,
-                    is_active=status.get("active", True),
-                    viewers=viewers,
-                    streaming=status.get("streaming", False)
-                )
-            
-            # Update total active viewers
-            self.status_data["active_viewers"] = total_viewers
-            
-            # Force save when updating all channels
-            self._save_status()
-            return True
+                logger.info(f"📊 Mise à jour des statuts pour {len(channels_dict)} chaînes")
+                
+                # Clear existing channels data
+                self.status_data["channels"] = {}
+                
+                for channel_name, status in channels_dict.items():
+                    viewers = status.get("viewers", 0)
+                    total_viewers += viewers
+                    
+                    logger.debug(f"📡 Mise à jour de {channel_name}: viewers={viewers}, active={status.get('active')}, streaming={status.get('streaming')}")
+                    
+                    # Add to dictionary
+                    self.status_data["channels"][channel_name] = {
+                        "active": status.get("active", True),
+                        "viewers": viewers,
+                        "streaming": status.get("streaming", False),
+                        "last_update": current_time,
+                        "peak_viewers": viewers
+                    }
+                
+                # Update total active viewers and timestamp
+                self.status_data["active_viewers"] = total_viewers
+                self.status_data["last_updated"] = current_time
+                
+                # Force save immediately
+                success = self._save_status()
+                if success:
+                    logger.info(f"✅ Statuts sauvegardés avec succès: {total_viewers} viewers au total")
+                else:
+                    logger.error("❌ Échec de la sauvegarde des statuts")
+                
+                return success
+                
+        except Exception as e:
+            logger.error(f"❌ Erreur lors de la mise à jour des statuts: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return False
     
     def get_status_data(self):
         """Get a copy of the current status data"""

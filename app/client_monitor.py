@@ -58,9 +58,9 @@ class ClientMonitor(threading.Thread):
                 time.sleep(10)
                 self._cleanup_inactive()
 
-                # Vérification périodique des logs (toutes les 5 minutes)
+                # Vérification périodique des logs (toutes les  minutes)
                 current_time = time.time()
-                if current_time - last_health_check > 300:  # 5 minutes
+                if current_time - last_health_check > 60:  #1 minute
                     self.check_log_status()
                     last_health_check = current_time
 
