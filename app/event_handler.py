@@ -213,6 +213,55 @@ class ChannelEventHandler(FileSystemEventHandler):
                                 f"🔄 Rafraîchissement de la chaîne {channel_name}"
                             )
                             channel.refresh_videos()
+                            
+                            # NOUVEAU: Forcer la régénération de la playlist après détection de fichier stable
+                            if hasattr(channel, "_create_concat_file"):
+                                logger.info(
+                                    f"🔄 Régénération de la playlist pour {channel_name} après détection de fichier stable"
+                                )
+                                # On utilise un thread pour ne pas bloquer
+                                # Créer un nouveau thread pour la régénération et le redémarrage
+                                def regenerate_and_restart():
+                                    try:
+                                        # 0. Vérifier l'état actuel de la playlist
+                                        playlist_path = Path(channel.video_dir) / "_playlist.txt"
+                                        old_content = ""
+                                        if playlist_path.exists():
+                                            with open(playlist_path, "r", encoding="utf-8") as f:
+                                                old_content = f.read()
+                                        
+                                        # 1. Régénérer la playlist
+                                        channel._create_concat_file()
+                                        logger.info(f"[{channel_name}] ✅ Playlist mise à jour suite à nouveau fichier stable")
+                                        
+                                        # Vérifier si la playlist a réellement changé
+                                        new_content = ""
+                                        if playlist_path.exists():
+                                            with open(playlist_path, "r", encoding="utf-8") as f:
+                                                new_content = f.read()
+                                        
+                                        # 2. Redémarrer le stream seulement si la playlist a changé
+                                        if old_content != new_content:
+                                            logger.info(f"[{channel_name}] 🔄 Playlist modifiée, redémarrage nécessaire")
+                                            if hasattr(channel, "_restart_stream") and channel.process_manager.is_running():
+                                                logger.info(f"[{channel_name}] 🔄 Redémarrage du stream pour appliquer la nouvelle playlist")
+                                                channel._restart_stream()
+                                            else:
+                                                logger.info(f"[{channel_name}] ℹ️ Pas besoin de redémarrer le stream, déjà arrêté ou pas de méthode de redémarrage")
+                                        else:
+                                            logger.info(f"[{channel_name}] ✓ Playlist inchangée, pas de redémarrage nécessaire")
+                                            
+                                        # 3. Notifier également le ReadyContentHandler pour les autres mises à jour
+                                        if hasattr(self.manager, "ready_event_handler"):
+                                            self.manager.ready_event_handler._update_channel(channel_name)
+                                    except Exception as e:
+                                        logger.error(f"[{channel_name}] ❌ Erreur lors de la régénération et du redémarrage: {e}")
+                                
+                                # Lancer le processus de régénération et redémarrage
+                                threading.Thread(
+                                    target=regenerate_and_restart,
+                                    daemon=True
+                                ).start()
                         else:
                             self._schedule_scan()
                     else:
@@ -268,8 +317,6 @@ class ChannelEventHandler(FileSystemEventHandler):
         except Exception as e:
             logger.error(f"❌ Erreur extraction nom de chaîne: {e}")
             return ""
-
-    # Dans iptv_manager.py, ajoute cette méthode
 
     def force_scan_now(self):
         """Force un scan immédiat des chaînes"""
@@ -549,8 +596,35 @@ class ReadyContentHandler(FileSystemEventHandler):
             ):
                 # On ne fait plus de mise à jour d'offset, on recrée juste la playlist si nécessaire
                 if hasattr(channel, "_create_concat_file"):
+                    # Vérifier l'état actuel de la playlist avant modification
+                    playlist_path = Path(channel.video_dir) / "_playlist.txt"
+                    old_content = ""
+                    if playlist_path.exists():
+                        with open(playlist_path, "r", encoding="utf-8") as f:
+                            old_content = f.read()
+                    
+                    # Mettre à jour la playlist
                     channel._create_concat_file()
                     logger.info(f"[{channel_name}] 🔄 Playlist mise à jour suite aux changements")
+                    
+                    # Vérifier si la playlist a réellement changé
+                    new_content = ""
+                    if playlist_path.exists():
+                        with open(playlist_path, "r", encoding="utf-8") as f:
+                            new_content = f.read()
+                    
+                    # NOUVEAU: Redémarrer le stream seulement si la playlist a changé
+                    if old_content != new_content:
+                        logger.info(f"[{channel_name}] 🔄 Playlist modifiée, redémarrage nécessaire")
+                        if hasattr(channel, "_restart_stream"):
+                            logger.info(f"[{channel_name}] 🔄 Redémarrage du stream pour appliquer la nouvelle playlist")
+                            # Redémarrer dans un thread séparé pour ne pas bloquer
+                            threading.Thread(
+                                target=channel._restart_stream,
+                                daemon=True
+                            ).start()
+                    else:
+                        logger.info(f"[{channel_name}] ✓ Playlist inchangée, pas de redémarrage nécessaire")
 
             logger.info(
                 f"✅ Mises à jour initiées pour {channel_name} suite à changement dans ready_to_stream"

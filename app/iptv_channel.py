@@ -114,8 +114,8 @@ class IPTVChannel:
         last_creation = IPTVChannel._playlist_creation_timestamps.get(self.name, 0)
         concat_file = Path(self.video_dir) / "_playlist.txt"
 
-        # Si on a créé une playlist dans les 30 dernières secondes, ne pas recréer
-        if current_time - last_creation < 30:
+        # Si on a créé une playlist dans les 10 dernières secondes, ne pas recréer
+        if current_time - last_creation < 10:
             logger.debug(
                 f"[{self.name}] ℹ️ Création de playlist ignorée (dernière: il y a {current_time - last_creation:.1f}s)"
             )
@@ -131,13 +131,15 @@ class IPTVChannel:
                 logger.error(f"[{self.name}] ❌ Dossier ready_to_stream introuvable")
                 return None
 
-            # MODIFICATION: Utiliser self.processed_videos au lieu de scanner tous les fichiers
-            # Car processed_videos contient déjà uniquement les fichiers validés
-            if not self.processed_videos:
-                logger.error(f"[{self.name}] ❌ Aucune vidéo validée disponible")
+            # MODIFIÉ: On rescanne le dossier ready_to_stream pour être sûr d'avoir tous les fichiers
+            # au lieu de se baser uniquement sur self.processed_videos qui pourrait ne pas être à jour
+            ready_files = list(ready_to_stream_dir.glob("*.mp4"))
+            
+            if not ready_files:
+                logger.error(f"[{self.name}] ❌ Aucun fichier MP4 dans {ready_to_stream_dir}")
                 return None
-
-            ready_files = self.processed_videos.copy()
+                
+            logger.info(f"[{self.name}] 🔍 {len(ready_files)} fichiers trouvés dans ready_to_stream")
 
             # On mélange les fichiers pour plus de variété
             import random
@@ -179,6 +181,9 @@ class IPTVChannel:
             if not concat_file.exists() or concat_file.stat().st_size == 0:
                 logger.error(f"[{self.name}] ❌ Erreur: playlist vide ou non créée")
                 return None
+
+            # NOUVEAU: Mettre à jour self.processed_videos pour synchroniser
+            self.processed_videos = valid_files.copy()
 
             logger.info(
                 f"[{self.name}] 🎥 Playlist créée avec {len(valid_files)} fichiers uniques en mode aléatoire"
@@ -340,6 +345,10 @@ class IPTVChannel:
             # Analyse des segments
             segment_data = []
             total_size = 0
+            
+            # Variable pour suivre la modification la plus récente
+            most_recent_mtime = 0
+            
             for segment in segments:
                 segment_path = hls_path / segment
                 if segment_path.exists():
@@ -350,6 +359,10 @@ class IPTVChannel:
                         if "_" in segment
                         else 0
                     )
+
+                    # Mise à jour du temps de modification le plus récent
+                    if mtime > most_recent_mtime:
+                        most_recent_mtime = mtime
 
                     segment_info = {
                         "name": segment,
@@ -374,6 +387,16 @@ class IPTVChannel:
 
             # Tri des segments par ID
             segment_data.sort(key=lambda x: x.get("id", 0))
+
+            # Mettre à jour last_segment_time si un segment récent a été détecté
+            if most_recent_mtime > 0:
+                current_time = time.time()
+                segment_age = current_time - most_recent_mtime
+                
+                # Si un segment récent a été détecté, mise à jour du timestamp 
+                if segment_age < CRASH_THRESHOLD:
+                    logger.debug(f"[{self.name}] ✅ Segment récent trouvé (âge: {segment_age:.1f}s), mise à jour du last_segment_time")
+                    self.last_segment_time = current_time
 
             # Détection des sauts de segments
             jumps = []
@@ -765,6 +788,9 @@ class IPTVChannel:
                     self.channel_health_check()
                     self.last_health_check = current_time
 
+                # Vérification directe des segments dans le système de fichiers
+                self._check_filesystem_segments()
+
                 # Analyse des segments toutes les 30 secondes
                 if (
                     not hasattr(self, "last_segment_check")
@@ -795,6 +821,50 @@ class IPTVChannel:
                 f"[{self.name}] ❌ Erreur dans la boucle de surveillance des segments: {e}"
             )
 
+    def _check_filesystem_segments(self):
+        """
+        Vérifie directement les fichiers segment sur le disque pour détecter les créations récentes
+        indépendamment de la playlist. Cela résout les problèmes de détection de timeouts.
+        """
+        try:
+            current_time = time.time()
+            
+            # Ne vérifier que toutes les 5 secondes pour limiter les accès disque
+            if hasattr(self, "last_fs_check") and current_time - self.last_fs_check < 5:
+                return
+                
+            self.last_fs_check = current_time
+            
+            # Chemin du dossier HLS
+            hls_path = Path(f"/app/hls/{self.name}")
+            if not hls_path.exists():
+                return
+                
+            # Trouver tous les segments .ts
+            segments = list(hls_path.glob("segment_*.ts"))
+            if not segments:
+                return
+                
+            # Trouver le segment le plus récent
+            most_recent = max(segments, key=lambda s: s.stat().st_mtime)
+            if not most_recent:
+                return
+                
+            # Vérifier l'âge du segment le plus récent
+            mtime = most_recent.stat().st_mtime
+            segment_age = current_time - mtime
+            
+            # Si le segment est récent, mettre à jour le timestamp
+            if segment_age < CRASH_THRESHOLD:
+                logger.debug(
+                    f"[{self.name}] 🆕 Segment récent trouvé par vérification directe: "
+                    f"{most_recent.name} (âge: {segment_age:.1f}s)"
+                )
+                self.last_segment_time = current_time
+                
+        except Exception as e:
+            logger.debug(f"[{self.name}] Erreur vérification FS segments: {e}")
+            
     def _restart_stream(self) -> bool:
         """Redémarre le stream en cas de problème avec une meilleure gestion de la continuité"""
         try:
@@ -1159,6 +1229,10 @@ class IPTVChannel:
             # Extraction de l'ID du segment depuis le nom
             segment_id = Path(segment_path).stem.split("_")[-1]
             self.stats_collector.update_segment_stats(self.name, segment_id, size)
+        
+        # Mise à jour du timestamp du dernier segment
+        self.last_segment_time = time.time()
+        logger.debug(f"[{self.name}] ⏱️ Timestamp de segment mis à jour suite à création de {Path(segment_path).name}")
 
     def _scan_videos(self) -> bool:
         """Scanne les fichiers vidéos et met à jour processed_videos"""

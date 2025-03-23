@@ -1587,17 +1587,80 @@ class IPTVManager:
             self.cleanup_manager()
 
     def _periodic_scan(self):
-        """Effectue un scan périodique des chaînes disponibles"""
+        """Effectue un scan périodique des chaînes pour détecter les changements"""
         while not self.stop_periodic_scan.is_set():
             try:
-                logger.info("🔍 Démarrage du scan périodique des chaînes...")
+                logger.debug(f"🔄 Scan périodique des chaînes en cours...")
                 self.scan_channels(force=True)
-                logger.info("✅ Scan périodique terminé")
+                
+                # NOUVEAU: Resynchronisation périodique des playlists
+                self._resync_all_playlists()
+                
+                # Attente jusqu'au prochain scan
+                self.stop_periodic_scan.wait(self.periodic_scan_interval)
             except Exception as e:
-                logger.error(f"❌ Erreur lors du scan périodique: {e}")
+                logger.error(f"❌ Erreur scan périodique: {e}")
+                self.stop_periodic_scan.wait(60)  # En cas d'erreur, on attend 1 minute
+
+    # NOUVELLE MÉTHODE: resynchronisation des playlists
+    def _resync_all_playlists(self):
+        """Force la resynchronisation des playlists pour toutes les chaînes"""
+        try:
+            resync_count = 0
+            for channel_name, channel in self.channels.items():
+                # Vérifier si la chaîne a une méthode de création de playlist
+                if hasattr(channel, "_create_concat_file"):
+                    # On ne recréé pas toutes les playlists à chaque fois, on alterne
+                    # 1/4 des chaînes à chaque cycle pour ne pas surcharger le système
+                    if random.randint(1, 4) == 1:  
+                        logger.debug(f"[{channel_name}] 🔄 Resynchronisation périodique de la playlist")
+                        
+                        # Créer un thread dédié pour resynchroniser et redémarrer si nécessaire
+                        def resync_and_restart(ch_name, ch):
+                            try:
+                                # 1. Vérifier l'état actuel de la playlist
+                                playlist_path = Path(ch.video_dir) / "_playlist.txt"
+                                old_content = ""
+                                if playlist_path.exists():
+                                    with open(playlist_path, "r", encoding="utf-8") as f:
+                                        old_content = f.read()
+                                
+                                # 2. Mettre à jour la playlist
+                                ch._create_concat_file()
+                                
+                                # 3. Vérifier si la playlist a changé
+                                new_content = ""
+                                if playlist_path.exists():
+                                    with open(playlist_path, "r", encoding="utf-8") as f:
+                                        new_content = f.read()
+                                
+                                # 4. Redémarrer seulement si le contenu a changé
+                                if old_content != new_content:
+                                    logger.info(f"[{ch_name}] 🔄 Playlist modifiée, redémarrage du stream nécessaire")
+                                    if hasattr(ch, "_restart_stream") and ch.process_manager.is_running():
+                                        logger.info(f"[{ch_name}] 🔄 Redémarrage du stream après mise à jour périodique de la playlist")
+                                        ch._restart_stream()
+                                else:
+                                    logger.debug(f"[{ch_name}] ✓ Playlist inchangée, pas de redémarrage nécessaire")
+                            except Exception as e:
+                                logger.error(f"[{ch_name}] ❌ Erreur pendant la resynchronisation: {e}")
+                        
+                        # Lancer le thread de resynchronisation
+                        threading.Thread(
+                            target=resync_and_restart,
+                            args=(channel_name, channel),
+                            daemon=True
+                        ).start()
+                        
+                        resync_count += 1
             
-            # Attend l'intervalle défini ou jusqu'à l'arrêt du service
-            self.stop_periodic_scan.wait(self.periodic_scan_interval)
+            if resync_count > 0:
+                logger.info(f"✅ Resynchronisation et redémarrage de {resync_count} chaînes effectués")
+                
+        except Exception as e:
+            logger.error(f"❌ Erreur resynchronisation playlists: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
 
     def stop(self):
         """Arrête proprement le gestionnaire IPTV"""
