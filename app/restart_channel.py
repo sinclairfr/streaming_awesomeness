@@ -82,9 +82,24 @@ def restart_channel(channel_name):
         if not playlist_file.exists() or playlist_file.stat().st_size == 0:
             logger.warning(f"[{channel_name}] Playlist concat inexistante ou vide, tentative de reconstruction")
             try:
-                # Trouver les fichiers vidéo
-                video_dir = Path(f"/app/videos/{channel_name}/ready_to_stream")
-                if video_dir.exists():
+                # Vérifier les deux emplacements possibles des vidéos
+                video_paths = [
+                    Path(f"/app/videos/{channel_name}/ready_to_stream"),
+                    Path(f"/mnt/videos/streaming_awesomeness/{channel_name}/ready_to_stream")
+                ]
+                
+                # Trouver le premier chemin valide
+                video_dir = None
+                for path in video_paths:
+                    if path.exists():
+                        video_dir = path
+                        logger.info(f"[{channel_name}] Dossier vidéo trouvé: {video_dir}")
+                        break
+                
+                if video_dir:
+                    # Créer le dossier parent si nécessaire
+                    playlist_file.parent.mkdir(parents=True, exist_ok=True)
+                    
                     # Créer une playlist de base à partir des fichiers MP4 disponibles
                     videos = list(video_dir.glob("*.mp4"))
                     if videos:
@@ -93,10 +108,35 @@ def restart_channel(channel_name):
                                 f.write(f"file '{video}'\n")
                         logger.info(f"[{channel_name}] Playlist reconstruite avec {len(videos)} vidéos")
                     else:
-                        logger.error(f"[{channel_name}] Aucun fichier vidéo trouvé dans {video_dir}")
-                        return False
+                        # Chercher aussi les MKV
+                        videos = list(video_dir.glob("*.mkv"))
+                        if videos:
+                            with open(playlist_file, "w") as f:
+                                for video in videos:
+                                    f.write(f"file '{video}'\n")
+                            logger.info(f"[{channel_name}] Playlist reconstruite avec {len(videos)} vidéos MKV")
+                        else:
+                            logger.error(f"[{channel_name}] Aucun fichier vidéo trouvé dans {video_dir}")
+                            
+                            # Tenter de récupérer en créant un fichier vide pour FFmpeg
+                            with open(playlist_file, "w") as f:
+                                dummy_path = Path("/app/assets/dummy.mp4")
+                                if dummy_path.exists():
+                                    f.write(f"file '{dummy_path}'\n")
+                                    logger.warning(f"[{channel_name}] Création d'une playlist avec la vidéo de secours")
+                                    return True
+                            return False
                 else:
-                    logger.error(f"[{channel_name}] Dossier vidéo inexistant: {video_dir}")
+                    logger.error(f"[{channel_name}] Dossier vidéo introuvable dans tous les chemins testés")
+                    
+                    # Créer la structure minimale nécessaire
+                    hls_dir = Path(f"/app/hls/{channel_name}")
+                    hls_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    # Créer un fichier de playlist vide mais valide pour éviter les erreurs
+                    with open(hls_dir / "playlist.m3u8", "w") as f:
+                        f.write("#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n")
+                    
                     return False
             except Exception as e:
                 logger.error(f"[{channel_name}] Erreur reconstruction playlist: {e}")

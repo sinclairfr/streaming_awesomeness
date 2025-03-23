@@ -1,6 +1,8 @@
 app/content/
 app/hls/
 app/cache/
+app/logs/
+nginx_logs/
 *.mp4
 *.avi
 *.mkv
@@ -11,3 +13,5 @@ app/cache/
 rebus/
 env/
 *.log  # Ignore log files
+.pytest_cache/
+videos/

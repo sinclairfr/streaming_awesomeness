@@ -9,14 +9,17 @@ import subprocess
 
 
 class ChannelEventHandler(FileSystemEventHandler):
+    """Gestionnaire d'événements pour les changements de fichiers dans les dossiers des chaînes"""
 
     def __init__(self, manager):
         self.manager = manager
         self.copying_files = {}  # Dict pour tracker les fichiers en cours de copie
         self.lock = threading.Lock()  # Ajout de l'attribut lock manquant
         self.channel_changes = set()  # Pour suivre les chaînes modifiées
-        self.last_scan_time = 0  # Horodatage du dernier scan
-        self.scan_cooldown = 5  # Temps minimal entre deux scans en secondes
+        self.last_scan_time = 0
+        self.scan_cooldown = 10  # 10 secondes minimum entre les scans
+        self.changed_channels = set()
+        self.scan_timer = None
         super().__init__()
 
     def is_file_ready(self, file_path: str, timeout: int = 300) -> bool:
@@ -325,6 +328,7 @@ class ChannelEventHandler(FileSystemEventHandler):
         logger.info("✅ Scan forcé terminé")
 
     def on_created(self, event):
+        """Gère la création d'un fichier"""
         if event.is_directory:
             logger.info(f"📂 Nouveau dossier détecté: {event.src_path}")
             # On vérifie si c'est un dossier de chaîne (direct dans content_dir)
@@ -362,7 +366,7 @@ class ChannelEventHandler(FileSystemEventHandler):
             # On note la chaîne concernée
             channel_name = self.get_channel_from_path(event.src_path)
             if channel_name:
-                self.channel_changes.add(channel_name)
+                self.changed_channels.add(channel_name)
 
         # On lance un thread dédié pour surveiller la copie
         threading.Thread(
@@ -372,116 +376,52 @@ class ChannelEventHandler(FileSystemEventHandler):
         ).start()
 
     def on_modified(self, event):
-        if not event.is_directory:
-            # On ignore les modifications si le fichier est en cours de copie
-            with self.lock:
-                if event.src_path in self.copying_files:
-                    return
+        """Gère la modification d'un fichier"""
+        if event.is_directory:
+            return
+        self._handle_change(event.src_path)
 
-            # Vérification du type de fichier
-            path = Path(event.src_path)
-            if path.suffix.lower() not in [
-                ".mp4",
-                ".mkv",
-                ".avi",
-                ".mov",
-                "m4v",
-                ".txt",
-            ]:
-                return  # On ignore les fichiers non vidéo/non playlist
+    def on_deleted(self, event):
+        """Gère la suppression d'un fichier"""
+        if event.is_directory:
+            return
+        self._handle_change(event.src_path)
 
-            self._handle_event(event)
+    def _handle_change(self, file_path):
+        """Gère un changement de fichier en planifiant un scan si nécessaire"""
+        try:
+            # Ignorer les fichiers temporaires et cachés
+            filename = Path(file_path).name
+            if filename.startswith('.') or filename.startswith('~'):
+                return
 
-    def on_moved(self, event):
-        """Gère les déplacements de fichiers (souvent utilisés pour les renommages)"""
-        if not event.is_directory:
-            # Vérification du type de fichier
-            dest_path = Path(event.dest_path)
-            if dest_path.suffix.lower() not in [
-                ".mp4",
-                ".mkv",
-                ".avi",
-                ".mov",
-                ".m4v",
-                ".txt",
-            ]:
-                return  # On ignore les fichiers non vidéo/non playlist
+            # Extraire le nom de la chaîne du chemin
+            channel_name = Path(file_path).parent.name
+            if channel_name in self.manager.channels:
+                self.changed_channels.add(channel_name)
+                self._schedule_scan()
 
-            # On note la chaîne concernée
-            channel_name = self.get_channel_from_path(event.dest_path)
-            if channel_name:
-                with self.lock:
-                    self.channel_changes.add(channel_name)
-
-            self._handle_event(event)
-
-    def _handle_event(self, event):
-        logger.debug(f"🔄 Modification détectée: {event.src_path}")
-        self._schedule_scan()
+        except Exception as e:
+            logger.error(f"❌ Erreur traitement changement fichier: {e}")
 
     def _schedule_scan(self):
         """Planifie un scan avec un cooldown pour éviter les scans trop fréquents"""
-        current_time = time.time()
+        try:
+            current_time = time.time()
 
-        # Augmentation du cooldown pour éviter les scans trop fréquents
-        # 5s -> 30s minimum entre deux scans
-        if current_time - self.last_scan_time < self.scan_cooldown:
-            logger.debug(
-                f"Scan ignoré: dernier scan il y a {current_time - self.last_scan_time:.1f}s (cooldown: {self.scan_cooldown}s)"
-            )
-            return
+            # Annuler le timer existant s'il y en a un
+            if self.scan_timer:
+                self.scan_timer.cancel()
 
-        self.last_scan_time = current_time
+            # Si des chaînes ont changé, planifier un nouveau scan
+            if self.changed_channels:
+                logger.info(f"🔄 Scan programmé pour les chaînes: {', '.join(self.changed_channels)}")
+                # Demander un scan au manager
+                self.manager.request_scan(force=True)
+                self.changed_channels.clear()
 
-        # Si on a des chaînes spécifiques à scanner
-        with self.lock:
-            changed_channels = list(self.channel_changes)
-            self.channel_changes.clear()
-
-        if changed_channels:
-            logger.info(
-                f"🔄 Scan programmé pour les chaînes: {', '.join(changed_channels)}"
-            )
-            for channel_name in changed_channels:
-                if channel_name in self.manager.channels:
-                    channel = self.manager.channels[channel_name]
-                    if hasattr(channel, "refresh_videos"):
-                        threading.Thread(
-                            target=channel.refresh_videos, daemon=True
-                        ).start()
-        else:
-            # On ne fait pas de scan complet si aucune chaîne n'est à scanner
-            # self.manager.scan_channels()
-            logger.debug("Scan complet ignoré: aucune chaîne spécifique à scanner")
-
-        """Planifie un scan avec un cooldown pour éviter les scans trop fréquents"""
-        current_time = time.time()
-
-        # Si le dernier scan est trop récent, on ne fait rien
-        if current_time - self.last_scan_time < self.scan_cooldown:
-            return
-
-        self.last_scan_time = current_time
-
-        # Si on a des chaînes spécifiques à scanner
-        with self.lock:
-            changed_channels = list(self.channel_changes)
-            self.channel_changes.clear()
-
-        if changed_channels:
-            logger.info(
-                f"🔄 Scan programmé pour les chaînes: {', '.join(changed_channels)}"
-            )
-            for channel_name in changed_channels:
-                if channel_name in self.manager.channels:
-                    channel = self.manager.channels[channel_name]
-                    if hasattr(channel, "refresh_videos"):
-                        threading.Thread(
-                            target=channel.refresh_videos, daemon=True
-                        ).start()
-        else:
-            # Scan complet en dernier recours
-            self.manager.scan_channels()
+        except Exception as e:
+            logger.error(f"❌ Erreur planification scan: {e}")
 
 
 class ReadyContentHandler(FileSystemEventHandler):

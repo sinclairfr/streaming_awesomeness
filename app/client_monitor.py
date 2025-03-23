@@ -17,6 +17,7 @@ class ClientMonitor(threading.Thread):
     SEGMENT_TIMEOUT = 30
     PLAYLIST_TIMEOUT = 20
     UNKNOWN_TIMEOUT = 25
+    WATCHER_INACTIVITY_TIMEOUT = 60  # Timeout pour considérer un watcher comme inactif
 
     def __init__(self, log_path, update_watchers_callback, manager, stats_collector=None):
         super().__init__(daemon=True)
@@ -38,11 +39,17 @@ class ClientMonitor(threading.Thread):
         # Pour éviter les accès concurrents
         self.lock = threading.Lock()
 
-        self.inactivity_threshold = TIMEOUT_NO_VIEWERS
+        # Événement pour l'arrêt propre du thread de nettoyage
+        self.stop_event = threading.Event()
+
+        logger.info(f"⏱️ Timeouts configurés - Watcher inactif: {self.WATCHER_INACTIVITY_TIMEOUT}s, Segment: {self.SEGMENT_TIMEOUT}s, Playlist: {self.PLAYLIST_TIMEOUT}s")
 
         # Thread de nettoyage
         self.cleanup_thread = threading.Thread(target=self._cleanup_loop, daemon=True)
         self.cleanup_thread.start()
+        
+        # Pour le logging périodique
+        self.last_cleanup_log = time.time()
 
     def run(self):
         """Méthode principale du thread"""
@@ -686,42 +693,46 @@ class ClientMonitor(threading.Thread):
         pass
 
     def _update_channel_watchers_count(self, channel):
-        """Calcule et met à jour le nombre de watchers pour une chaîne"""
-        with self.lock:
-            # Vérifier si on doit logger (au moins 2 secondes entre les logs)
+        """Met à jour le nombre de watchers pour une chaîne"""
+        try:
             current_time = time.time()
-            if hasattr(self, "last_watchers_log") and current_time - self.last_watchers_log < 2.0:
-                return
+            active_watchers = []
+            
+            # Récupération des watchers actifs avec verrou
+            with self.lock:
+                if channel not in self.watchers:
+                    return
                 
-            # Compter les watchers actifs pour cette chaîne
-            active_ips = set()
-            ip_times = {}  # Pour stocker le temps d'activité de chaque IP
+                for ip, watcher_data in self.watchers[channel].items():
+                    last_activity = watcher_data.get("last_activity", 0)
+                    # Utiliser le timeout de watcher pour l'inactivité
+                    if current_time - last_activity < self.WATCHER_INACTIVITY_TIMEOUT:
+                        active_watchers.append(ip)
 
-            for ip, data in self.watchers.items():
-                if data.get("current_channel") == channel and "timer" in data:
-                    # Vérifier si le timer est actif
-                    timer = data["timer"]
-                    if timer.is_running():
-                        active_ips.add(ip)
-                        ip_times[ip] = timer.get_total_time()
-            
-            # Nombre de watchers
-            watcher_count = len(active_ips)
-            
-            # Log uniquement si le nombre a changé
-            if not hasattr(self, "last_watcher_counts"):
-                self.last_watcher_counts = {}
-            
-            if channel not in self.last_watcher_counts or self.last_watcher_counts[channel] != watcher_count:
-                logger.info(f"[{channel}] 👁️ Watchers: {watcher_count} actifs - IPs: {', '.join(active_ips)}")
-                self.last_watcher_counts[channel] = watcher_count
-                self.last_watchers_log = current_time
-            
-            # Mise à jour dans le manager
-            if hasattr(self, 'update_watchers') and callable(self.update_watchers):
-                self.update_watchers(channel, watcher_count, "/hls/")
-            else:
-                logger.error(f"[{channel}] ❌ Callback update_watchers non disponible")
+            # Mise à jour du nombre de watchers
+            if channel in self.manager.channels:
+                channel_obj = self.manager.channels[channel]
+                old_count = channel_obj.watchers_count
+                new_count = len(active_watchers)
+
+                if old_count != new_count:
+                    channel_obj.watchers_count = new_count
+                    # Mise à jour du dernier temps d'activité de la chaîne
+                    if new_count > 0:
+                        channel_obj.last_watcher_time = current_time
+                    logger.info(f"[{channel}] 👥 Changement watchers: {old_count} → {new_count}")
+
+                    # Si on passe de 0 à des watchers, on redémarre la chaîne si nécessaire
+                    if old_count == 0 and new_count > 0 and not channel_obj.process_manager.is_running():
+                        logger.info(f"[{channel}] 🔄 Redémarrage automatique de la chaîne (watchers actifs: {new_count})")
+                        self.manager._start_channel(channel)
+
+                # Log des watchers actifs
+                if active_watchers:
+                    logger.info(f"[{channel}] 👥 {len(active_watchers)} watchers actifs: {', '.join(active_watchers)}")
+
+        except Exception as e:
+            logger.error(f"❌ Erreur mise à jour watchers pour {channel}: {e}")
 
     def _prepare_log_file(self):
         """Vérifie que le fichier de log existe et est accessible"""

@@ -90,7 +90,10 @@ class FFmpegLogger:
     def _check_and_rotate_log(self, log_file: Path):
         """Vérifie la taille d'un fichier log et fait une rotation si nécessaire"""
         try:
-            if log_file.exists() and log_file.stat().st_size > self.max_log_size:
+            if not log_file.exists():
+                log_file.touch()
+                logger.info(f"✅ Created log file: {log_file.name}")
+            elif log_file.stat().st_size > self.max_log_size:
                 # Format du timestamp
                 timestamp = time.strftime("%Y%m%d_%H%M%S")
 
@@ -98,9 +101,12 @@ class FFmpegLogger:
                 backup_name = f"{log_file.stem}_{timestamp}{log_file.suffix}"
                 backup_path = log_file.parent / backup_name
 
-                # Rotation
-                log_file.rename(backup_path)
-                log_file.touch()
+                # Copie le contenu actuel vers le backup
+                import shutil
+                shutil.copy2(log_file, backup_path)
+                
+                # Vide le fichier de log actuel
+                log_file.write_text("")
 
                 logger.info(
                     f"🔄 Rotation du log {log_file.name} -> {backup_name} (taille > {self.max_log_size/1024/1024:.1f}MB)"
@@ -133,15 +139,6 @@ class FFmpegLogger:
 
         except Exception as e:
             logger.error(f"❌ Erreur nettoyage des anciens logs: {e}")
-
-    def log_segment(self, segment_path: str, size: int):
-        """Log des infos sur les segments générés directement dans le log principal"""
-        segment_info = (
-            f"{datetime.datetime.now()} - Segment {segment_path}: {size} bytes"
-        )
-
-        # On utilise le logger principal plutôt qu'un fichier séparé
-        logger.debug(f"[{self.channel_name}] {segment_info}")
 
     def get_progress_file(self) -> Path:
         """Renvoie le chemin du fichier de progression"""

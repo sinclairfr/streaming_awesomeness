@@ -1,7 +1,10 @@
 # config.py
 import os
 import logging
+import time
+import json
 from pathlib import Path
+import shutil
 
 # Configuration des chemins
 LOG_DIR = os.getenv("LOG_DIR", "/logs")
@@ -12,7 +15,7 @@ NGINX_ACCESS_LOG = os.getenv("NGINX_ACCESS_LOG", "/app/logs/nginx_access.log")
 SERVER_URL = os.getenv("SERVER_URL", "192.168.10.183")
 
 # Configuration des timeouts
-TIMEOUT_NO_VIEWERS = int(os.getenv("TIMEOUT_NO_VIEWERS", "3600"))
+TIMEOUT_NO_VIEWERS = int(os.getenv("TIMEOUT_NO_VIEWERS", "300"))  # 5 minutes
 RESOURCES_CHECK_INTERVAL = int(os.getenv("RESOURCES_CHECK_INTERVAL", "60"))
 CPU_CHECK_INTERVAL = float(os.getenv("CPU_CHECK_INTERVAL", "1"))
 CPU_THRESHOLD = int(os.getenv("CPU_THRESHOLD", "95"))
@@ -23,8 +26,8 @@ VIDEO_EXTENSIONS = os.getenv("VIDEO_EXTENSIONS", ".mp4,.avi,.mkv,.mov, .m4v").sp
 SEGMENT_AGE_THRESHOLD = int(os.getenv("SEGMENT_AGE_THRESHOLD", "120"))
 WATCHERS_LOG_CYCLE = int(os.getenv("WATCHERS_LOG_CYCLE", "300"))  # 5 minutes par défaut
 SUMMARY_CYCLE = int(os.getenv("SUMMARY_CYCLE", "300"))  # 5 minutes par défaut
-CRASH_THRESHOLD = int(os.getenv("CRASH_THRESHOLD", "120"))  # Seuil en secondes pour considérer un crash de stream
-
+CRASH_THRESHOLD = int(os.getenv("CRASH_THRESHOLD", "5"))  # Seuil en secondes pour considérer un crash de stream
+LEGACY_MODE = False
 
 def get_log_level(level_str: str) -> int:
     """Convertit un niveau de log en string vers sa valeur numérique"""
@@ -56,6 +59,8 @@ logger = logging.getLogger(__name__)
 # On désactive les logs de watchdog, quoi qu'il arrive
 logging.getLogger("watchdog").setLevel(logging.WARNING)
 
+# Nouveau mode de streaming: true = ancien système (concaténation), false = fichier par fichier
+# Version simplifiée pour éviter les problèmes de type
 
 def setup_log_rotation(log_dir="/app/logs", max_size_mb=5, max_backups=5):
     """Configure une rotation basique des logs"""
@@ -64,35 +69,30 @@ def setup_log_rotation(log_dir="/app/logs", max_size_mb=5, max_backups=5):
         log_dir_path.mkdir(parents=True, exist_ok=True)
 
         # Vérifie et nettoie les logs existants
-        for log_file in log_dir_path.glob("*.log"):
-            try:
-                if log_file.stat().st_size > max_size_mb * 1024 * 1024:
-                    # Format du timestamp
-                    timestamp = time.strftime("%Y%m%d_%H%M%S")
+        app_log = log_dir_path / "app.log"
+        if app_log.exists() and app_log.stat().st_size > max_size_mb * 1024 * 1024:
+            # Format du timestamp
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            
+            # Nouveau nom avec timestamp pour l'ancien log
+            backup_name = f"app_{timestamp}.log"
+            backup_path = log_dir_path / backup_name
 
-                    # Nouveau nom avec timestamp
-                    backup_name = f"{log_file.stem}_{timestamp}{log_file.suffix}"
-                    backup_path = log_file.parent / backup_name
+            # Copie le contenu actuel vers le backup
+            shutil.copy2(app_log, backup_path)
+            
+            # Vide le fichier app.log actuel
+            app_log.write_text("")
 
-                    # Rotation
-                    log_file.rename(backup_path)
-                    log_file.touch()
+            logger.info(f"🔄 Rotation du log app.log -> {backup_name}")
 
-                    logger.info(f"🔄 Rotation du log {log_file.name} -> {backup_name}")
-
-                    # Nettoie les anciennes archives
-                    _cleanup_old_logs(
-                        log_file.parent, log_file.stem, log_file.suffix, max_backups
-                    )
-            except Exception as e:
-                # Continue même si erreur sur un fichier
-                print(f"Erreur rotation log {log_file}: {e}")
-                continue
+            # Nettoie les anciennes archives
+            _cleanup_old_logs(log_dir_path, "app", ".log", max_backups)
 
         logger.info(f"✅ Configuration de rotation des logs terminée")
         return True
     except Exception as e:
-        print(f"Erreur setup_log_rotation: {e}")
+        logger.error(f"Erreur setup_log_rotation: {e}")
         return False
 
 

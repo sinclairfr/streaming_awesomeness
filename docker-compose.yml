@@ -14,9 +14,8 @@ services:
       - ./app/logs:/app/logs:rw
       - ./nginx_logs:/var/log/nginx:rw
       - ./app:/app:rw  # Regroupe tous les fichiers de l'application
-      #- ./requirements.txt:/app/requirements.txt:rw
+      #- /mnt/frigate_data/streaming_awesomeness/:/mnt/videos/streaming_awesomeness
       - /mnt/docker_data/streaming_awesomeness:/mnt/videos/streaming_awesomeness
-       # For memory management
     devices:
       - /dev/dri/card1:/dev/dri/card1
       - /dev/dri/renderD128:/dev/dri/renderD128
@@ -27,6 +26,7 @@ services:
       - NVIDIA_VISIBLE_DEVICES=
       - PUID=1000
       - PGID=1000
+      - LEGACY_MODE=false  # true = ancien système, false = fichier par fichier
     restart: unless-stopped
 
   nginx:
