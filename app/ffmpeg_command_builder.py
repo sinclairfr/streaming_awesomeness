@@ -144,7 +144,7 @@ class FFmpegCommandBuilder:
                 "-stream_loop",
                 "-1",  # Boucle infinie
                 "-fflags",
-                "+genpts+igndts+discardcorrupt",  # Simplifié
+                "+genpts+igndts+discardcorrupt+autobsf",  # Ajout de autobsf pour meilleure gestion des transitions
                 "-threads",
                 "4",
                 "-avoid_negative_ts",
@@ -174,7 +174,7 @@ class FFmpegCommandBuilder:
             "2",  # Réduit pour plus de stabilité
             # Flags HLS optimisés
             "-hls_flags",
-            "delete_segments+append_list+independent_segments+omit_endlist",  # Ajout de omit_endlist pour éviter les problèmes de boucle
+            "delete_segments+append_list+independent_segments+omit_endlist+discont_start",  # Ajout de discont_start pour gérer les discontinuités
             # Cache autorisé
             "-hls_allow_cache",
             "1",
@@ -214,11 +214,11 @@ class FFmpegCommandBuilder:
             "-map",
             "0:a:0?",
             "-max_muxing_queue_size",
-            "2048",  # Buffer augmenté pour plus de stabilité
+            "4096",  # Buffer augmenté pour plus de stabilité
             "-fps_mode",
             "passthrough",
             "-fflags",
-            "+genpts+igndts+discardcorrupt",  # Flags pour une meilleure gestion des timestamps
+            "+genpts+igndts+discardcorrupt+autobsf",  # Flags pour une meilleure gestion des timestamps
             "-thread_queue_size",
             "8192",  # Queue size augmentée pour plus de stabilité
             "-avoid_negative_ts",

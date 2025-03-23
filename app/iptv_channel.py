@@ -751,17 +751,60 @@ class IPTVChannel:
             else:
                 return
 
+            # Vérifier les erreurs segment dans les logs nginx
+            hls_dir = Path(f"/app/hls/{self.name}")
+            playlist_file = hls_dir / "playlist.m3u8"
+            
             # Vérifier si on est proche de la fin d'un fichier
             for file_path in playlist_files:
                 duration = get_accurate_duration(Path(file_path))
-                if duration and current_position >= duration - 15:  # Augmenté à 15 secondes pour plus de marge
-                    logger.info(f"[{self.name}] 🔄 Transition vers le fichier suivant: {Path(file_path).name}")
+                if duration and current_position >= duration - 30:  # Augmenté à 30 secondes pour plus de marge
+                    logger.info(f"[{self.name}] 🔄 Transition imminente vers le fichier suivant: {Path(file_path).name}")
+                    
+                    # Vérifier l'intégrité des segments récents
+                    segments_info = self._check_segments(str(hls_dir))
+                    has_segment_issues = False
+                    
+                    if segments_info.get("success"):
+                        # Vérifier les sauts de segments
+                        if segments_info.get("jumps"):
+                            has_segment_issues = True
+                            logger.warning(f"[{self.name}] 🚨 Sauts de segments détectés pendant la transition")
+                        
+                        # Vérifier s'il y a des segments manquants
+                        missing_segments = [s for s in segments_info.get("segments", []) if s.get("missing", False)]
+                        if missing_segments:
+                            has_segment_issues = True
+                            logger.warning(f"[{self.name}] 🚨 Segments manquants pendant la transition: {len(missing_segments)}")
                     
                     # Vérifier si on a des erreurs de DTS
                     if hasattr(self, "last_dts_error_time"):
                         if time.time() - self.last_dts_error_time < 60:  # Si on a eu une erreur DTS récente
-                            logger.warning(f"[{self.name}] ⚠️ Erreur DTS récente détectée, on force un redémarrage propre")
+                            has_segment_issues = True
+                            logger.warning(f"[{self.name}] ⚠️ Erreur DTS récente détectée pendant la transition")
+                    
+                    # Si on a détecté des problèmes ou on est à moins de 5 secondes de la fin,
+                    # on force un redémarrage propre pour éviter les saccades
+                    if has_segment_issues or current_position >= duration - 5:
+                        logger.warning(f"[{self.name}] 🔄 Redémarrage préventif du stream pour assurer une transition fluide")
+                        if self.process_manager.is_running():
+                            # On sauvegarde la playlist actuelle pour la restaurer après redémarrage
+                            if playlist_file.exists():
+                                try:
+                                    playlist_backup = str(playlist_file) + ".backup"
+                                    with open(playlist_file, "r") as src, open(playlist_backup, "w") as dest:
+                                        dest.write(src.read())
+                                except Exception as e:
+                                    logger.error(f"[{self.name}] ❌ Erreur sauvegarde playlist: {e}")
+                            
+                            # Redémarrage du processus FFmpeg
                             self.process_manager.restart_process()
+                            
+                            # Ajout d'un délai pour s'assurer que FFmpeg a le temps de démarrer
+                            time.sleep(3)
+                            
+                            # Forcer une mise à jour de la playlist
+                            self._create_concat_file()
                             return
                     
                     # Forcer une mise à jour de la playlist
@@ -1075,6 +1118,40 @@ class IPTVChannel:
                     logger.info(f"[{self.name}] 🔄 Auto-restarting stream due to missing segments")
                     return self.start_stream()
                 return False
+
+            # 3. Check for segment continuity and missing segments
+            if playlist_path.exists():
+                try:
+                    # Analyser le contenu de la playlist pour détecter les segments référencés
+                    with open(playlist_path, "r") as f:
+                        playlist_content = f.readlines()
+                    
+                    referenced_segments = []
+                    for line in playlist_content:
+                        if line.strip().endswith(".ts"):
+                            segment_name = line.strip()
+                            referenced_segments.append(segment_name)
+                    
+                    # Vérifier que chaque segment référencé existe bien
+                    missing_segments = []
+                    for segment_name in referenced_segments:
+                        segment_path = hls_dir / segment_name
+                        if not segment_path.exists():
+                            missing_segments.append(segment_name)
+                    
+                    # Si des segments référencés sont manquants, signaler l'anomalie
+                    if missing_segments and len(missing_segments) > 0:
+                        # Si plus de 30% des segments sont manquants, c'est un problème critique
+                        missing_percent = (len(missing_segments) / len(referenced_segments)) * 100
+                        logger.warning(f"[{self.name}] 🚨 Segments manquants: {len(missing_segments)}/{len(referenced_segments)} ({missing_percent:.1f}%)")
+                        
+                        if missing_percent > 30 and hasattr(self, "watchers_count") and self.watchers_count > 0:
+                            logger.error(f"[{self.name}] ❌ Trop de segments manquants ({missing_percent:.1f}%), redémarrage du stream")
+                            self.stop_stream_if_needed()
+                            time.sleep(2)
+                            return self.start_stream()
+                except Exception as e:
+                    logger.error(f"[{self.name}] ❌ Erreur analyse playlist: {e}")
             
             # Check segment age with different thresholds based on startup phase
             if segments:
@@ -1095,6 +1172,30 @@ class IPTVChannel:
                     # Get the latest segment number and file
                     latest_num, latest_segment = segment_numbers[-1]
                     
+                    # Vérifier les sauts de numérotation des segments
+                    segment_jumps = []
+                    for i in range(1, len(segment_numbers)):
+                        current_num = segment_numbers[i][0]
+                        prev_num = segment_numbers[i-1][0]
+                        gap = current_num - prev_num
+                        if gap > 2:  # Considérer un saut si l'écart est > 2
+                            segment_jumps.append((prev_num, current_num, gap))
+                    
+                    # Si on détecte des sauts importants dans la numérotation des segments récents
+                    if segment_jumps:
+                        jump_str = ", ".join([f"{prev}->{curr} (gap:{gap})" for prev, curr, gap in segment_jumps])
+                        logger.warning(f"[{self.name}] 🚨 Sauts de segments détectés: {jump_str}")
+                        
+                        # Si on a des watchers et des sauts importants, redémarrer
+                        if hasattr(self, "watchers_count") and self.watchers_count > 0:
+                            # Vérifier si les sauts sont récents (parmi les derniers segments)
+                            recent_jumps = [j for j in segment_jumps if j[1] >= latest_num - 10]
+                            if recent_jumps:
+                                logger.error(f"[{self.name}] ❌ Sauts récents détectés, redémarrage du stream")
+                                self.stop_stream_if_needed()
+                                time.sleep(2)
+                                return self.start_stream()
+                    
                     # Check if we have a reasonable number of segments
                     if len(segment_numbers) >= 2:
                         # Get the second latest segment
@@ -1114,7 +1215,7 @@ class IPTVChannel:
                         segment_age = current_time - latest_segment.stat().st_mtime
                     
                     # More lenient threshold during startup
-                    threshold = 180 if startup_duration < 180 else 120  # 3 minutes during startup, 2 minutes after
+                    threshold = 180 if startup_duration < 180 else 120
                     
                     if segment_age > threshold:
                         logger.warning(f"[{self.name}] ⚠️ Segments too old (last: {segment_age:.1f}s ago, threshold: {threshold}s)")
