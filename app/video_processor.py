@@ -966,8 +966,8 @@ class VideoProcessor:
                 f"[{self.channel_name}] ⏱️ Temps estimé: {estimated_hours:.1f} heures"
             )
 
-            # Augmentons le timeout pour les fichiers volumineux
-            timeout_hours = max(2.5, min(8, estimated_hours * 1.5))  # Entre 2.5h et 8h
+            # Timeout minimum de 2h, maximum 8h selon la taille du fichier
+            timeout_hours = max(2.0, min(8, estimated_hours * 1.5))  # Entre 2h et 8h
             timeout_seconds = int(timeout_hours * 3600)
             logger.info(
                 f"[{self.channel_name}] ⏰ Timeout ajusté: {timeout_hours:.1f} heures"
@@ -1120,9 +1120,10 @@ class VideoProcessor:
                         )
                         process.kill()
 
-                        # On déplace le fichier vers ignored avec raison spécifique
-                        self._move_to_ignored(video_path, "timeout du transcodage")
-                        return None
+                        # On essaie une dernière fois avec un timeout plus long avant d'ignorer
+                        logger.info(f"[{self.channel_name}] 🔄 Dernière tentative avec timeout étendu pour {sanitized_name}")
+                        # On tente un dernier essai avec CPU avant d'abandonner
+                        return self._retry_with_cpu(video_path, temp_path, final_output_path)
 
                     # Lecture de la progression
                     try:
@@ -1266,11 +1267,9 @@ class VideoProcessor:
                             logger.error(
                                 f"[{self.channel_name}] ❌ Échec transcodage CPU: {fallback_result.stderr}"
                             )
-                            self._move_to_ignored(
-                                video_path,
-                                f"échec transcodage CPU code {fallback_result.returncode}",
-                            )
-                            return None
+                            # On fait une deuxième tentative avec paramètres simplifiés avant d'abandonner
+                            logger.info(f"[{self.channel_name}] 🔄 Tentative simplifiée pour {video_path.name}")
+                            return self._final_fallback_attempt(video_path, temp_path, final_output_path)
                     else:
                         # Échec qui n'est pas lié à VAAPI, on abandonne
                         self._move_to_ignored(
@@ -1283,31 +1282,42 @@ class VideoProcessor:
                     logger.error(
                         f"[{self.channel_name}] ❌ Fichier temporaire invalide ou absent: {temp_path}"
                     )
-                    self._move_to_ignored(video_path, "fichier temporaire invalide")
-                    return None
+                    # Tentative de récupération avant d'abandonner
+                    logger.info(f"[{self.channel_name}] 🔄 Tentative de récupération pour {video_path.name}")
+                    return self._retry_with_cpu(video_path, temp_path, final_output_path)
 
                 # Vérification que le MP4 est complet
                 cmd_check = [
                     "ffprobe",
                     "-v",
                     "error",
+                    "-select_streams",
+                    "v:0",
                     "-show_entries",
-                    "format=duration",
+                    "stream=codec_name",
                     "-of",
-                    "default=noprint_wrappers=1:nokey=1",
+                    "json",
                     str(temp_path),
                 ]
 
                 check_result = subprocess.run(cmd_check, capture_output=True, text=True)
 
-                if check_result.returncode != 0 or not check_result.stdout.strip():
-                    logger.error(
-                        f"[{self.channel_name}] ❌ Validation MP4 échouée: {check_result.stderr}"
-                    )
-                    if temp_path.exists():
-                        temp_path.unlink()
-                    self._move_to_ignored(video_path, "fichier MP4 final invalide")
-                    return None
+                # Vérification simplifiée: On vérifie juste que c'est un MP4 avec codec h264
+                try:
+                    data = json.loads(check_result.stdout)
+                    if "streams" in data and len(data["streams"]) > 0:
+                        codec = data["streams"][0].get("codec_name", "").lower()
+                        if codec == "h264":
+                            logger.info(f"[{self.channel_name}] ✅ Validation MP4 réussie: codec {codec}")
+                        else:
+                            logger.warning(f"[{self.channel_name}] ⚠️ Codec {codec} détecté, tentative de récupération")
+                            return self._final_fallback_attempt(video_path, temp_path, final_output_path)
+                    else:
+                        logger.warning(f"[{self.channel_name}] ⚠️ Aucun stream vidéo détecté, tentative de récupération")
+                        return self._final_fallback_attempt(video_path, temp_path, final_output_path)
+                except Exception as e:
+                    logger.warning(f"[{self.channel_name}] ⚠️ Erreur analyse JSON: {e}, tentative de récupération")
+                    return self._final_fallback_attempt(video_path, temp_path, final_output_path)
 
                 # Déplacer le fichier temporaire vers le dossier ready_to_stream
                 if final_output_path.exists():
@@ -1337,9 +1347,24 @@ class VideoProcessor:
                 )
                 if process and process.poll() is None:
                     process.kill()
-                # Déplacement du fichier source vers ignored
-                self._move_to_ignored(video_path, f"exception: {str(e)[:200]}")
-                return None
+
+                # On tente une dernière récupération avant d'abandonner
+                try:
+                    logger.info(f"[{self.channel_name}] 🔄 Tentative de récupération après exception pour {original_filename}")
+                    return self._final_fallback_attempt(video_path, temp_path, final_output_path)
+                except Exception as final_e:
+                    # Récupérer le chemin original (racine) du fichier source si possible
+                    source_path = Path(self.channel_dir) / original_filename
+                    if source_path.exists():
+                        # Si le fichier source est toujours dans la racine, on utilise celui-là
+                        self._move_to_ignored(
+                            source_path, f"exception transcodage après plusieurs tentatives: {str(e)[:200]}"
+                        )
+                    else:
+                        # Sinon, on utilise le chemin actuel du fichier
+                        self._move_to_ignored(
+                            video_path, f"exception transcodage après plusieurs tentatives: {str(e)[:200]}"
+                        )
 
         except Exception as e:
             logger.error(
@@ -1464,12 +1489,12 @@ class VideoProcessor:
             if source_path.exists():
                 # Si le fichier source est toujours dans la racine, on utilise celui-là
                 self._move_to_ignored(
-                    source_path, f"exception transcodage: {str(e)[:200]}"
+                    source_path, f"exception transcodage après plusieurs tentatives: {str(e)[:200]}"
                 )
             else:
                 # Sinon, on utilise le chemin actuel du fichier
                 self._move_to_ignored(
-                    video_path, f"exception transcodage: {str(e)[:200]}"
+                    video_path, f"exception transcodage après plusieurs tentatives: {str(e)[:200]}"
                 )
 
             return None
@@ -1644,16 +1669,23 @@ class VideoProcessor:
     def is_already_optimized(self, video_path: Path) -> bool:
         """
         Vérifie si une vidéo est déjà optimisée pour le streaming.
-        Critères assouplis pour TiviMate.
+        Critères simplifiés: MP4 + H.264 uniquement.
         """
         logger.info(f"🔍 Vérification du format de {video_path.name}")
+
+        # Vérification de l'extension
+        if video_path.suffix.lower() != ".mp4":
+            logger.info(f"⚠️ {video_path.name} n'est pas un fichier MP4")
+            return False
 
         cmd = [
             "ffprobe",
             "-v",
             "error",
+            "-select_streams",
+            "v:0",
             "-show_entries",
-            "stream=codec_name,width,height,r_frame_rate,codec_type",
+            "stream=codec_name",
             "-of",
             "json",
             str(video_path),
@@ -1664,117 +1696,23 @@ class VideoProcessor:
             video_info = json.loads(result.stdout)
             streams = video_info.get("streams", [])
 
-            # On compte les types de flux
-            video_streams = [s for s in streams if s["codec_type"] == "video"]
-            audio_streams = [s for s in streams if s["codec_type"] == "audio"]
-            subtitle_streams = [s for s in streams if s["codec_type"] == "subtitle"]
-
-            # Si on a plus d'un flux vidéo, normalisation requise
-            if len(video_streams) > 1:
-                logger.warning(
-                    f"⚠️ {video_path.name} contient {len(video_streams)} flux vidéo"
-                )
-                logger.info(
-                    f"🚨 Multiples flux vidéo détectés, normalisation nécessaire"
-                )
+            # Pas de flux vidéo
+            if not streams:
+                logger.warning(f"⚠️ Aucun flux vidéo détecté dans {video_path.name}")
                 return False
 
-            # On vérifie maintenant les caractéristiques vidéo/audio standard
-            video_stream = video_streams[0] if video_streams else None
-            audio_stream = audio_streams[0] if audio_streams else None
+            # On vérifie uniquement le codec vidéo
+            codec = streams[0].get("codec_name", "").lower()
+            
+            logger.info(f"🎥 Codec: {codec}")
 
-            if not video_stream:
-                logger.warning(
-                    f"⚠️ Aucun flux vidéo détecté dans {video_path.name}, normalisation forcée."
-                )
-                return False
-
-            codec = video_stream.get("codec_name", "").lower()
-            width = int(video_stream.get("width", 0))
-            height = int(video_stream.get("height", 0))
-            framerate = video_stream.get("r_frame_rate", "0/1").split("/")
-            fps = (
-                round(int(framerate[0]) / int(framerate[1]))
-                if len(framerate) == 2
-                else 0
-            )
-
-            audio_codec = (
-                audio_stream.get("codec_name", "").lower() if audio_stream else "none"
-            )
-
-            logger.info(
-                f"🎥 Codec: {codec}, Résolution: {width}x{height}, FPS: {fps}, Audio: {audio_codec}"
-            )
-
-            # Vérifions aussi les chapitres qui peuvent causer des problèmes
-            chapters_cmd = [
-                "ffprobe",
-                "-v",
-                "error",
-                "-show_chapters",
-                "-of",
-                "json",
-                str(video_path),
-            ]
-            chapters_result = subprocess.run(
-                chapters_cmd, capture_output=True, text=True
-            )
-            chapters_info = json.loads(chapters_result.stdout)
-            has_chapters = (
-                "chapters" in chapters_info and len(chapters_info["chapters"]) > 0
-            )
-
-            # Critères de normalisation - Version assouplie pour TiviMate
-            reasons = []
-            needs_transcoding = False
-
-            # Vérification des codecs vidéo
-            if codec not in ["h264", "hevc", "h265"]:
-                reasons.append(
-                    f"codec vidéo {codec} non supporté (besoin de H.264 ou H.265)"
-                )
-                needs_transcoding = True
-
-            # Vérification de la résolution (toujours limiter à 1080p)
-            if width > 1920 or height > 1080:
-                reasons.append(f"résolution {width}x{height} supérieure à 1080p")
-                needs_transcoding = True
-
-            # Vérification du FPS (maintenant augmenté à 60)
-            if fps > 60:
-                reasons.append(f"FPS de {fps} supérieur à 60")
-                needs_transcoding = True
-
-            # Vérification de l'audio
-            if audio_codec == "none":
-                reasons.append("pas de piste audio détectée")
-                needs_transcoding = True
-            elif audio_codec not in ["aac", "mp3"]:
-                reasons.append(
-                    f"codec audio {audio_codec} non compatible (besoin de AAC ou MP3)"
-                )
-                needs_transcoding = True
-
-            if has_chapters and len(chapters_info["chapters"]) > 15:
-                # On ne considère problématiques que les fichiers avec beaucoup de chapitres
-                reasons.append(
-                    f"contient trop de chapitres ({len(chapters_info['chapters'])})"
-                )
-                needs_transcoding = True
-
-            # Sortie des résultats de l'analyse
-            if needs_transcoding:
-                reasons_str = ", ".join(reasons)
-                logger.info(
-                    f"⚠️ Normalisation nécessaire pour {video_path.name}: {reasons_str}"
-                )
+            # Critère unique: H.264
+            if codec == "h264":
+                logger.info(f"✅ Vidéo déjà optimisée: {video_path.name} (codec H.264)")
+                return True
             else:
-                logger.info(
-                    f"✅ Vidéo déjà optimisée, pas besoin de normalisation pour {video_path.name}"
-                )
-
-            return not needs_transcoding
+                logger.info(f"⚠️ Normalisation nécessaire: codec {codec} (besoin de H.264)")
+                return False
 
         except json.JSONDecodeError as e:
             logger.error(f"❌ Erreur JSON avec ffprobe: {e}")
@@ -1911,3 +1849,78 @@ class VideoProcessor:
             logger.error(
                 f"[{self.channel_name}] ❌ Erreur déplacement fichier vers ignored: {e}"
             )
+
+    def _final_fallback_attempt(self, video_path: Path, temp_output_path: Path, final_output_path: Path) -> Optional[Path]:
+        """
+        Dernière tentative de récupération avec des paramètres ultra simplifiés
+        Force la conversion en H.264 uniquement
+        """
+        try:
+            logger.info(f"[{self.channel_name}] 🚨 Dernière tentative avec paramètres simplifiés pour {video_path.name}")
+            
+            # Utilisation de paramètres FFmpeg minimalistes focalisés sur H.264
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", str(video_path),
+                # Forcer la conversion en H.264 le plus simple possible
+                "-c:v", "libx264", "-preset", "ultrafast", 
+                # Audio aac basique (moins important)
+                "-c:a", "aac", "-b:a", "128k",
+                # On ignore tout le reste (sous-titres, chapitres, etc.)
+                "-sn", "-dn", "-map_chapters", "-1",
+                # Sélection des pistes principales uniquement
+                "-map", "0:v:0", "-map", "0:a:0?",
+                # Pour assurer la compatibilité maximale
+                "-pix_fmt", "yuv420p",
+                "-max_muxing_queue_size", "1024",
+                str(temp_output_path)
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            
+            if result.returncode == 0 and temp_output_path.exists() and temp_output_path.stat().st_size > 0:
+                # Vérification rapide que le fichier est bien en H.264
+                check_cmd = [
+                    "ffprobe", "-v", "error",
+                    "-select_streams", "v:0",
+                    "-show_entries", "stream=codec_name",
+                    "-of", "json",
+                    str(temp_output_path)
+                ]
+                
+                check_result = subprocess.run(check_cmd, capture_output=True, text=True)
+                is_h264 = False
+                
+                try:
+                    data = json.loads(check_result.stdout)
+                    if "streams" in data and len(data["streams"]) > 0:
+                        codec = data["streams"][0].get("codec_name", "").lower()
+                        is_h264 = (codec == "h264")
+                except:
+                    # En cas d'erreur, on suppose que ce n'est pas du H.264
+                    pass
+                
+                if is_h264:
+                    # Déplacement vers ready_to_stream
+                    logger.info(f"[{self.channel_name}] ✅ Conversion H.264 réussie pour {final_output_path.name}")
+                    
+                    # Suppression du fichier final s'il existe déjà
+                    if final_output_path.exists():
+                        final_output_path.unlink()
+                    
+                    # Déplacement du fichier temporaire
+                    shutil.move(str(temp_output_path), str(final_output_path))
+                    self.notify_file_processed(final_output_path)
+                    return final_output_path
+                else:
+                    logger.error(f"[{self.channel_name}] ❌ Le fichier converti n'est pas en H.264")
+                    self._move_to_ignored(video_path, "échec conversion en H.264")
+                    return None
+            else:
+                logger.error(f"[{self.channel_name}] ❌ Échec de la dernière tentative: {result.stderr}")
+                self._move_to_ignored(video_path, "échec conversion, fichier peut-être corrompu")
+                return None
+        except Exception as e:
+            logger.error(f"[{self.channel_name}] ❌ Exception lors de la dernière tentative: {e}")
+            self._move_to_ignored(video_path, f"exception finale: {str(e)[:200]}")
+            return None
