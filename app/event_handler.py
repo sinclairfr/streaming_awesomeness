@@ -7,8 +7,7 @@ import os
 from config import logger
 import subprocess
 
-
-class ChannelEventHandler(FileSystemEventHandler):
+class FileEventHandler(FileSystemEventHandler):
     """Gestionnaire d'événements pour les changements de fichiers dans les dossiers des chaînes"""
 
     def __init__(self, manager):

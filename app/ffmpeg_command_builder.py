@@ -41,35 +41,56 @@ class FFmpegCommandBuilder:
                 f"[{self.channel_name}] 🛠️ Construction de la commande FFmpeg..."
             )
 
-            # Construction des parties de la commande
-            input_params = self.build_input_params(
-                input_file, playback_offset, progress_file
-            )
-            encoding_params = self.build_encoding_params(has_mkv)
-            hls_params = self.build_hls_params(output_dir)
+            # Construction de la commande optimisée
+            command = [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel", "info",
+                "-y",
+                # Paramètres d'entrée optimisés
+                "-thread_queue_size", "8192",
+                "-analyzeduration", "20M",
+                "-probesize", "20M",
+                "-re",  # Lecture en temps réel
+                "-stream_loop", "-1",  # Boucle infinie
+                "-fflags", "+genpts+igndts+discardcorrupt+autobsf",
+                "-threads", "4",
+                "-avoid_negative_ts", "make_zero",
+            ]
 
-            # Assemblage de la commande complète
-            command = input_params + encoding_params + hls_params
+            # Ajouter le fichier de progression si fourni
+            if progress_file:
+                command.extend(["-progress", str(progress_file)])
 
+            # Ajouter l'input
+            command.extend(["-i", str(input_file)])
 
-            # Vérification et correction du chemin de sortie
-            output_file = command[-1]
-            if not output_file.startswith("/app/hls/"):
-                # On corrige le chemin de sortie
-                corrected_path = f"/app/hls/{self.channel_name}/playlist.m3u8"
-                command[-1] = corrected_path
-                logger.info(
-                    f"[{self.channel_name}] 🛠️ Correction du chemin de sortie: {output_file} -> {corrected_path}"
-                )
-            elif "/app/hls" in output_file and not "/app/hls/" in output_file:
-                fixed_path = output_file.replace("/app/hls", "/app/hls/")
-                command[-1] = fixed_path
-                logger.info(
-                    f"[{self.channel_name}] 🔧 Correction chemin: {output_file} → {fixed_path}"
-                )
+            # Paramètres de copie optimisés
+            command.extend([
+                "-c:v", "copy",
+                "-c:a", "copy",
+                "-sn", "-dn",
+                "-map", "0:v:0",
+                "-map", "0:a:0?",
+                "-max_muxing_queue_size", "4096",
+                "-fps_mode", "passthrough",
+            ])
 
-            # Log pour debug
-            logger.debug(f"[{self.channel_name}] 📝 Commande: {' '.join(command)}")
+            # Paramètres HLS optimisés
+            command.extend([
+                "-f", "hls",
+                "-hls_time", "2",
+                "-hls_list_size", "15",
+                "-hls_delete_threshold", "2",
+                "-hls_flags", "delete_segments+append_list+independent_segments+omit_endlist+discont_start",
+                "-hls_allow_cache", "1",
+                "-start_number", "0",
+                "-hls_segment_type", "mpegts",
+                "-max_delay", "2000000",
+                "-hls_init_time", "2",
+                "-hls_segment_filename", f"{output_dir}/segment_%d.ts",
+                f"{output_dir}/playlist.m3u8"
+            ])
 
             # Log de la commande complète
             logger.info("=" * 80)

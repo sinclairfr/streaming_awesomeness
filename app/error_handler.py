@@ -3,9 +3,10 @@ import threading
 import datetime
 from pathlib import Path
 from config import logger
+from typing import Set
 
 class ErrorHandler:
-    """Gère les erreurs d'une chaîne IPTV"""
+    """Gère les erreurs et les redémarrages pour une chaîne IPTV"""
     
     def __init__(self, channel_name: str, max_restarts: int = 5, restart_cooldown: int = 60):
         self.channel_name = channel_name
@@ -14,7 +15,7 @@ class ErrorHandler:
         self.max_restarts = max_restarts
         self.restart_cooldown = restart_cooldown
         self.last_restart_time = 0
-        self.error_types = set()
+        self.error_types: Set[str] = set()
         self.lock = threading.Lock()
         
         # Chemin du fichier de log unique pour ce canal

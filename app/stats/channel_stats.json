@@ -1,27 +1,27 @@
 {
   "channels": {
     "192.168.10.85": {
-      "total_watch_time": 2919.02259850502,
+      "total_watch_time": 2985.192634344101,
       "unique_viewers": [
+        "splendid",
         "aaa",
-        "pagnol",
-        "splendid"
+        "pagnol"
       ],
-      "last_update": 1742858514.7911184,
+      "last_update": 1742859460.7399263,
       "watchlist": {
         "pagnol": 849.1193192005157,
         "splendid": 1416.572926044464,
-        "aaa": 653.3303532600403
+        "aaa": 719.5003890991211
       }
     }
   },
   "global": {
-    "total_watch_time": 2919.02259850502,
+    "total_watch_time": 2985.192634344101,
     "unique_viewers": [
+      "splendid",
       "aaa",
-      "pagnol",
-      "splendid"
+      "pagnol"
     ],
-    "last_update": 1742858514.7917266
+    "last_update": 1742859460.7402892
   }
 }

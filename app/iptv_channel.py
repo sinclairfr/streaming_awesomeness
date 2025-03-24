@@ -2,6 +2,7 @@
 import os
 import time
 import threading
+import random
 from pathlib import Path
 from typing import Optional, List
 import shutil
@@ -23,6 +24,7 @@ from config import (
 )
 from video_processor import verify_file_ready, get_accurate_duration
 import datetime
+from error_handler import ErrorHandler
 
 
 class IPTVChannel:
@@ -50,6 +52,13 @@ class IPTVChannel:
         self.restart_cooldown = 60
         self.last_restart_time = 0
         self.error_types = set()
+        
+        # Initialisation de l'error handler
+        self.error_handler = ErrorHandler(
+            channel_name=self.name,
+            max_restarts=self.max_restarts,
+            restart_cooldown=self.restart_cooldown
+        )
         
         # Chemin du fichier de log unique pour ce canal
         self.crash_log_path = Path(f"/app/logs/crashes_{self.name}.log")
@@ -1714,44 +1723,12 @@ class IPTVChannel:
                 logger.error(f"[{self.name}] ❌ Durée invalide pour {file_path}")
                 return False
 
-            # Paramètres FFmpeg optimisés pour le streaming
-            command = [
-                "ffmpeg",
-                "-hide_banner",
-                "-loglevel", "info",
-                "-y",
-                # Paramètres d'entrée optimisés
-                "-thread_queue_size", "16384",  # Augmenté pour plus de buffer
-                "-analyzeduration", "50M",      # Augmenté pour une meilleure analyse
-                "-probesize", "50M",            # Augmenté pour une meilleure détection
-                "-re",                          # Lecture en temps réel
-                "-fflags", "+genpts+igndts+discardcorrupt+autobsf+fastseek",  # Ajout de fastseek
-                "-threads", "8",                # Augmenté pour plus de performance
-                "-avoid_negative_ts", "make_zero",
-                "-progress", str(progress_log),
-                "-i", str(file_path),
-                # Paramètres de copie optimisés
-                "-c:v", "copy",
-                "-c:a", "copy",
-                "-sn", "-dn",
-                "-map", "0:v:0",
-                "-map", "0:a:0?",
-                "-max_muxing_queue_size", "8192",  # Augmenté pour éviter les erreurs de buffer
-                "-fps_mode", "passthrough",
-                # Paramètres HLS optimisés
-                "-f", "hls",
-                "-hls_time", "2",
-                "-hls_list_size", "30",        # Augmenté pour plus de buffer
-                "-hls_delete_threshold", "3",   # Augmenté pour plus de tolérance
-                "-hls_flags", "delete_segments+append_list+independent_segments+omit_endlist+discont_start+program_date_time",
-                "-hls_allow_cache", "1",
-                "-start_number", "0",
-                "-hls_segment_type", "mpegts",
-                "-max_delay", "2000000",
-                "-hls_init_time", "2",
-                "-hls_segment_filename", f"{hls_dir}/segment_%d.ts",
-                f"{hls_dir}/playlist.m3u8"
-            ]
+            # Utiliser le FFmpegCommandBuilder pour construire la commande
+            command = self.command_builder.build_command(
+                input_file=file_path,
+                output_dir=str(hls_dir),
+                progress_file=str(progress_log)
+            )
             
             # Log de la commande complète
             logger.info("=" * 80)

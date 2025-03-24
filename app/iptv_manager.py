@@ -14,7 +14,7 @@ from pathlib import Path
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 import threading
-from event_handler import ChannelEventHandler, ReadyContentHandler
+from event_handler import FileEventHandler, ReadyContentHandler
 from hls_cleaner import HLSCleaner
 from client_monitor import ClientMonitor
 from resource_monitor import ResourceMonitor
@@ -163,7 +163,7 @@ class IPTVManager:
 
         # Observer
         self.observer = Observer()
-        event_handler = ChannelEventHandler(self)
+        event_handler = FileEventHandler(self)
         self.observer.schedule(event_handler, self.content_dir, recursive=True)
         logger.info(f"👁️ Observer configuré pour surveiller {self.content_dir} en mode récursif")
 
