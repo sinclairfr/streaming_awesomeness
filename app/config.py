@@ -7,11 +7,11 @@ from pathlib import Path
 import shutil
 
 # Configuration des chemins
-LOG_DIR = os.getenv("LOG_DIR", "/logs")
+LOG_DIR = os.getenv("LOG_DIR", "/app/logs")
 CONTENT_DIR = Path(
     os.getenv("CONTENT_DIR", "/mnt/videos/streaming_awesomeness/content")
 )
-NGINX_ACCESS_LOG = os.getenv("NGINX_ACCESS_LOG", "/app/logs/nginx_access.log")
+NGINX_ACCESS_LOG = "/app/logs/nginx/access.log"
 SERVER_URL = os.getenv("SERVER_URL", "192.168.10.183")
 
 # Configuration des timeouts
@@ -27,7 +27,6 @@ SEGMENT_AGE_THRESHOLD = int(os.getenv("SEGMENT_AGE_THRESHOLD", "120"))
 WATCHERS_LOG_CYCLE = int(os.getenv("WATCHERS_LOG_CYCLE", "300"))  # 5 minutes par défaut
 SUMMARY_CYCLE = int(os.getenv("SUMMARY_CYCLE", "300"))  # 5 minutes par défaut
 CRASH_THRESHOLD = int(os.getenv("CRASH_THRESHOLD", "5"))  # Seuil en secondes pour considérer un crash de stream
-LEGACY_MODE = False
 
 def get_log_level(level_str: str) -> int:
     """Convertit un niveau de log en string vers sa valeur numérique"""

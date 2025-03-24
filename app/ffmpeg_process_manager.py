@@ -327,24 +327,19 @@ class FFmpegProcessManager:
 
     def is_running(self) -> bool:
         """Vérifie si le processus FFmpeg est en cours d'exécution"""
-        # Si nous sommes en mode legacy, vérifie le processus FFmpeg normalement
-        if LEGACY_MODE:
-            return self.process is not None and self.process.poll() is None
-        # Si nous sommes en mode fichier par fichier, vérifie le processus en cours
-        else:
-            # Récupérer le canal IPTV pour ce process manager
-            channel = None
-            if self.channel_name in FFmpegProcessManager.all_channels:
-                channel = FFmpegProcessManager.all_channels[self.channel_name]
-                
-            # Vérifier si le canal a un processus en cours
-            if channel and hasattr(channel, "_current_process") and channel._current_process is not None:
-                return channel._current_process.poll() is None
-            # Vérifier si le flag de streaming est actif
-            elif channel and hasattr(channel, "_streaming_active"):
-                return channel._streaming_active
-                
-            return False
+        # Récupérer le canal IPTV pour ce process manager
+        channel = None
+        if self.channel_name in FFmpegProcessManager.all_channels:
+            channel = FFmpegProcessManager.all_channels[self.channel_name]
+            
+        # Vérifier si le canal a un processus en cours
+        if channel and hasattr(channel, "_current_process") and channel._current_process is not None:
+            return channel._current_process.poll() is None
+        # Vérifier si le flag de streaming est actif
+        elif channel and hasattr(channel, "_streaming_active"):
+            return channel._streaming_active
+        
+        return False
 
     def restart_process(self):
         """Redémarre proprement le processus FFmpeg"""

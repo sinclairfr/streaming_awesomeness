@@ -162,7 +162,7 @@ class IPTVChannel:
                 return None
 
             logger.info(
-                f"[{self.name}] 🛠️ Création de _playlist.txt avec {len(valid_files)} fichiers uniques"
+                f"[{self.name}] 🛠️ Créer le fichier de concaténation avec {len(valid_files)} fichiers uniques"
             )
 
             # Créer le fichier de concaténation avec une syntaxe simplifiée
@@ -981,36 +981,15 @@ class IPTVChannel:
     def stop_stream_if_needed(self):
         """Arrête le stream si nécessaire"""
         try:
-            # Arrêter le stream en mode legacy
-            if LEGACY_MODE:
-                # Utiliser le process_manager pour arrêter le processus
-                if self.process_manager.is_running():
-                    logger.info(f"[{self.name}] 🛑 Arrêt du stream")
-                    self.process_manager.stop_process()
-                    logger.info(f"[{self.name}] ✅ Stream arrêté avec succès")
-                    return True
-                else:
-                    logger.info(f"[{self.name}] ℹ️ Stream déjà arrêté")
-                    return True
-            # Arrêter le stream en mode fichier par fichier
-            else:
-                # Arrêter le flag de streaming actif
-                self._streaming_active = False
-                
-                # Arrêter le processus en cours
-                if hasattr(self, "_current_process") and self._current_process is not None:
-                    logger.info(f"[{self.name}] 🛑 Arrêt du stream")
-                    self._current_process.terminate()
-                    time.sleep(1)
-                    if self._current_process.poll() is None:
-                        self._current_process.kill()
-                    self._current_process = None
-                    logger.info(f"[{self.name}] ✅ Stream arrêté avec succès")
-                else:
-                    logger.info(f"[{self.name}] ℹ️ Stream déjà arrêté")
-                
+            # Utiliser le process_manager pour arrêter le processus
+            if self.process_manager.is_running():
+                logger.info(f"[{self.name}] 🛑 Arrêt du stream")
+                self.process_manager.stop_process()
+                logger.info(f"[{self.name}] ✅ Stream arrêté avec succès")
                 return True
-                
+            else:
+                logger.info(f"[{self.name}] ℹ️ Stream déjà arrêté")
+                return True
         except Exception as e:
             logger.error(f"[{self.name}] ❌ Erreur arrêt stream: {e}")
             return False
@@ -1109,7 +1088,7 @@ class IPTVChannel:
             playlist_path = hls_dir / "playlist.m3u8"
             if not playlist_path.exists():
                 # During startup grace period, be more lenient with playlist generation
-                if startup_duration < 180:  # 3 minutes grace period
+                if startup_duration < 5:  # Réduit de 15s à 5s
                     logger.info(f"[{self.name}] ℹ️ Still in startup grace period ({startup_duration:.1f}s), waiting for playlist.m3u8...")
                     return True
                 else:
@@ -1130,7 +1109,7 @@ class IPTVChannel:
                         logger.error(f"[{self.name}] ❌ Error reading playlist.m3u8: {e}")
                 
                 # During startup grace period, be more lenient
-                if startup_duration < 180:  # 3 minutes grace period
+                if startup_duration < 5:  # Réduit de 15s à 5s
                     logger.info(f"[{self.name}] ℹ️ Still in startup grace period ({startup_duration:.1f}s), waiting for segments...")
                     return True
                 
@@ -1236,13 +1215,13 @@ class IPTVChannel:
                         segment_age = current_time - latest_segment.stat().st_mtime
                     
                     # More lenient threshold during startup
-                    threshold = 180 if startup_duration < 180 else 120
+                    threshold = 60 if startup_duration < 60 else 120
                     
                     if segment_age > threshold:
                         logger.warning(f"[{self.name}] ⚠️ Segments too old (last: {segment_age:.1f}s ago, threshold: {threshold}s)")
                         
                         # During startup grace period, be more lenient
-                        if startup_duration < 180:
+                        if startup_duration < 60:
                             logger.info(f"[{self.name}] ℹ️ Still in startup grace period ({startup_duration:.1f}s), waiting for segments...")
                             return True
                         
@@ -1526,60 +1505,36 @@ class IPTVChannel:
                     )
                     return False
                     
-            # NOUVEAU: Décision entre mode legacy et mode fichier par fichier
-            if LEGACY_MODE:
-                # MODE LEGACY: Streaming avec concaténation de la playlist complète
-                logger.info(f"[{self.name}] 🔄 Mode legacy: streaming avec concaténation")
-                
-                # 4) Construire la commande FFmpeg
-                command = self.command_builder.build_command(
-                    input_file=concat_file,
-                    output_dir=hls_dir,
-                    playback_offset=0,  # On démarre toujours depuis le début
-                    progress_file=self.logger.get_progress_file(),
-                    has_mkv=self.command_builder.detect_mkv_in_playlist(concat_file),
+            # Streaming fichier par fichier
+            logger.info(f"[{self.name}] 🔄 Mode fichier par fichier: streaming séquentiel")
+            
+            # 4) Construire la commande FFmpeg
+            command = self.command_builder.build_command(
+                input_file=concat_file,
+                output_dir=hls_dir,
+                playback_offset=0,  # On démarre toujours depuis le début
+                progress_file=self.logger.get_progress_file(),
+                has_mkv=self.command_builder.detect_mkv_in_playlist(concat_file),
+            )
+
+            logger.info(f"[{self.name}] 🚀 Lancement FFmpeg: {' '.join(command)}")
+
+            # 5) Démarrer le process FFmpeg via le FFmpegProcessManager
+            success = self.process_manager.start_process(command, str(hls_dir))
+            if not success:
+                logger.error(
+                    f"[{self.name}] ❌ Échec du démarrage FFmpeg (première tentative)."
                 )
+                return False
 
-                logger.info(f"[{self.name}] 🚀 Lancement FFmpeg: {' '.join(command)}")
-
-                # 5) Démarrer le process FFmpeg via le FFmpegProcessManager
-                success = self.process_manager.start_process(command, str(hls_dir))
-                if not success:
-                    logger.error(
-                        f"[{self.name}] ❌ Échec du démarrage FFmpeg (première tentative)."
-                    )
-                    return False
-
-                # 6) Démarrer la boucle de surveillance des segments en arrière-plan
-                if not hasattr(self, "_segment_monitor_thread") or not self._segment_monitor_thread.is_alive():
-                    self._segment_monitor_thread = threading.Thread(
-                        target=self._segment_monitor_loop,
-                        daemon=True
-                    )
-                    self._segment_monitor_thread.start()
-                    logger.info(f"[{self.name}] 🔍 Boucle de surveillance des segments démarrée")
-            else:
-                # MODE FICHIER PAR FICHIER: Streaming séquentiel des fichiers
-                logger.info(f"[{self.name}] 🔄 Mode fichier par fichier: streaming séquentiel")
-                
-                # Démarrer le thread de streaming de fichiers
-                if not hasattr(self, "_file_streamer_thread") or not self._file_streamer_thread.is_alive():
-                    self._file_streamer_thread = threading.Thread(
-                        target=self._stream_files_sequentially,
-                        daemon=True
-                    )
-                    self._file_streamer_thread.start()
-                    logger.info(f"[{self.name}] 🔍 Streaming séquentiel démarré")
-                else:
-                    logger.info(f"[{self.name}] ✓ Streaming séquentiel déjà actif")
-                    
-                # Attendons un peu pour s'assurer que le streaming commence
-                time.sleep(2)
-                
-                # Vérifier si le streaming a commencé (le process devrait être créé)
-                if not hasattr(self, "_current_process") or self._current_process is None:
-                    logger.error(f"[{self.name}] ❌ Échec du démarrage du streaming séquentiel")
-                    return False
+            # 6) Démarrer la boucle de surveillance des segments en arrière-plan
+            if not hasattr(self, "_segment_monitor_thread") or not self._segment_monitor_thread.is_alive():
+                self._segment_monitor_thread = threading.Thread(
+                    target=self._segment_monitor_loop,
+                    daemon=True
+                )
+                self._segment_monitor_thread.start()
+                logger.info(f"[{self.name}] 🔍 Boucle de surveillance des segments démarrée")
 
             logger.info(f"[{self.name}] ✅ Stream démarré avec succès.")
             return True
@@ -1593,69 +1548,142 @@ class IPTVChannel:
         Stream les fichiers de la playlist un par un séquentiellement.
         Cette méthode s'exécute dans un thread dédié.
         """
-        self._streaming_active = True
-        
         try:
+            self._streaming_active = True
+            error_count = 0
+            max_errors = 3  # Nombre maximum d'erreurs consécutives avant de recréer la playlist
+            
             while self._streaming_active:
-                # Lire la playlist
-                playlist_file = Path(self.video_dir) / "_playlist.txt"
-                if not playlist_file.exists():
-                    logger.error(f"[{self.name}] ❌ Playlist non trouvée: {playlist_file}")
-                    time.sleep(5)
-                    continue
-                
-                # Extraire les fichiers
-                files = []
-                with open(playlist_file, "r") as f:
-                    for line in f:
-                        if line.strip().startswith("file "):
-                            # Extrait le chemin entre guillemets simples
-                            file_path = line.strip().split("'")[1]
-                            if os.path.exists(file_path):
-                                files.append(file_path)
-                            else:
-                                logger.warning(f"[{self.name}] ⚠️ Fichier non trouvé: {file_path}")
-                
-                if not files:
-                    logger.error(f"[{self.name}] ❌ Aucun fichier à streamer")
-                    time.sleep(5)
-                    continue
-                
-                # Streamer chaque fichier séquentiellement
-                for file_path in files:
-                    if not self._streaming_active:
-                        break
+                try:
+                    # Vérifier si la playlist existe
+                    playlist_file = Path(self.video_dir) / "_playlist.txt"
+                    if not playlist_file.exists():
+                        logger.error(f"[{self.name}] ❌ Playlist non trouvée: {playlist_file}")
+                        self._create_concat_file()  # Tentative de recréation
+                        time.sleep(1)  # Réduit de 5s à 1s
+                        continue
+                    
+                    # Lire et vérifier le contenu de la playlist
+                    try:
+                        with open(playlist_file, "r") as f:
+                            content = f.read().strip()
+                        if not content:
+                            logger.error(f"[{self.name}] ❌ Playlist vide")
+                            self._create_concat_file()  # Tentative de recréation
+                            time.sleep(1)  # Réduit de 5s à 1s
+                            continue
+                        logger.debug(f"[{self.name}] 📝 Contenu de la playlist:\n{content}")
+                    except Exception as e:
+                        logger.error(f"[{self.name}] ❌ Erreur lecture playlist: {e}")
+                        time.sleep(1)  # Réduit de 5s à 1s
+                        continue
+                    
+                    # Extraire et vérifier les fichiers
+                    files = []
+                    with open(playlist_file, "r") as f:
+                        for line in f:
+                            if line.strip().startswith("file "):
+                                try:
+                                    file_path = line.strip().split("'")[1]
+                                    # Vérifier si le fichier existe ET est accessible
+                                    file = Path(file_path)
+                                    if file.exists() and os.access(file, os.R_OK):
+                                        files.append(file_path)
+                                    else:
+                                        logger.error(f"[{self.name}] ❌ Fichier non trouvé ou inaccessible: {file_path}")
+                                except Exception as e:
+                                    logger.error(f"[{self.name}] ❌ Erreur parsing ligne '{line.strip()}': {e}")
+                    
+                    if not files:
+                        logger.error(f"[{self.name}] ❌ Aucun fichier valide dans la playlist")
+                        error_count += 1
+                        if error_count >= max_errors:
+                            logger.warning(f"[{self.name}] ⚠️ Trop d'erreurs ({error_count}), recréation de la playlist")
+                            self._create_concat_file()
+                            error_count = 0
+                        time.sleep(1)  # Réduit de 5s à 1s
+                        continue
+                    
+                    logger.info(f"[{self.name}] ℹ️ {len(files)} fichiers à streamer: {[os.path.basename(f) for f in files]}")
+                    
+                    # Streamer chaque fichier séquentiellement avec retry en cas d'échec
+                    for file_path in files:
+                        if not self._streaming_active:
+                            logger.info(f"[{self.name}] ⏹️ Arrêt du streaming séquentiel demandé")
+                            return
+                            
+                        retry_count = 0
+                        max_retries = 2
+                        while retry_count < max_retries:
+                            logger.info(f"[{self.name}] 🎬 Début du streaming de {os.path.basename(file_path)} (tentative {retry_count + 1}/{max_retries})")
+                            success = self._stream_single_file(file_path)
+                            
+                            if success:
+                                error_count = 0  # Réinitialiser le compteur d'erreurs en cas de succès
+                                logger.info(f"[{self.name}] ✅ Streaming de {os.path.basename(file_path)} terminé avec succès")
+                                break
+                            
+                            retry_count += 1
+                            if retry_count < max_retries:
+                                logger.warning(f"[{self.name}] ⚠️ Échec du streaming, nouvelle tentative dans 1s...")
+                                time.sleep(1)
                         
-                    success = self._stream_single_file(file_path)
-                    if not success and self._streaming_active:
-                        logger.warning(f"[{self.name}] ⚠️ Échec streaming {file_path}, passage au suivant")
-                        time.sleep(1)  # Petit délai avant de passer au suivant
-                
-                # Si on arrive ici, on a fini la playlist, on recommence
-                logger.info(f"[{self.name}] 🔄 Fin de playlist, redémarrage")
-                
+                        if not success and self._streaming_active:
+                            logger.error(f"[{self.name}] ❌ Échec du streaming de {os.path.basename(file_path)} après {max_retries} tentatives")
+                            error_count += 1
+                            if error_count >= max_errors:
+                                logger.warning(f"[{self.name}] ⚠️ Trop d'erreurs ({error_count}), recréation de la playlist")
+                                self._create_concat_file()
+                                error_count = 0
+                                break
+                    
+                    # Si on arrive ici, on a fini la playlist, on recommence
+                    logger.info(f"[{self.name}] 🔄 Fin de playlist, redémarrage")
+                    
+                except Exception as e:
+                    logger.error(f"[{self.name}] ❌ Erreur dans la boucle de streaming: {e}")
+                    error_count += 1
+                    if error_count >= max_errors:
+                        logger.warning(f"[{self.name}] ⚠️ Trop d'erreurs ({error_count}), recréation de la playlist")
+                        self._create_concat_file()
+                        error_count = 0
+                    time.sleep(1)  # Réduit de 5s à 1s
+                    
         except Exception as e:
-            logger.error(f"[{self.name}] ❌ Erreur streaming séquentiel: {e}")
+            logger.error(f"[{self.name}] ❌ Erreur fatale dans le streaming séquentiel: {e}")
         finally:
             self._streaming_active = False
+            logger.info(f"[{self.name}] ⏹️ Fin du streaming séquentiel")
     
     def _stream_single_file(self, file_path):
         """Stream un fichier unique avec ffmpeg"""
         try:
             hls_dir = Path(f"/app/hls/{self.name}")
             
-            # Construire la commande FFmpeg pour un fichier unique
+            # Obtenir les fichiers de logs
+            ffmpeg_log = Path(f"/app/logs/ffmpeg/{self.name}_ffmpeg.log")
+            progress_log = Path(f"/app/logs/ffmpeg/{self.name}_progress.log")
+            
+            # S'assurer que les dossiers de logs existent
+            ffmpeg_log.parent.mkdir(parents=True, exist_ok=True)
+            progress_log.parent.mkdir(parents=True, exist_ok=True)
+
+            # Construire la commande avec les mêmes paramètres que le mode legacy
             command = [
                 "ffmpeg",
                 "-hide_banner",
                 "-loglevel", "info",
                 "-y",
-                # Paramètres d'entrée
+                # Paramètres d'entrée optimisés
                 "-thread_queue_size", "8192",
                 "-analyzeduration", "20M",
                 "-probesize", "20M",
                 "-re",  # Lecture en temps réel
-                "-i", file_path,
+                "-fflags", "+genpts+igndts+discardcorrupt+autobsf",
+                "-threads", "4",
+                "-avoid_negative_ts", "make_zero",
+                "-progress", str(progress_log),
+                "-i", str(file_path),
                 # Paramètres de copie
                 "-c:v", "copy",
                 "-c:a", "copy",
@@ -1663,12 +1691,14 @@ class IPTVChannel:
                 "-map", "0:v:0",
                 "-map", "0:a:0?",
                 "-max_muxing_queue_size", "4096",
-                # Paramètres HLS
+                "-fps_mode", "passthrough",
+                "-thread_queue_size", "8192",
+                # Paramètres HLS optimisés
                 "-f", "hls",
                 "-hls_time", "2",
                 "-hls_list_size", "15",
                 "-hls_delete_threshold", "2",
-                "-hls_flags", "delete_segments+append_list+program_date_time+independent_segments",
+                "-hls_flags", "delete_segments+append_list+independent_segments+omit_endlist+discont_start",
                 "-hls_allow_cache", "1",
                 "-start_number", "0",
                 "-hls_segment_type", "mpegts",
@@ -1678,55 +1708,92 @@ class IPTVChannel:
                 f"{hls_dir}/playlist.m3u8"
             ]
             
+            # Log de la commande complète
+            logger.info("=" * 80)
             logger.info(f"[{self.name}] 🚀 Démarrage streaming: {os.path.basename(file_path)}")
+            logger.info(f"$ {' '.join(command)}")
+            logger.info("=" * 80)
             
-            # Démarrer le processus
-            self._current_process = subprocess.Popen(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                universal_newlines=True
-            )
-            
-            # Pour la compatibilité avec FFmpegProcessManager
-            if hasattr(self, "process_manager"):
-                self.process_manager.process = self._current_process
-
-            # Attendre la fin du processus tout en surveillant sa sortie
-            while self._current_process.poll() is None and self._streaming_active:
-                # Lire la sortie d'erreur pour les logs ffmpeg
-                stderr_line = self._current_process.stderr.readline()
-                if stderr_line:
-                    if "error" in stderr_line.lower():
-                        logger.error(f"[{self.name}] ❌ FFmpeg: {stderr_line.strip()}")
-                    elif "warning" in stderr_line.lower():
-                        logger.warning(f"[{self.name}] ⚠️ FFmpeg: {stderr_line.strip()}")
+            # Démarrer le processus avec redirection des logs
+            with open(ffmpeg_log, "a") as log_file:
+                self._current_process = subprocess.Popen(
+                    command,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    universal_newlines=True,
+                    bufsize=1
+                )
                 
-                time.sleep(0.1)  # Évite de surcharger le CPU
-
-            # Vérifier le code de retour
-            return_code = self._current_process.poll() or 0
-            if return_code != 0 and self._streaming_active:
-                logger.error(f"[{self.name}] ❌ Erreur FFmpeg ({return_code})")
-                return False
-
-            return True
+                # Boucle de lecture des logs en temps réel
+                while self._current_process.poll() is None:
+                    # Lire stderr pour les logs FFmpeg
+                    stderr_line = self._current_process.stderr.readline()
+                    if stderr_line:
+                        log_file.write(stderr_line)
+                        log_file.flush()
+                        
+                        # Log les erreurs importantes
+                        if "error" in stderr_line.lower():
+                            logger.error(f"[{self.name}] FFmpeg: {stderr_line.strip()}")
+                        elif "warning" in stderr_line.lower():
+                            logger.warning(f"[{self.name}] FFmpeg: {stderr_line.strip()}")
+                
+                # Vérifier le code de retour
+                return_code = self._current_process.poll() or 0
+                if return_code != 0:
+                    logger.error(f"[{self.name}] ❌ Erreur FFmpeg ({return_code})")
+                    return False
+                
+                return True
 
         except Exception as e:
             logger.error(f"[{self.name}] ❌ Erreur streaming {file_path}: {e}")
             return False
 
-    def check_watchers_timeout(self):
-        """Vérifie si la chaîne doit être arrêtée par manque de watchers"""
-        current_time = time.time()
+    def _should_stop_stream(self):
+        """Vérifie si le stream doit être arrêté"""
+        # Ne pas arrêter le stream s'il n'y a pas d'erreurs, même sans watchers
+        if not self.error_handler.has_critical_errors():
+            return False
         
-        # Si la chaîne n'est pas en cours de streaming, on ignore
-        if not self.process_manager.is_running():
-            return
+        # Arrêter uniquement en cas d'erreurs critiques
+        return True
 
-        # Si on n'a pas de watchers et que le dernier watcher est parti depuis trop longtemps
-        if self.watchers_count == 0:
-            time_since_last_watcher = current_time - getattr(self, "last_watcher_time", 0)
-            if time_since_last_watcher > TIMEOUT_NO_VIEWERS:
-                logger.info(f"[{self.name}] ⏱️ Arrêt automatique après {time_since_last_watcher:.0f}s sans watcher (limite: {TIMEOUT_NO_VIEWERS}s)")
-                self.stop_streaming()
+    def check_watchers_timeout(self):
+        """Vérifie si le stream doit être arrêté en raison d'une absence de watchers"""
+        # On ne vérifie pas le timeout s'il n'y a pas de watchers_count
+        if not hasattr(self, "watchers_count"):
+            return False
+            
+        # On ne vérifie pas le timeout si le stream n'est pas actif
+        if not self.process_manager.is_running():
+            return False
+            
+        # On ne vérifie pas le timeout s'il y a des watchers actifs
+        if self.watchers_count > 0:
+            return False
+            
+        # On ne vérifie pas le timeout s'il y a des erreurs critiques
+        if self.error_handler.has_critical_errors():
+            return False
+            
+        # Le stream continue de tourner même sans watchers
+        return False
+
+    def _check_stream_health(self):
+        """Vérifie l'état du stream et le redémarre si nécessaire"""
+        try:
+            if not self.process_manager.is_running():
+                if not self._should_stop_stream():
+                    logger.info(f"[{self.name}] 🔄 Redémarrage du stream (arrêté)")
+                    self.start_stream()
+                return
+
+            # Vérifier les erreurs critiques
+            if self.error_handler.has_critical_errors():
+                logger.error(f"[{self.name}] ❌ Erreurs critiques détectées, redémarrage du stream")
+                self.process_manager.restart_process()
+                return
+
+        except Exception as e:
+            logger.error(f"[{self.name}] ❌ Erreur check santé: {e}")
