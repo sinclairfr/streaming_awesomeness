@@ -1,27 +1,58 @@
 {
   "channels": {
     "192.168.10.85": {
-      "total_watch_time": 2985.192634344101,
+      "total_watch_time": 3449.4276354312897,
       "unique_viewers": [
-        "splendid",
         "aaa",
-        "pagnol"
+        "pagnol",
+        "splendid"
       ],
-      "last_update": 1742859460.7399263,
+      "last_update": 1742860230.3044555,
       "watchlist": {
-        "pagnol": 849.1193192005157,
-        "splendid": 1416.572926044464,
-        "aaa": 719.5003890991211
+        "pagnol": 1136.907413482666,
+        "splendid": 1452.6174433231354,
+        "aaa": 859.9027786254883
+      }
+    },
+    "aaa": {
+      "total_watch_time": 96.62008285522461,
+      "unique_viewers": [
+        "192.168.10.85"
+      ],
+      "last_update": 1742860380.3145378,
+      "watchlist": {
+        "192.168.10.85": 96.62008285522461
+      }
+    },
+    "splendid": {
+      "total_watch_time": 80.94258666038513,
+      "unique_viewers": [
+        "192.168.10.85"
+      ],
+      "last_update": 1742860230.3044696,
+      "watchlist": {
+        "192.168.10.85": 80.94258666038513
+      }
+    },
+    "pagnol": {
+      "total_watch_time": 297.03929114341736,
+      "unique_viewers": [
+        "192.168.10.85"
+      ],
+      "last_update": 1742860304.2326472,
+      "watchlist": {
+        "192.168.10.85": 297.03929114341736
       }
     }
   },
   "global": {
-    "total_watch_time": 2985.192634344101,
+    "total_watch_time": 3924.0295960903168,
     "unique_viewers": [
+      "pagnol",
       "splendid",
       "aaa",
-      "pagnol"
+      "192.168.10.85"
     ],
-    "last_update": 1742859460.7402892
+    "last_update": 1742860382.0212002
   }
 }

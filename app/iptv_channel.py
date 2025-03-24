@@ -923,12 +923,21 @@ class IPTVChannel:
             mtime = most_recent.stat().st_mtime
             segment_age = current_time - mtime
             
+            # Plus permissif: considérer un segment comme récent si son âge est < CRASH_THRESHOLD * 3
+            # au lieu de CRASH_THRESHOLD
+            relaxed_threshold = CRASH_THRESHOLD * 3
+            
             # Si le segment est récent, mettre à jour le timestamp
-            if segment_age < CRASH_THRESHOLD:
-                logger.debug(
-                    f"[{self.name}] 🆕 Segment récent trouvé par vérification directe: "
-                    f"{most_recent.name} (âge: {segment_age:.1f}s)"
-                )
+            if segment_age < relaxed_threshold:
+                # Utiliser debug_fs=True pour éviter de spammer les logs
+                debug_fs = getattr(self, 'debug_fs', False)
+                if debug_fs or len(segments) % 10 == 0:  # Uniquement log tous les 10 segments ou en mode debug
+                    logger.debug(
+                        f"[{self.name}] 🆕 Segment récent trouvé: {most_recent.name} "
+                        f"(âge: {segment_age:.1f}s, seuil: {relaxed_threshold}s, total segments: {len(segments)})"
+                    )
+                
+                # Toujours mettre à jour le timestamp de segment pour éviter les faux timeouts
                 self.last_segment_time = current_time
                 
         except Exception as e:
@@ -1315,12 +1324,13 @@ class IPTVChannel:
                         logger.warning(f"[{self.name}] ⚠️ Segments too old (last: {segment_age:.1f}s ago, threshold: {threshold}s)")
                         
                         # During startup grace period, be more lenient
-                        if startup_duration < 60:
+                        if startup_duration < 120:  # Extended from 60s to 120s
                             logger.info(f"[{self.name}] ℹ️ Still in startup grace period ({startup_duration:.1f}s), waiting for segments...")
                             return True
                         
                         # Restart if there are watchers and outside grace period
-                        if hasattr(self, "watchers_count") and self.watchers_count > 0:
+                        # Ajout d'une vérification supplémentaire: uniquement redémarrer si les segments sont vraiment vieux
+                        if hasattr(self, "watchers_count") and self.watchers_count > 0 and segment_age > threshold * 1.5:  # 50% plus vieux que le seuil
                             logger.info(f"[{self.name}] 🔄 Auto-restarting stream due to stale segments")
                             self.stop_stream_if_needed()
                             time.sleep(2)
@@ -1782,16 +1792,30 @@ class IPTVChannel:
                         
                         # Détecter un stall si pas de nouveaux segments
                         if current_segments == last_segment_count:
-                            if not stall_detected:
-                                stall_detected = True
-                                stall_start_time = current_time
-                                logger.warning(f"[{self.name}] ⚠️ Stall détecté dans la génération des segments")
-                            
-                            # Si le stall dure plus de 30 secondes, redémarrer
-                            if current_time - stall_start_time > 30:
-                                logger.error(f"[{self.name}] ❌ Stall prolongé détecté, redémarrage")
-                                self._current_process.terminate()
-                                return False
+                            # Ne considérer comme stall que si on a déjà généré un nombre raisonnable de segments
+                            # et éviter les faux positifs au début du streaming
+                            if current_segments >= 3:
+                                if not stall_detected:
+                                    stall_detected = True
+                                    stall_start_time = current_time
+                                    # Utiliser debug au lieu de warning pour réduire le bruit dans les logs
+                                    logger.debug(f"[{self.name}] ℹ️ Stall potentiel dans la génération des segments")
+                                
+                                # Augmenter le délai de stall de 30s à 60s pour être moins strict
+                                if current_time - stall_start_time > 60:
+                                    logger.error(f"[{self.name}] ❌ Stall prolongé détecté, redémarrage")
+                                    self._current_process.terminate()
+                                    return False
+                            else:
+                                # Pour les streams qui démarrent, être plus patient
+                                if not stall_detected:
+                                    stall_detected = True
+                                    stall_start_time = current_time
+                                # Utiliser un délai encore plus long pour les débuts de stream (120s)
+                                elif current_time - stall_start_time > 120:
+                                    logger.warning(f"[{self.name}] ⚠️ Démarrage lent, segments insuffisants après 2 minutes")
+                                    self._current_process.terminate()
+                                    return False
                         else:
                             stall_detected = False
                             stall_start_time = None

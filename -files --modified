@@ -1,0 +1,13 @@
+[33mcommit 76f0ab793022fc6a0090220a46e808b44f999897[m[33m ([m[1;36mHEAD -> [m[1;32mmain[m[33m)[m
+Author: mehdi <sixfoursuited@gmail.com>
+Date:   Tue Mar 25 00:46:58 2025 +0100
+
+    Refactor watcher detection and validation system
+    
+    - Centralized log parsing logic in log_utils.py module - Fixed WatcherTimer initialization and management (now properly started) - Harmonized timeout handling across ClientMonitor and IPTVManager - Improved IP address validation and error handling - Fixed duplicated logic between watcher count methods - Added clear distinction between Manager and ClientMonitor cleanup
+
+ app/client_monitor.py | 243 [32m+++++++++++++++++++++++[m[31m-------------------------------------------------------[m
+ app/iptv_manager.py   |  58 [32m++++++[m[31m-------------[m
+ app/log_utils.py      | 103 [32m+++++++++++++++++++++++++++++++++[m
+ app/watcher_timer.py  |  39 [32m++++++++[m[31m-----[m
+ 4 files changed, 216 insertions(+), 227 deletions(-)
