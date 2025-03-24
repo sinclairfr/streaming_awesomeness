@@ -6,7 +6,7 @@ import psutil
 import threading
 import subprocess
 from pathlib import Path
-from config import logger, LEGACY_MODE
+from config import logger
 import traceback
 from typing import Callable, Optional
 from datetime import datetime

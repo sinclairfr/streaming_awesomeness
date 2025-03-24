@@ -61,18 +61,15 @@ class FFmpegCommandBuilder:
                 logger.info(
                     f"[{self.channel_name}] 🛠️ Correction du chemin de sortie: {output_file} -> {corrected_path}"
                 )
+            elif "/app/hls" in output_file and not "/app/hls/" in output_file:
+                fixed_path = output_file.replace("/app/hls", "/app/hls/")
+                command[-1] = fixed_path
+                logger.info(
+                    f"[{self.channel_name}] 🔧 Correction chemin: {output_file} → {fixed_path}"
+                )
 
             # Log pour debug
             logger.debug(f"[{self.channel_name}] 📝 Commande: {' '.join(command)}")
-
-            # Juste avant le return command
-            output_path = command[-1]
-            if "/app/hls" in output_path and not "/app/hls/" in output_path:
-                fixed_path = output_path.replace("/app/hls", "/app/hls/")
-                command[-1] = fixed_path
-                logger.info(
-                    f"[{self.channel_name}] 🔧 Correction chemin: {output_path} → {fixed_path}"
-                )
 
             # Log de la commande complète
             logger.info("=" * 80)

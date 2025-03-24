@@ -11,6 +11,7 @@ LOG_DIR = os.getenv("LOG_DIR", "/app/logs")
 CONTENT_DIR = Path(
     os.getenv("CONTENT_DIR", "/mnt/videos/streaming_awesomeness/content")
 )
+CHANNELS_STATUS_FILE = os.getenv("CHANNELS_STATUS_FILE", "/app/stats/channels_status.json")
 NGINX_ACCESS_LOG = "/app/logs/nginx/access.log"
 SERVER_URL = os.getenv("SERVER_URL", "192.168.10.183")
 

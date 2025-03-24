@@ -7,7 +7,7 @@ import time
 import threading
 import shutil
 from pathlib import Path
-from config import logger
+from config import logger, CHANNELS_STATUS_FILE
 
 class ChannelStatusManager:
     """
@@ -15,7 +15,7 @@ class ChannelStatusManager:
     for dashboard consumption
     """
     
-    def __init__(self, status_file="/mnt/frigate_data/streaming_awesomeness/stats/channels_status.json"):
+    def __init__(self, status_file=CHANNELS_STATUS_FILE):
         """Initialize the status manager"""
         self.status_file = status_file
         self.channels = {}
@@ -126,7 +126,7 @@ class ChannelStatusManager:
                 current_time = int(time.time())
                 total_viewers = 0
                 
-                logger.info(f"📊 Mise à jour des statuts pour {len(channels_dict)} chaînes")
+                logger.debug(f"📊 Mise à jour des statuts pour {len(channels_dict)} chaînes")
                 
                 # Clear existing channels data
                 self.channels = {}

@@ -216,7 +216,28 @@ class ClientMonitor(threading.Thread):
             return None, None, None, False, None
 
         # Extraction IP (en début de ligne)
-        ip = line.split(" ")[0]
+        parts = line.split(" ")
+        if len(parts) < 1:
+            logger.warning("⚠️ Ligne de log invalide - pas assez de parties")
+            return None, None, None, False, None
+
+        ip = parts[0]
+        
+        # Validation plus stricte de l'IP avec une regex plus robuste
+        ip_pattern = r'^(\d{1,3}\.){3}\d{1,3}$'
+        if not re.match(ip_pattern, ip):
+            logger.warning(f"⚠️ Format IP invalide: {ip}")
+            return None, None, None, False, None
+            
+        # Vérification que chaque partie est un nombre valide
+        try:
+            ip_parts = ip.split('.')
+            if not all(0 <= int(part) <= 255 for part in ip_parts):
+                logger.warning(f"⚠️ Valeurs IP hors limites: {ip}")
+                return None, None, None, False, None
+        except ValueError:
+            logger.warning(f"⚠️ IP contient des valeurs non numériques: {ip}")
+            return None, None, None, False, None
 
         # Extraction du code HTTP
         status_code = "???"
@@ -232,6 +253,11 @@ class ClientMonitor(threading.Thread):
         channel_match = re.search(r'/hls/([^/]+)/', line)
         if channel_match:
             channel = channel_match.group(1)
+            # Ne pas valider le nom de la chaîne comme une IP
+            if re.match(ip_pattern, channel):
+                logger.warning(f"⚠️ Nom de chaîne ressemble à une IP: {channel}")
+                return None, None, None, False, None
+                
             # Type de requête
             request_type = (
                 "playlist"
@@ -888,12 +914,35 @@ class ClientMonitor(threading.Thread):
             current_time = time.time()
             
             for ip, data in self.watchers.items():
+                # Validation stricte de l'IP
+                try:
+                    # Vérifier le format de base
+                    ip_pattern = r'^(\d{1,3}\.){3}\d{1,3}$'
+                    if not ip or not re.match(ip_pattern, ip):
+                        logger.warning(f"⚠️ Format IP invalide ignoré dans le compteur: {ip}")
+                        continue
+                        
+                    # Vérifier que chaque partie est un nombre valide
+                    ip_parts = ip.split('.')
+                    if not all(0 <= int(part) <= 255 for part in ip_parts):
+                        logger.warning(f"⚠️ Valeurs IP hors limites ignorées dans le compteur: {ip}")
+                        continue
+                except ValueError:
+                    logger.warning(f"⚠️ IP avec valeurs non numériques ignorée dans le compteur: {ip}")
+                    continue
+                    
+                # Vérifier que le watcher est actif et sur la bonne chaîne
                 if (data.get("current_channel") == channel and 
-                    current_time - data.get("last_activity", 0) < self.SEGMENT_TIMEOUT):
+                    current_time - data.get("last_activity", 0) < self.SEGMENT_TIMEOUT and
+                    "timer" in data and data["timer"].is_running()):
                     active_watchers.add(ip)
 
             # Mettre à jour le compteur dans le manager
             self.manager.update_watchers(channel, len(active_watchers), "/hls/")
+            
+            # Log pour debug
+            if active_watchers:
+                logger.debug(f"[{channel}] 👥 {len(active_watchers)} watchers actifs: {', '.join(active_watchers)}")
 
         except Exception as e:
             logger.error(f"❌ Erreur mise à jour watchers pour {channel}: {e}")

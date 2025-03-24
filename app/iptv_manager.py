@@ -32,10 +32,12 @@ from config import (
     SEGMENT_AGE_THRESHOLD,
     SUMMARY_CYCLE,
     WATCHERS_LOG_CYCLE,
+    CHANNELS_STATUS_FILE,
 )
 from stats_collector import StatsCollector
 from channel_status_manager import ChannelStatusManager
 import json
+import re
 
 
 class IPTVManager:
@@ -87,6 +89,7 @@ class IPTVManager:
         self.init_threads_lock = threading.Lock()
 
         # Initialize channel status manager first
+        self.channel_status = None  # Initialiser à None
         self.init_channel_status_manager()
 
         # Initialisation des composants
@@ -949,20 +952,11 @@ class IPTVManager:
     def _update_channel_status(self):
         """Update channel status for dashboard"""
         try:
-            # S'assurer que le dossier stats existe avec les bonnes permissions
-            stats_dir = Path("/mnt/frigate_data/streaming_awesomeness/stats")
-            if not stats_dir.exists():
-                try:
-                    stats_dir.mkdir(parents=True, exist_ok=True)
-                    # Donner les permissions complètes au dossier
-                    os.chmod(stats_dir, 0o777)
-                    logger.info("📁 Dossier stats créé avec les permissions 777")
-                except Exception as e:
-                    logger.error(f"❌ Impossible de créer le dossier stats: {e}")
-                    return False
+            # Vérifier que le channel_status est bien initialisé
+            if self.channel_status is None:
+                logger.error("❌ Channel status manager non initialisé, impossible de mettre à jour les statuts")
+                return False
 
-            status_file = stats_dir / "channels_status.json"
-            
             # Get current watchers
             current_watchers = self._get_current_watchers()
             
@@ -986,34 +980,14 @@ class IPTVManager:
                     "last_update": int(time.time())
                 }
             
-            # Écriture atomique du fichier
-            try:
-                # Créer un fichier temporaire
-                temp_file = status_file.with_name(f".{status_file.name}.tmp")
-                
-                # Écrire les données dans le fichier temporaire
-                with open(temp_file, "w") as f:
-                    json.dump(status_data, f, indent=2)
-                
-                # Donner les permissions
-                os.chmod(temp_file, 0o666)
-                
-                # Renommer de manière atomique
-                os.replace(temp_file, status_file)
-                
-                # S'assurer que le fichier final a les bonnes permissions
-                os.chmod(status_file, 0o666)
-                
-                return True
-                
-            except Exception as e:
-                logger.error(f"❌ Erreur lors de l'écriture du fichier de statut: {e}")
-                if temp_file.exists():
-                    try:
-                        temp_file.unlink()
-                    except:
-                        pass
-                return False
+            # Mise à jour via le channel_status manager
+            success = self.channel_status.update_all_channels(status_data["channels"])
+            if success:
+                logger.debug("✅ Mise à jour des statuts réussie")
+            else:
+                logger.error("❌ Échec de la mise à jour des statuts")
+            
+            return success
             
         except Exception as e:
             logger.error(f"❌ Error updating channel status: {e}")
@@ -1028,6 +1002,13 @@ class IPTVManager:
         
         while not self.stop_status_update.is_set():
             try:
+                # Vérifier que le channel_status est bien initialisé
+                if self.channel_status is None:
+                    logger.warning("⚠️ Channel status manager non initialisé, tentative de réinitialisation")
+                    self.init_channel_status_manager()
+                    time.sleep(1)
+                    continue
+
                 # Update channel status
                 success = self._update_channel_status()
                 if not success:
@@ -1044,16 +1025,21 @@ class IPTVManager:
     def init_channel_status_manager(self):
         """Initialize the channel status manager for dashboard"""
         try:
+            # Si déjà initialisé, ne pas réinitialiser
+            if self.channel_status is not None:
+                logger.info("ℹ️ Channel status manager déjà initialisé, skip")
+                return
+
             logger.info("🚀 Initialisation du gestionnaire de statuts des chaînes")
             # Créer le dossier stats s'il n'existe pas
-            stats_dir = Path("/mnt/frigate_data/streaming_awesomeness/stats")
+            stats_dir = Path(os.path.dirname(CHANNELS_STATUS_FILE))
             stats_dir.mkdir(parents=True, exist_ok=True)
             os.chmod(stats_dir, 0o777)
             
             # Initialiser le gestionnaire de statuts
             from channel_status_manager import ChannelStatusManager
             self.channel_status = ChannelStatusManager(
-                status_file=str(stats_dir / "channels_status.json")
+                status_file=CHANNELS_STATUS_FILE
             )
             logger.info("✅ Channel status manager initialized for dashboard")
             
@@ -1341,14 +1327,30 @@ class IPTVManager:
                 time.sleep(5)  # Pause en cas d'erreur
 
     def _get_current_watchers(self):
-        """Récupère les watchers actifs depuis toutes les sources disponibles"""
+        """Récupère les watchers actifs depuis le client_monitor uniquement"""
         try:
             current_watchers = {}
             
-            # 1. Récupérer les watchers depuis le client_monitor
+            # Récupérer les watchers depuis le client_monitor uniquement
             if hasattr(self, 'client_monitor') and hasattr(self.client_monitor, 'watchers'):
                 current_time = time.time()
                 for ip, data in self.client_monitor.watchers.items():
+                    # Validation stricte de l'IP
+                    try:
+                        # Vérifier le format de base
+                        if not ip or not re.match(r'^(\d{1,3}\.){3}\d{1,3}$', ip):
+                            logger.warning(f"⚠️ Format IP invalide ignoré: {ip}")
+                            continue
+                            
+                        # Vérifier que chaque partie est un nombre valide
+                        ip_parts = ip.split('.')
+                        if not all(0 <= int(part) <= 255 for part in ip_parts):
+                            logger.warning(f"⚠️ Valeurs IP hors limites ignorées: {ip}")
+                            continue
+                    except ValueError:
+                        logger.warning(f"⚠️ IP avec valeurs non numériques ignorée: {ip}")
+                        continue
+                        
                     channel = data.get("current_channel")
                     last_seen = data.get("last_seen", 0)
                     
@@ -1359,58 +1361,10 @@ class IPTVManager:
                         current_watchers[channel].add(ip)
                         logger.debug(f"👁️ Watcher actif depuis client_monitor: {channel} sur {ip}")
 
-            # 2. Ajouter les watchers depuis les stats si disponibles
-            if hasattr(self, 'stats_collector') and self.stats_collector:
-                # Récupérer les stats depuis le StatsCollector
-                stats = {}
-                if hasattr(self.stats_collector, '_load_stats'):
-                    stats = self.stats_collector._load_stats()
-                
-                if stats:
-                    for channel_name in self.channels:
-                        if channel_name in stats:
-                            channel_stats = stats[channel_name]
-                            # Vérifier les watchers récents (dernières 30 secondes)
-                            current_time = time.time()
-                            recent_watchers = set()
-                            
-                            # Parcourir les watchers et leurs timestamps
-                            watchlist = channel_stats.get('watchlist', {})
-                            for ip, watch_time in watchlist.items():
-                                # Si le watcher a du temps de visionnage, on le considère comme actif
-                                if watch_time > 0:
-                                    recent_watchers.add(ip)
-                            
-                            if recent_watchers:
-                                if channel_name not in current_watchers:
-                                    current_watchers[channel_name] = set()
-                                current_watchers[channel_name].update(recent_watchers)
-                                logger.debug(f"👁️ {len(recent_watchers)} watchers actifs depuis stats pour {channel_name}")
-
-            # 3. Mettre à jour _active_watchers avec les données actuelles
-            self._active_watchers = current_watchers.copy()
-            
-            # 4. Mettre à jour le compteur de watchers pour chaque chaîne
-            for channel_name, watchers in current_watchers.items():
-                if channel_name in self.channels:
-                    channel = self.channels[channel_name]
-                    old_count = getattr(channel, 'watchers_count', 0)
-                    new_count = len(watchers)
-                    
-                    if old_count != new_count:
-                        channel.watchers_count = new_count
-                        channel.last_watcher_time = time.time()
-                        logger.info(f"[{channel_name}] 👥 MAJ watchers: {old_count} → {new_count}")
-            
-            # Log du nombre total de watchers
-            total_watchers = sum(len(watchers) for watchers in current_watchers.values())
-            active_channels = len([ch for ch, w in current_watchers.items() if w])
-            logger.debug(f"📊 Total watchers actifs: {total_watchers} sur {active_channels} chaînes")
-            
             return current_watchers
-            
+
         except Exception as e:
-            logger.error(f"❌ Error getting current watchers: {e}")
+            logger.error(f"❌ Erreur récupération watchers: {e}")
             import traceback
             logger.error(traceback.format_exc())
             return {}

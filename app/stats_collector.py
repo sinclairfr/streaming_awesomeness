@@ -416,7 +416,7 @@ class StatsCollector:
                     self.stats = stats
                     self.global_stats = global_stats
                     
-                    logger.info(f"📊 Stats chargées: {len(stats)} chaînes, {len(global_stats['unique_viewers'])} spectateurs uniques")
+                    logger.debug(f"📊 Stats chargées: {len(stats)} chaînes, {len(global_stats['unique_viewers'])} spectateurs uniques")
                     return stats
                     
             except json.JSONDecodeError:
