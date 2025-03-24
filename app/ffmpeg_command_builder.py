@@ -74,6 +74,12 @@ class FFmpegCommandBuilder:
                     f"[{self.channel_name}] 🔧 Correction chemin: {output_path} → {fixed_path}"
                 )
 
+            # Log de la commande complète
+            logger.info("=" * 80)
+            logger.info(f"[{self.channel_name}] 🚀 Lancement de la commande FFmpeg:")
+            logger.info(f"$ {' '.join(command)}")
+            logger.info("=" * 80)
+
             return command
         except Exception as e:
             logger.error(f"[{self.channel_name}] ❌ Erreur construction commande: {e}")
@@ -137,6 +143,32 @@ class FFmpegCommandBuilder:
                 "20M",  # Réduit pour un démarrage plus rapide
             ]
         )
+
+        # # Code temporaire pour tester les transitions - commenté
+        # try:
+        #     with open(input_file, "r") as f:
+        #         first_line = f.readline().strip()
+        #         if first_line.startswith("file "):
+        #             first_video = first_line.split("'")[1]
+        #             cmd = [
+        #                 "ffprobe",
+        #                 "-v", "error",
+        #                 "-show_entries", "format=duration",
+        #                 "-of", "default=noprint_wrappers=1:nokey=1",
+        #                 str(first_video)
+        #             ]
+        #             result = subprocess.run(cmd, capture_output=True, text=True)
+        #             if result.returncode == 0:
+        #                 try:
+        #                     duration = float(result.stdout.strip())
+        #                     if duration > 30:
+        #                         # Ajouter l'offset temporaire (durée - 30 secondes)
+        #                         params.extend(["-ss", str(duration - 30)])
+        #                         logger.info(f"[{self.channel_name}] 🕒 Ajout offset temporaire: {duration - 30}s")
+        #                 except ValueError:
+        #                     pass
+        # except Exception as e:
+        #     logger.error(f"[{self.channel_name}] ❌ Erreur calcul offset temporaire: {e}")
 
         params.extend(
             [

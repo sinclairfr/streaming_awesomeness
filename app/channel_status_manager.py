@@ -15,25 +15,17 @@ class ChannelStatusManager:
     for dashboard consumption
     """
     
-    def __init__(self, stats_dir="/app/stats"):
+    def __init__(self, status_file="/mnt/frigate_data/streaming_awesomeness/stats/channels_status.json"):
         """Initialize the status manager"""
-        self.stats_dir = Path(stats_dir)
-        self.status_file = self.stats_dir / "channels_status.json"
-        self.lock = threading.Lock()
+        self.status_file = status_file
+        self.channels = {}
+        self.last_updated = 0
+        self.active_viewers = 0
+        self._lock = threading.Lock()
         self.update_interval = 2  # Update every 2 seconds
         
         # Create stats dir if needed
-        self.stats_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Initialize empty status data
-        self.status_data = {
-            "channels": {},
-            "last_updated": int(time.time()),
-            "active_viewers": 0
-        }
-        
-        # Clean status file at startup
-        self._clean_status_file()
+        os.makedirs(os.path.dirname(self.status_file), exist_ok=True)
         
         # Load existing data if available
         self._load_status()
@@ -45,55 +37,52 @@ class ChannelStatusManager:
         
         logger.info(f"ChannelStatusManager initialized, status file: {self.status_file}")
     
-    def _clean_status_file(self):
-        """Clean the status file at startup"""
-        try:
-            if self.status_file.exists():
-                # # Backup the old file with timestamp
-                # backup_file = self.status_file.with_suffix(f'.json.bak.{int(time.time())}')
-                # shutil.copy2(self.status_file, backup_file)
-                # logger.info(f"✅ Backup of old status file created: {backup_file}")
-                
-                # Create new empty status file
-                with open(self.status_file, 'w') as f:
-                    json.dump(self.status_data, f, indent=2)
-                logger.info("✅ Status file cleaned at startup")
-        except Exception as e:
-            logger.error(f"❌ Error cleaning status file: {e}")
-    
     def _load_status(self):
         """Load channel status from file if it exists"""
-        if self.status_file.exists():
-            try:
+        try:
+            if os.path.exists(self.status_file):
                 with open(self.status_file, 'r') as f:
-                    self.status_data = json.load(f)
-                logger.info(f"Loaded existing channel status data with {len(self.status_data.get('channels', {}))} channels")
-            except json.JSONDecodeError:
-                logger.warning(f"Invalid JSON in status file, using empty data")
-            except Exception as e:
-                logger.error(f"Error loading status file: {e}")
-        else:
-            # Create empty status file
-            self._save_status()
-            logger.info("Created new channel status file")
+                    data = json.load(f)
+                    self.channels = data.get('channels', {})
+                    self.last_updated = data.get('last_updated', 0)
+                    self.active_viewers = data.get('active_viewers', 0)
+                logger.info(f"Loaded existing channel status data with {len(self.channels)} channels")
+            else:
+                # Create empty status file
+                self._save_status()
+                logger.info("Created new channel status file")
+        except Exception as e:
+            logger.error(f"Error loading status file: {e}")
     
     def _save_status(self):
         """Save current status to file"""
-        with self.lock:
-            try:
-                # Update timestamp
-                self.status_data["last_updated"] = int(time.time())
-                
-                # Write to file
-                with open(self.status_file, 'w') as f:
-                    json.dump(self.status_data, f, indent=2)
-                
-                return True
-            except Exception as e:
-                logger.error(f"Error saving status file: {e}")
-                return False
+        try:
+            # Create a temporary file
+            temp_file = f"{self.status_file}.tmp"
+            
+            # Write to temporary file
+            with open(temp_file, 'w') as f:
+                json.dump({
+                    'channels': self.channels,
+                    'last_updated': self.last_updated,
+                    'active_viewers': self.active_viewers
+                }, f, indent=2)
+            
+            # Give permissions
+            os.chmod(temp_file, 0o666)
+            
+            # Rename atomically
+            os.replace(temp_file, self.status_file)
+            
+            # Ensure final file has correct permissions
+            os.chmod(self.status_file, 0o666)
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error saving status file: {e}")
+            return False
     
-    def update_channel(self, channel_name, is_active=True, viewers=0, streaming=False):
+    def update_channel(self, channel_name: str, is_active: bool = False, viewers: int = 0, streaming: bool = False, watchers: list = None):
         """
         Update status for a single channel
         
@@ -102,32 +91,23 @@ class ChannelStatusManager:
             is_active: Whether the channel has content available
             viewers: Number of current viewers
             streaming: Whether the channel is currently streaming
+            watchers: List of current watchers
         """
-        with self.lock:
-            # Get current time
-            current_time = int(time.time())
+        with self._lock:
+            if channel_name not in self.channels:
+                self.channels[channel_name] = {}
             
-            # Get or create channel entry
-            if channel_name not in self.status_data["channels"]:
-                self.status_data["channels"][channel_name] = {
-                    "active": is_active,
-                    "viewers": viewers,
-                    "streaming": streaming,
-                    "last_update": current_time,
-                    "peak_viewers": viewers
-                }
-            else:
-                channel_data = self.status_data["channels"][channel_name]
-                
-                # Update fields
-                channel_data["active"] = is_active
-                channel_data["viewers"] = viewers
-                channel_data["streaming"] = streaming
-                channel_data["last_update"] = current_time
-                
-                # Update peak viewers if current count is higher
-                if viewers > channel_data.get("peak_viewers", 0):
-                    channel_data["peak_viewers"] = viewers
+            self.channels[channel_name].update({
+                'active': is_active,
+                'streaming': streaming,
+                'viewers': viewers,
+                'watchers': watchers or []
+            })
+            
+            self.last_updated = int(time.time())
+            
+            # Update total active viewers
+            self.active_viewers = sum(ch.get('viewers', 0) for ch in self.channels.values())
             
             # Don't save here - let the update loop handle it
             # This prevents constant file writes
@@ -142,14 +122,14 @@ class ChannelStatusManager:
                            with 'active', 'viewers', 'streaming' keys
         """
         try:
-            with self.lock:
+            with self._lock:
                 current_time = int(time.time())
                 total_viewers = 0
                 
                 logger.info(f"📊 Mise à jour des statuts pour {len(channels_dict)} chaînes")
                 
                 # Clear existing channels data
-                self.status_data["channels"] = {}
+                self.channels = {}
                 
                 for channel_name, status in channels_dict.items():
                     viewers = status.get("viewers", 0)
@@ -158,17 +138,18 @@ class ChannelStatusManager:
                     logger.debug(f"📡 Mise à jour de {channel_name}: viewers={viewers}, active={status.get('active')}, streaming={status.get('streaming')}")
                     
                     # Add to dictionary
-                    self.status_data["channels"][channel_name] = {
+                    self.channels[channel_name] = {
                         "active": status.get("active", True),
                         "viewers": viewers,
                         "streaming": status.get("streaming", False),
+                        "watchers": status.get("watchers", []),
                         "last_update": current_time,
                         "peak_viewers": viewers
                     }
                 
                 # Update total active viewers and timestamp
-                self.status_data["active_viewers"] = total_viewers
-                self.status_data["last_updated"] = current_time
+                self.active_viewers = total_viewers
+                self.last_updated = current_time
                 
                 # Force save immediately
                 success = self._save_status()
@@ -187,8 +168,8 @@ class ChannelStatusManager:
     
     def get_status_data(self):
         """Get a copy of the current status data"""
-        with self.lock:
-            return dict(self.status_data)
+        with self._lock:
+            return dict(self.channels)
     
     def _update_loop(self):
         """Background thread to periodically update status file"""
@@ -200,9 +181,9 @@ class ChannelStatusManager:
                 # Calculate total active viewers
                 total_viewers = sum(
                     ch.get("viewers", 0) 
-                    for ch in self.status_data["channels"].values()
+                    for ch in self.channels.values()
                 )
-                self.status_data["active_viewers"] = total_viewers
+                self.active_viewers = total_viewers
                 
                 # Sleep until next update
                 time.sleep(self.update_interval)

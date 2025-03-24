@@ -12,11 +12,18 @@ class WatcherTimer:
         self.stats_collector = stats_collector
         self.start_time = time.time()
         self.last_update = time.time()
-        self._running = True
+        self._running = False  # Changé à False par défaut
         self._thread = threading.Thread(target=self._timer_loop, daemon=True)
-        self._thread.start()
         
         logger.info(f"⏱️ Nouveau minuteur créé pour {ip} sur {channel_name}")
+    
+    def start(self):
+        """Démarre le minuteur s'il n'est pas déjà en cours"""
+        if not self._running:
+            self._running = True
+            if not self._thread.is_alive():
+                self._thread.start()
+            logger.debug(f"⏱️ Minuteur démarré pour {self.ip} sur {self.channel_name}")
     
     def stop(self):
         """Arrête le minuteur et enregistre le temps final"""

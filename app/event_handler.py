@@ -564,7 +564,13 @@ class ReadyContentHandler(FileSystemEventHandler):
                                 daemon=True
                             ).start()
                     else:
-                        logger.info(f"[{channel_name}] ✓ Playlist inchangée, pas de redémarrage nécessaire")
+                        logger.info(f"[{channel_name}] ✓ Playlist inchangée, vérification du démarrage")
+                        # Même si la playlist n'a pas changé, on vérifie si le stream doit être démarré
+                        if hasattr(channel, "start_stream_if_needed"):
+                            threading.Thread(
+                                target=channel.start_stream_if_needed,
+                                daemon=True
+                            ).start()
 
             logger.info(
                 f"✅ Mises à jour initiées pour {channel_name} suite à changement dans ready_to_stream"

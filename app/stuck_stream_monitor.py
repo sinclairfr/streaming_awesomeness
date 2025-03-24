@@ -234,7 +234,7 @@ def check_channel_activity(channel_name):
                     
         # 6. Vérifier les logs d'erreur nginx pour les problèmes de ce flux
         try:
-            error_cmd = f"tail -n 100 /app/nginx_logs/error.log | grep -i '/{channel_name}/' | grep -i 'no such file' | wc -l"
+            error_cmd = f"tail -n 100 /app/logs/nginx/error.log | grep -i '/{channel_name}/' | grep -i 'no such file' | wc -l"
             error_result = subprocess.run(error_cmd, shell=True, capture_output=True, text=True)
             error_count = int(error_result.stdout.strip() or '0')
             
@@ -349,7 +349,7 @@ def main():
                 # 4. Approche universelle pour toutes les chaînes avec problèmes de transition
                 else:
                     # Vérifier les erreurs dans les logs nginx pour cette chaîne
-                    cmd = f"tail -n 500 /app/nginx_logs/error.log | grep -i '/{channel_name}/' | grep -i 'no such file' | wc -l"
+                    cmd = f"tail -n 500 /app/logs/nginx/error.log | grep -i '/{channel_name}/' | grep -i 'no such file' | wc -l"
                     error_result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
                     error_count = int(error_result.stdout.strip() or '0')
                     
@@ -427,7 +427,7 @@ def main():
                 continue
                 
             # Vérifier si des utilisateurs essaient d'accéder à cette chaîne
-            recent_access_cmd = f"tail -n 2000 /app/nginx_logs/access.log | grep -i '/{channel_name}/' | grep -i -v '127.0.0.1' | wc -l"
+            recent_access_cmd = f"tail -n 2000 /app/logs/nginx/access.log | grep -i '/{channel_name}/' | grep -i -v '127.0.0.1' | wc -l"
             access_result = subprocess.run(recent_access_cmd, shell=True, capture_output=True, text=True)
             access_count = int(access_result.stdout.strip() or '0')
             
@@ -463,14 +463,14 @@ def check_channel_has_viewers(channel_name):
     """Vérifie si une chaîne a des viewers actifs en consultant les logs d'accès"""
     try:
         # Vérifier les logs nginx pour des accès récents aux segments.ts (et pas seulement playlist.m3u8)
-        cmd = f"tail -n 1000 /app/nginx_logs/access.log | grep -i '{channel_name}/' | grep -i 'segment_' | wc -l"
+        cmd = f"tail -n 1000 /app/logs/nginx/access.log | grep -i '{channel_name}/' | grep -i 'segment_' | wc -l"
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
         
         # Compte les accès récents aux segments .ts
         access_count = int(result.stdout.strip() or '0')
         
         # Vérifier aussi les requêtes récentes de playlist (peuvent indiquer des tentatives de connexion)
-        cmd_playlist = f"tail -n 200 /app/nginx_logs/access.log | grep -i '{channel_name}/playlist.m3u8' | wc -l"
+        cmd_playlist = f"tail -n 200 /app/logs/nginx/access.log | grep -i '{channel_name}/playlist.m3u8' | wc -l"
         playlist_result = subprocess.run(cmd_playlist, shell=True, capture_output=True, text=True)
         playlist_count = int(playlist_result.stdout.strip() or '0')
         

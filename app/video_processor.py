@@ -431,6 +431,14 @@ class VideoProcessor:
                                 threading.Thread(
                                     target=manager._manage_master_playlist, daemon=True
                                 ).start()
+                            
+                            # Démarrer automatiquement le stream si nécessaire
+                            if hasattr(channel, "start_stream_if_needed"):
+                                logger.info(f"[{channel_name}] 🚀 Tentative de démarrage automatique du stream")
+                                threading.Thread(
+                                    target=channel.start_stream_if_needed,
+                                    daemon=True
+                                ).start()
 
                     logger.info(
                         f"[{channel_name}] ✅ Chaîne marquée comme prête après traitement de {Path(file_path).name}"

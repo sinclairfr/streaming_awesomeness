@@ -21,6 +21,25 @@ class StreamErrorHandler:
         # S'assure que le répertoire existe
         self.crash_log_path.parent.mkdir(exist_ok=True)
 
+    def has_critical_errors(self) -> bool:
+        """
+        Vérifie si des erreurs critiques sont présentes
+        """
+        # On considère qu'il y a une erreur critique si :
+        # - On a eu trop de redémarrages
+        if self.restart_count >= self.max_restarts:
+            return True
+            
+        # - On a eu trop d'erreurs du même type
+        if self.error_count >= 3 and len(self.error_types) == 1:
+            return True
+            
+        # - On a eu plusieurs types d'erreurs différentes
+        if len(self.error_types) >= 3:
+            return True
+            
+        return False
+
     def add_error(self, error_type: str) -> bool:
         """
         Ajoute une erreur et retourne True si un restart est nécessaire

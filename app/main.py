@@ -42,12 +42,31 @@ class Application:
             time.tzset()  # Applique le changement
             logger.info(f"🕒 Fuseau horaire configuré: {time.tzname}")
             
-            # On vérifie/crée les dossiers requis
-            for d in [CONTENT_DIR, "/app/hls", "/app/logs", "/app/logs/ffmpeg"]:
-                Path(d).mkdir(parents=True, exist_ok=True)
+            # On vérifie/crée les dossiers requis avec les bonnes permissions
+            required_dirs = [
+                CONTENT_DIR,
+                "/app/hls",
+                "/app/logs",
+                "/app/logs/ffmpeg",
+                "/app/logs/nginx"
+            ]
+            
+            for d in required_dirs:
+                path = Path(d)
+                # Create directory with full permissions
+                path.mkdir(parents=True, exist_ok=True)
+                os.chmod(str(path), 0o777)
+                logger.info(f"📁 Dossier {d} créé/vérifié avec permissions 777")
                 
+            # Create nginx log file if it doesn't exist
+            nginx_log = Path("/app/logs/nginx/access.log")
+            if not nginx_log.exists():
+                nginx_log.touch()
+                os.chmod(str(nginx_log), 0o666)
+                logger.info("📝 Fichier access.log créé avec permissions 666")
+            
             # On vérifie les permissions
-            for d in [CONTENT_DIR, "/app/hls", "/app/logs"]:
+            for d in [CONTENT_DIR, "/app/hls", "/app/logs", "/app/logs/nginx"]:
                 path = Path(d)
                 if not os.access(str(path), os.W_OK):
                     logger.error(f"❌ Pas de droits d'écriture sur {d}")
@@ -57,6 +76,7 @@ class Application:
             from config import setup_log_rotation
             setup_log_rotation("/app/logs")
             setup_log_rotation("/app/logs/ffmpeg")
+            setup_log_rotation("/app/logs/nginx")
                     
             return True
             

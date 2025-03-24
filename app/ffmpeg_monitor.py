@@ -196,3 +196,27 @@ class FFmpegMonitor(threading.Thread):
             except Exception as e:
                 logger.error(f"❌ Erreur monitoring FFmpeg: {e}")
                 time.sleep(10)
+
+    def _check_process_health(self, channel_name, pids):
+        """Vérifie la santé d'un processus ffmpeg"""
+        try:
+            # Vérifier si le processus existe
+            if not pids:
+                logger.warning(f"[{channel_name}] ⚠️ Aucun processus ffmpeg trouvé")
+                return False
+
+            # Vérifier les erreurs critiques
+            if len(pids) > 1:
+                logger.error(f"[{channel_name}] ❌ Processus ffmpeg multiples détectés: {pids}")
+                return False
+
+            # Vérifier le fichier de log
+            if not self._check_ffmpeg_log(channel_name):
+                logger.error(f"[{channel_name}] ❌ Erreurs détectées dans les logs ffmpeg")
+                return False
+
+            return True
+
+        except Exception as e:
+            logger.error(f"[{channel_name}] ❌ Erreur vérification santé: {e}")
+            return False
