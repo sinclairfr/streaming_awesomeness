@@ -10,10 +10,6 @@ if [ "$(id -u)" -eq 0 ]; then
     chmod -R 777 /app
 fi
 
-# Nettoyer les logs trop longs avant de démarrer
-echo "Nettoyage des logs trop longs..."
-python3 /app/cleanup_logs.py
-
 # Lancement du service cron
 echo "Démarrage du service cron..."
 sudo service cron start
