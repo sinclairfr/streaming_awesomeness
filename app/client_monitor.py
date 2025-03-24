@@ -7,6 +7,7 @@ from typing import Dict, Tuple, List, Set
 import re
 from config import TIMEOUT_NO_VIEWERS
 from watcher_timer import WatcherTimer
+from log_utils import parse_access_log
 
 os.environ['TZ'] = 'Europe/Paris'
 time.tzset()  # Applique le changement
@@ -18,6 +19,11 @@ class ClientMonitor(threading.Thread):
     PLAYLIST_TIMEOUT = 20
     UNKNOWN_TIMEOUT = 25
     WATCHER_INACTIVITY_TIMEOUT = 60  # Timeout pour considérer un watcher comme inactif
+    
+    # Ajouter des timeouts spécifiques pour le nettoyage
+    CLEANUP_SEGMENT_TIMEOUT = 300  # 5 minutes pour les segments
+    CLEANUP_PLAYLIST_TIMEOUT = 180  # 3 minutes pour les playlists  
+    CLEANUP_UNKNOWN_TIMEOUT = 240   # 4 minutes pour les autres types
 
     def __init__(self, log_path, update_watchers_callback, manager, stats_collector=None):
         super().__init__(daemon=True)
@@ -65,14 +71,22 @@ class ClientMonitor(threading.Thread):
 
                 # Identifier les watchers inactifs
                 for ip, watcher in list(self.watchers.items()):
+                    # Vérifier le type de requête pour le timeout approprié
+                    request_type = watcher.get("type", "unknown")
+                    timeout = {
+                        "segment": self.CLEANUP_SEGMENT_TIMEOUT,
+                        "playlist": self.CLEANUP_PLAYLIST_TIMEOUT,
+                        "unknown": self.CLEANUP_UNKNOWN_TIMEOUT
+                    }.get(request_type, self.CLEANUP_UNKNOWN_TIMEOUT)
+                    
                     last_activity = watcher.get("last_activity", 0)
-                    if current_time - last_activity > self.SEGMENT_TIMEOUT:
+                    if current_time - last_activity > timeout:
                         inactive_watchers.append(ip)
                         logger.info(f"⏱️ Watcher inactif détecté: {ip} sur {watcher.get('current_channel', 'unknown')} (dernière activité: {current_time - last_activity:.1f}s)")
 
                 # Supprimer les watchers inactifs
                 for ip in inactive_watchers:
-                    watcher = self.watchers[ip]
+                    watcher = self.watchers.get(ip, {})  # Utilisation de get pour éviter les KeyError
                     channel = watcher.get("current_channel", "unknown")
                     
                     # Arrêter le minuteur si présent
@@ -81,12 +95,13 @@ class ClientMonitor(threading.Thread):
                         logger.info(f"⏱️ Arrêt du minuteur pour {ip} sur {channel}")
                     
                     # Supprimer le watcher
-                    del self.watchers[ip]
-                    logger.info(f"🧹 Suppression du watcher inactif: {ip} de {channel}")
+                    if ip in self.watchers:
+                        del self.watchers[ip]
+                        logger.info(f"🧹 Suppression du watcher inactif: {ip} de {channel}")
 
-                    # Mettre à jour le compteur de watchers pour la chaîne
-                    if channel != "unknown":
-                        self._update_channel_watchers_count(channel)
+                        # Mettre à jour le compteur de watchers pour la chaîne
+                        if channel != "unknown":
+                            self._update_channel_watchers_count(channel)
 
                 # Log périodique des watchers actifs
                 if not hasattr(self, "last_cleanup_log") or current_time - self.last_cleanup_log > 30:
@@ -108,90 +123,24 @@ class ClientMonitor(threading.Thread):
                 logger.error(f"❌ Erreur cleanup_loop: {e}")
                 time.sleep(5)
 
-    def _cleanup_inactive(self):
-        """Nettoie les watchers inactifs"""
-        current_time = time.time()
-        inactive_watchers = []
-
-        # Identifier les watchers inactifs
-        for ip, watcher in self.watchers.items():
-            # Vérifier le type de requête pour le timeout approprié
-            request_type = watcher.get("type", "unknown")
-            timeout = {
-                "segment": 300,  # 5 minutes pour les segments
-                "playlist": 180,  # 3 minutes pour les playlists
-                "unknown": 240   # 4 minutes pour les autres types
-            }.get(request_type, 240)
-
-            # Si pas de requête depuis le timeout approprié
-            if current_time - watcher["last_seen"] > timeout:
-                logger.debug(f"⏱️ Watcher {ip} inactif depuis {current_time - watcher['last_seen']:.1f}s (type: {request_type})")
-                inactive_watchers.append(ip)
-
-        # Supprimer les watchers inactifs
-        for ip in inactive_watchers:
-            watcher = self.watchers[ip]
-            # Arrêter le minuteur si présent
-            if "timer" in watcher:
-                watcher["timer"].stop()
-                logger.info(f"⏱️ Arrêt du minuteur pour {ip} sur {watcher.get('last_channel', 'unknown')}")
-            
-            # Supprimer le watcher
-            del self.watchers[ip]
-            logger.info(f"🧹 Suppression du watcher inactif: {ip}")
-
-        # Mettre à jour les compteurs de watchers pour toutes les chaînes affectées
-        affected_channels = set()
-        for ip in inactive_watchers:
-            if ip in self.watchers:
-                affected_channels.add(self.watchers[ip].get("last_channel"))
-
-        for channel in affected_channels:
-            if channel:
-                self._update_channel_watchers_count(channel)
-
     def _print_channels_summary(self):
-        """Affiche un récapitulatif des chaînes et de leur état"""
+        """Affiche un résumé des chaînes et de leurs watchers"""
         try:
-            active_channels = []
-            stopped_channels = []
-            total_viewers = 0
-
-            for name, channel in self.channels.items():
-                process_running = channel.process_manager.is_running()
-                viewers = getattr(channel, "watchers_count", 0)
-
-                # Debug: afficher les valeurs exactes des attributs
-                logger.debug(
-                    f"[{name}] État: {'actif' if process_running else 'arrêté'}, "
-                    f"watchers_count={viewers}, "
-                    f"last_watcher_time={getattr(channel, 'last_watcher_time', 0)}"
-                )
-
-                if process_running:
-                    active_channels.append((name, viewers))
-                    total_viewers += viewers
-                else:
-                    stopped_channels.append(name)
-
-            # Affichage formaté avec couleurs
-            logger.info("📊 RÉCAPITULATIF DES CHAÎNES:")
-
+            active_channels = {}
+            for ip, watcher in self.watchers.items():
+                channel = watcher.get("current_channel", "unknown")
+                if channel not in active_channels:
+                    active_channels[channel] = set()
+                active_channels[channel].add(ip)
+            
             if active_channels:
-                active_str = ", ".join(
-                    [f"{name} ({viewers}👁️)" for name, viewers in active_channels]
-                )
-                logger.info(f"CHAÎNES ACTIVES: {active_str}")
+                logger.info("📊 Résumé des chaînes:")
+                for channel, watchers in active_channels.items():
+                    logger.info(f"[{channel}] 👥 {len(watchers)} watchers: {', '.join(watchers)}")
             else:
-                logger.info("CHAÎNES ACTIVES: Aucune")
-
-            logger.info(f"CHAÎNES ARRÊTÉES: {len(stopped_channels)}")
-            logger.info(
-                f"TOTAL: {total_viewers} viewers sur {len(active_channels)} streams actifs ({len(self.channels)} chaînes)"
-            )
-
+                logger.info("📊 Aucun watcher actif")
         except Exception as e:
-            logger.error(f"❌ Erreur récapitulatif: {e}")
+            logger.error(f"❌ Erreur résumé chaînes: {e}")
 
     def get_channel_watchers(self, channel):
         """Récupère le nombre actuel de watchers pour une chaîne"""
@@ -200,86 +149,8 @@ class ClientMonitor(threading.Thread):
         return 0
 
     def _parse_access_log(self, line):
-        """Version améliorée qui extrait plus d'infos et ajoute des logs"""
-        # Si pas de /hls/ dans la ligne, on ignore direct
-        if "/hls/" not in line:
-            return None, None, None, False, None
-
-        # On récupère l'utilisateur agent si possible
-        user_agent = None
-        user_agent_match = re.search(r'"([^"]*)"$', line)
-        if user_agent_match:
-            user_agent = user_agent_match.group(1)
-
-        # Si pas un GET ou un HEAD, on ignore
-        if not ("GET /hls/" in line or "HEAD /hls/" in line):
-            return None, None, None, False, None
-
-        # Extraction IP (en début de ligne)
-        parts = line.split(" ")
-        if len(parts) < 1:
-            logger.warning("⚠️ Ligne de log invalide - pas assez de parties")
-            return None, None, None, False, None
-
-        ip = parts[0]
-        
-        # Validation plus stricte de l'IP avec une regex plus robuste
-        ip_pattern = r'^(\d{1,3}\.){3}\d{1,3}$'
-        if not re.match(ip_pattern, ip):
-            logger.warning(f"⚠️ Format IP invalide: {ip}")
-            return None, None, None, False, None
-            
-        # Vérification que chaque partie est un nombre valide
-        try:
-            ip_parts = ip.split('.')
-            if not all(0 <= int(part) <= 255 for part in ip_parts):
-                logger.warning(f"⚠️ Valeurs IP hors limites: {ip}")
-                return None, None, None, False, None
-        except ValueError:
-            logger.warning(f"⚠️ IP contient des valeurs non numériques: {ip}")
-            return None, None, None, False, None
-
-        # Extraction du code HTTP
-        status_code = "???"
-        status_match = re.search(r'" (\d{3}) ', line)
-        if status_match:
-            status_code = status_match.group(1)
-
-        # Extraction du canal spécifique
-        channel = None
-        request_type = None
-
-        # Format attendu: /hls/CHANNEL/...
-        channel_match = re.search(r'/hls/([^/]+)/', line)
-        if channel_match:
-            channel = channel_match.group(1)
-            # Ne pas valider le nom de la chaîne comme une IP
-            if re.match(ip_pattern, channel):
-                logger.warning(f"⚠️ Nom de chaîne ressemble à une IP: {channel}")
-                return None, None, None, False, None
-                
-            # Type de requête
-            request_type = (
-                "playlist"
-                if ".m3u8" in line
-                else "segment" if ".ts" in line else "unknown"
-            )
-            logger.debug(f"📋 Détecté accès {request_type} pour {channel} par {ip}")
-
-        # Validité - note que 404 est valide pour le suivi même si le contenu n'existe pas
-        is_valid = status_code in [
-            "200",
-            "206",
-            "404",
-        ]  # Ajout du 404 pour détecter les demandes de playlists manquantes
-
-        return (
-            ip,
-            channel,
-            request_type,
-            is_valid,
-            user_agent,
-        )  # On renvoie aussi l'user-agent maintenant
+        """Version harmonisée qui utilise la fonction utilitaire"""
+        return parse_access_log(line)
 
     def _process_log_line(self, line):
         """Traite une ligne de log nginx"""
@@ -338,8 +209,11 @@ class ClientMonitor(threading.Thread):
                         "last_seen": current_time,
                         "type": request_type,
                         "user_agent": user_agent,
-                        "current_channel": channel
+                        "current_channel": channel,
+                        "last_activity": current_time
                     }
+                    # Démarrer le timer explicitement
+                    timer.start()
                     logger.info(f"🆕 Nouveau watcher détecté: {ip} sur {channel}")
             else:
                 # Vérifier si la chaîne a changé
@@ -354,6 +228,8 @@ class ClientMonitor(threading.Thread):
                     timer = WatcherTimer(channel, ip, self.stats_collector)
                     self.watchers[ip]["timer"] = timer
                     self.watchers[ip]["current_channel"] = channel
+                    # Démarrer le nouveau timer explicitement
+                    timer.start()
                 else:
                     # Même chaîne, vérifier le temps écoulé depuis la dernière requête
                     last_seen = self.watchers[ip].get("last_seen", 0)
@@ -366,6 +242,7 @@ class ClientMonitor(threading.Thread):
                 self.watchers[ip]["last_seen"] = current_time
                 self.watchers[ip]["type"] = request_type
                 self.watchers[ip]["user_agent"] = user_agent
+                self.watchers[ip]["last_activity"] = current_time
 
             # Traiter la requête - ajouter du temps de visionnage uniquement pour les segments
             # ou pour les playlists avec un intervalle raisonnable
@@ -631,7 +508,7 @@ class ClientMonitor(threading.Thread):
 
         # Nettoyage périodique des watchers inactifs
         if current_time - last_cleanup_time > 10:  # Tous les 10 secondes
-            self._cleanup_inactive()
+            self._cleanup_loop()
             tasks_executed = True
 
         # Heartbeat périodique
@@ -749,13 +626,37 @@ class ClientMonitor(threading.Thread):
             current_time = time.time()
             
             for ip, data in self.watchers.items():
-                if data.get("current_channel") == channel and current_time - data.get("last_activity", 0) < self.SEGMENT_TIMEOUT:
+                # Validation stricte de l'IP
+                try:
+                    # Vérifier le format de base
+                    ip_pattern = r'^(\d{1,3}\.){3}\d{1,3}$'
+                    if not ip or not re.match(ip_pattern, ip):
+                        logger.warning(f"⚠️ Format IP invalide ignoré dans le compteur: {ip}")
+                        continue
+                        
+                    # Vérifier que chaque partie est un nombre valide
+                    ip_parts = ip.split('.')
+                    if not all(0 <= int(part) <= 255 for part in ip_parts):
+                        logger.warning(f"⚠️ Valeurs IP hors limites ignorées dans le compteur: {ip}")
+                        continue
+                except ValueError:
+                    logger.warning(f"⚠️ IP avec valeurs non numériques ignorée dans le compteur: {ip}")
+                    continue
+                
+                # Vérifier que le watcher est actif et sur la bonne chaîne
+                if (data.get("current_channel") == channel and 
+                    current_time - data.get("last_activity", 0) < self.SEGMENT_TIMEOUT and
+                    "timer" in data and data["timer"].is_running()):
                     active_watchers.add(ip)
 
             # Mettre à jour le compteur dans le manager via le callback
             if self.update_watchers:
                 self.update_watchers(channel, len(active_watchers), "/hls/")
                 logger.debug(f"[{channel}] 👥 Mise à jour compteur: {len(active_watchers)} watchers actifs")
+                
+                # Log pour debug
+                if active_watchers:
+                    logger.debug(f"[{channel}] 👥 {len(active_watchers)} watchers actifs: {', '.join(active_watchers)}")
 
         except Exception as e:
             logger.error(f"❌ Erreur mise à jour compteur watchers pour {channel}: {e}")
@@ -796,7 +697,7 @@ class ClientMonitor(threading.Thread):
 
                 # Tâches périodiques
                 if current_time - last_cleanup_time > 10:
-                    self._cleanup_inactive()
+                    self._cleanup_loop()
                     last_cleanup_time = current_time
 
                 if current_time - last_heartbeat_time > 60:
@@ -974,7 +875,7 @@ class ClientMonitor(threading.Thread):
                             
                         # Traiter la ligne
                         if "/hls/" in line:
-                            channel, ip, request_type, is_valid, user_agent = self._parse_access_log(line)
+                            ip, channel, request_type, is_valid, user_agent = self._parse_access_log(line)
                             if channel and ip and is_valid:
                                 if request_type == "segment":
                                     self._handle_segment_request(channel, ip, line, user_agent)

@@ -38,6 +38,7 @@ from stats_collector import StatsCollector
 from channel_status_manager import ChannelStatusManager
 import json
 import re
+from log_utils import parse_access_log
 
 
 class IPTVManager:
@@ -763,38 +764,11 @@ class IPTVManager:
             logger.error(traceback.format_exc())
 
     def _parse_access_log(self, line: str) -> tuple:
-        """Parse une ligne de log nginx pour extraire les informations pertinentes"""
-        try:
-            # Format typique d'une ligne de log nginx :
-            # IP - - [DATE] "METHOD /path HTTP/1.1" STATUS SIZE "REFERER" "USER_AGENT"
-            parts = line.split()
-            if len(parts) < 7:
-                return None, None, None, False, None
-
-            ip = parts[0]
-            request = parts[6]  # La requête complète entre guillemets
-            path = request.split()[1] if len(request.split()) > 1 else ""
-
-            # Vérifier si c'est une requête HLS
-            if not ("/hls/" in path and (".m3u8" in path or ".ts" in path)):
-                return None, None, None, False, None
-
-            # Extraire le nom de la chaîne du chemin
-            # Format attendu: /hls/CHANNEL_NAME/playlist.m3u8 ou /hls/CHANNEL_NAME/segment.ts
-            channel = None
-            if "/hls/" in path:
-                parts = path.split("/")
-                if len(parts) >= 3:
-                    channel = parts[2]
-
-            # Déterminer le type de requête
-            request_type = "m3u8" if ".m3u8" in path else "ts" if ".ts" in path else None
-
-            return ip, channel, request_type, True, path
-
-        except Exception as e:
-            logger.error(f"❌ Erreur parsing log: {e}")
-            return None, None, None, False, None
+        """Parse une ligne de log nginx en utilisant la fonction utilitaire 
+        
+        Retourne: (ip, channel, request_type, is_valid, path)
+        """
+        return parse_access_log(line)
 
     def process_iptv_log_lines(self):
         logger.debug(f"[IPTV_MANAGER] 🔄 Début process_iptv_log_lines")
@@ -896,8 +870,8 @@ class IPTVManager:
             # En cas d'erreur, on attend un peu avant de réessayer
             time.sleep(5)
 
-    def _cleanup_inactive(self):
-        """Nettoie les watchers inactifs"""
+    def _cleanup_inactive_watchers(self):
+        """Nettoie les watchers inactifs du IPTVManager"""
         current_time = time.time()
         inactive_watchers = []
 
@@ -907,7 +881,7 @@ class IPTVManager:
                 # Si pas d'activité depuis plus de 60 secondes
                 if current_time - last_seen_time > 60:  # 1 minute d'inactivité
                     inactive_watchers.append((channel, ip))
-                    logger.debug(f"⏱️ Watcher {ip} inactif depuis {current_time - last_seen_time:.1f}s sur {channel}")
+                    logger.debug(f"⏱️ Manager: Watcher {ip} inactif depuis {current_time - last_seen_time:.1f}s sur {channel}")
 
             # Supprimer les watchers inactifs et mettre à jour les chaînes affectées
             channels_to_update = set()
@@ -920,7 +894,7 @@ class IPTVManager:
                 if channel in self._active_watchers and ip in self._active_watchers[channel]:
                     self._active_watchers[channel].remove(ip)
                     channels_to_update.add(channel)
-                    logger.info(f"🧹 Suppression du watcher inactif: {ip} sur {channel}")
+                    logger.info(f"🧹 Manager: Suppression du watcher inactif: {ip} sur {channel}")
 
             # Mettre à jour les compteurs de watchers pour les chaînes affectées
             for channel in channels_to_update:
@@ -928,7 +902,7 @@ class IPTVManager:
                     watcher_count = len(self._active_watchers.get(channel, set()))
                     self.channels[channel].watchers_count = watcher_count
                     self.channels[channel].last_watcher_time = current_time
-                    logger.info(f"[{channel}] 👁️ Mise à jour après nettoyage: {watcher_count} watchers actifs")
+                    logger.info(f"[{channel}] 👁️ Manager: Mise à jour après nettoyage: {watcher_count} watchers actifs")
 
     def _cleanup_thread_loop(self):
         """Thread de nettoyage périodique"""
@@ -937,17 +911,19 @@ class IPTVManager:
         while not self.stop_watchers.is_set():
             try:
                 # Nettoyage des watchers inactifs
-                self._cleanup_inactive()
+                self._cleanup_inactive_watchers()
                 
                 # Vérification des timeouts des chaînes
                 self._check_channels_timeout()
                 
-                # Attente avant le prochain cycle
-                time.sleep(60)  # Nettoyage toutes les minutes
+                # Pauser entre les nettoyages
+                time.sleep(30)
                 
             except Exception as e:
                 logger.error(f"❌ Erreur dans la boucle de nettoyage: {e}")
-                time.sleep(5)  # Attente plus courte en cas d'erreur
+                import traceback
+                logger.error(traceback.format_exc())
+                time.sleep(10)  # Pause en cas d'erreur
 
     def _update_channel_status(self):
         """Update channel status for dashboard"""
