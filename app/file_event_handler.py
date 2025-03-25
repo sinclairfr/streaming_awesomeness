@@ -7,6 +7,7 @@ import os
 from config import logger
 import subprocess
 import traceback
+import shutil
 
 
 class FileEventHandler(FileSystemEventHandler):
@@ -210,121 +211,72 @@ class FileEventHandler(FileSystemEventHandler):
                         
                         # Vérifier si tous les fichiers de cette chaîne sont maintenant stables
                         if all_files > 0 and completed_files == all_files:
-                            logger.info(f"[{channel_name}] 🎉 Tous les fichiers sont stables! Démarrage du scan et du stream")
-                            # Forcer un scan immédiat (avec force=True pour garantir l'initialisation)
-                            self.manager.request_scan(force=True)
+                            logger.info(f"[{channel_name}] 🎉 Tous les fichiers sont stables!")
                             
-                            # Vérifier si la chaîne existe déjà dans le manager
-                            if channel_name in self.manager.channels:
-                                logger.info(f"[{channel_name}] 🔍 La chaîne existe déjà, vérification de son état")
-                                channel = self.manager.channels[channel_name]
-                                
-                                # Si la chaîne est prête, démarrer le stream directement
-                                if hasattr(channel, "ready_for_streaming") and channel.ready_for_streaming:
-                                    logger.info(f"[{channel_name}] 🚀 Démarrage du stream après stabilisation de tous les fichiers")
-                                    try:
-                                        # Démarrer dans un thread dédié
-                                        def start_stream_for_channel():
-                                            try:
-                                                success = channel.start_stream()
-                                                if success:
-                                                    logger.info(f"[{channel_name}] ✅ Stream démarré avec succès!")
-                                                else:
-                                                    logger.error(f"[{channel_name}] ❌ Échec du démarrage du stream")
-                                            except Exception as e:
-                                                logger.error(f"[{channel_name}] ❌ Exception lors du démarrage du stream: {e}")
-                                                
-                                        threading.Thread(
-                                            target=start_stream_for_channel,
-                                            daemon=True
-                                        ).start()
-                                    except Exception as e:
-                                        logger.error(f"[{channel_name}] ❌ Erreur lors du lancement du thread de démarrage: {e}")
-                                else:
-                                    logger.warning(f"[{channel_name}] ⚠️ La chaîne n'est pas prête pour le streaming")
+                            # Vérifier si on a déjà fait une vérification de stabilité pour cette chaîne
+                            stability_check_key = f"{channel_name}_stability_check"
+                            if hasattr(self, stability_check_key) and getattr(self, stability_check_key):
+                                logger.info(f"[{channel_name}] ℹ️ Vérification de stabilité déjà effectuée, on passe au démarrage")
                             else:
-                                logger.info(f"[{channel_name}] ⚠️ La chaîne n'existe pas encore dans le manager, en attente d'initialisation")
-                                # Forcer un scan complet pour initialiser la chaîne
-                                threading.Thread(
-                                    target=self.manager._do_scan,
-                                    args=(True,),  # force=True
-                                    daemon=True
-                                ).start()
+                                # Attendre un peu plus longtemps pour s'assurer que tout est bien stable
+                                time.sleep(2)
                                 
-                                # Programmer une vérification retardée (pour laisser le temps à l'initialisation)
-                                def delayed_channel_check():
-                                    # Attendre plus longtemps et avec plusieurs tentatives
-                                    max_attempts = 5
-                                    interval = 5  # 5 secondes entre chaque tentative
+                                # Vérifier une dernière fois que tous les fichiers sont toujours stables
+                                ready_dir = os.path.join(self.manager.content_dir, channel_name, "ready_to_stream")
+                                if os.path.exists(ready_dir):
+                                    mp4_files = [f for f in os.listdir(ready_dir) if f.endswith('.mp4')]
+                                    all_stable = True
+                                    for mp4 in mp4_files:
+                                        file_path = os.path.join(ready_dir, mp4)
+                                        if not self.is_file_ready(file_path):
+                                            all_stable = False
+                                            break
                                     
-                                    for attempt in range(1, max_attempts + 1):
-                                        logger.info(f"[{channel_name}] 🔍 Tentative #{attempt} de vérification du statut de la chaîne")
-                                        time.sleep(interval)  # Attendre avant de vérifier
-                                        
-                                        if channel_name in self.manager.channels:
-                                            channel = self.manager.channels[channel_name]
-                                            if hasattr(channel, "ready_for_streaming") and channel.ready_for_streaming:
-                                                logger.info(f"[{channel_name}] 🚀 Démarrage différé du stream après initialisation (tentative #{attempt})")
-                                                try:
-                                                    success = channel.start_stream()
-                                                    if success:
-                                                        logger.info(f"[{channel_name}] ✅ Stream démarré avec succès après initialisation!")
-                                                        return  # Sortir de la fonction si succès
-                                                    else:
-                                                        logger.error(f"[{channel_name}] ❌ Échec du démarrage différé du stream")
-                                                except Exception as e:
-                                                    logger.error(f"[{channel_name}] ❌ Exception lors du démarrage différé: {e}")
-                                                    logger.error(traceback.format_exc())
-                                            else:
-                                                logger.warning(f"[{channel_name}] ⚠️ La chaîne existe mais n'est pas prête (tentative #{attempt})")
-                                                # Si la chaîne existe mais n'est pas prête, on essaie quand même au prochain tour
-                                        else:
-                                            logger.warning(f"[{channel_name}] ⚠️ La chaîne n'existe pas encore dans le manager (tentative #{attempt})")
-                                    
-                                    # Si on est ici, toutes les tentatives ont échoué
-                                    logger.error(f"[{channel_name}] 🚫 Abandon après {max_attempts} tentatives de démarrage du stream")
-                                    
-                                    # Dernier recours: forcer un scan et tenter une dernière fois
-                                    logger.info(f"[{channel_name}] 🔄 Tentative de dernier recours: forçage d'un scan complet")
-                                    try:
-                                        self.manager._do_scan(force=True)
-                                        time.sleep(3)  # Attendre que le scan se termine
-                                        
-                                        # Vérification de la présence de la chaîne dans le manager
-                                        if channel_name in self.manager.channels:
-                                            channel = self.manager.channels[channel_name]
-                                            if hasattr(channel, "ready_for_streaming") and channel.ready_for_streaming:
-                                                logger.info(f"[{channel_name}] 🚀 Démarrage de dernier recours du stream")
-                                                try:
-                                                    success = channel.start_stream()
-                                                    if success:
-                                                        logger.info(f"[{channel_name}] ✅ Stream démarré avec succès (dernier recours)!")
-                                                    else:
-                                                        logger.error(f"[{channel_name}] ❌ Échec du démarrage de dernier recours")
-                                                except Exception as e:
-                                                    logger.error(f"[{channel_name}] ❌ Exception lors du démarrage de dernier recours: {e}")
-                                                    logger.error(traceback.format_exc())
-                                        else:
-                                            # Ultime recours: forcer la création manuelle de la chaîne
-                                            logger.warning(f"[{channel_name}] ⚠️ Tentative d'initialisation manuelle directe")
-                                            try:
-                                                self._force_channel_creation(channel_name)
-                                            except Exception as e:
-                                                logger.error(f"[{channel_name}] ❌ Échec de l'initialisation manuelle: {e}")
-                                                logger.error(traceback.format_exc())
-                                    except Exception as e:
-                                        logger.error(f"[{channel_name}] ❌ Erreur lors du scan de dernier recours: {e}")
-                                        logger.error(traceback.format_exc())
+                                    if not all_stable:
+                                        logger.warning(f"[{channel_name}] ⚠️ Certains fichiers ne sont plus stables, attente...")
+                                        return
                                 
-                                # Lancer la vérification différée
-                                threading.Thread(
-                                    target=delayed_channel_check,
-                                    daemon=True
-                                ).start()
+                                # Marquer que la vérification de stabilité a été faite
+                                setattr(self, stability_check_key, True)
+
+                            # Si la chaîne existe déjà, forcer un redémarrage direct
+                            if channel_name in self.manager.channels:
+                                channel = self.manager.channels[channel_name]
+                                if hasattr(channel, "_restart_stream"):
+                                    logger.info(f"[{channel_name}] 🔄 Forçage du redémarrage du stream")
+                                    channel._restart_stream()
+                                    # Attendre que le stream démarre
+                                    time.sleep(2)
+                                    # Vérifier que le stream est bien démarré
+                                    if hasattr(channel, "process_manager") and channel.process_manager.is_running():
+                                        logger.info(f"[{channel_name}] ✅ Stream redémarré avec succès")
+                                        # Réinitialiser le flag de stabilité après un redémarrage réussi
+                                        delattr(self, stability_check_key)
+                                    else:
+                                        # Si le redémarrage a échoué, essayer le démarrage direct
+                                        logger.warning(f"[{channel_name}] ⚠️ Échec du redémarrage, tentative de démarrage direct")
+                                        self._force_ffmpeg_start(channel_name)
+                            else:
+                                # La chaîne n'existe pas, la créer et démarrer directement
+                                logger.info(f"[{channel_name}] 🔄 Création et démarrage forcé de la chaîne")
+                                if not self._force_channel_creation(channel_name):
+                                    # Si la création échoue, tenter le démarrage direct FFmpeg
+                                    logger.warning(f"[{channel_name}] ⚠️ Échec de la création, tentative de démarrage direct FFmpeg")
+                                    self._force_ffmpeg_start(channel_name)
+
+                            # Mise à jour de la playlist principale
+                            self._force_master_playlist_update()
+
+                            # Nettoyer les compteurs pour cette chaîne
+                            with self.lock:
+                                if channel_name in self.channel_file_counters:
+                                    del self.channel_file_counters[channel_name]
+                                if channel_name in self.channel_all_files:
+                                    del self.channel_all_files[channel_name]
+
                         else:
-                            # Si ce n'est pas le dernier fichier, on lance juste un scan
-                            logger.info(f"🔄 Déclenchement d'un scan pour la chaîne: {channel_name}")
-                            self.manager.request_scan(force=True)
+                            # Ne pas déclencher de scan pour chaque fichier
+                            logger.info(f"[{channel_name}] ⏳ En attente des autres fichiers...")
 
         except Exception as e:
             logger.error(f"❌ Erreur surveillance copie: {e}")
@@ -377,11 +329,28 @@ class FileEventHandler(FileSystemEventHandler):
             if path.parent == content_dir:
                 channel_name = path.name
                 logger.info(f"🆕 Nouvelle chaîne potentielle détectée: {channel_name}")
-                # Force un scan immédiat plutôt que d'attendre
-                threading.Thread(
-                    target=self.manager.scan_channels, args=(True,), daemon=True
-                ).start()
-            return
+                
+                # Créer le dossier ready_to_stream s'il n'existe pas
+                ready_dir = path / "ready_to_stream"
+                ready_dir.mkdir(exist_ok=True)
+                
+                # Vérifier si la chaîne existe déjà
+                if channel_name in self.manager.channels:
+                    logger.info(f"[{channel_name}] ℹ️ La chaîne existe déjà")
+                    return
+                
+                # Force un scan immédiat
+                self.manager.scan_channels(force=True)
+                
+                # Attendre un peu pour laisser le temps au scan de s'exécuter
+                time.sleep(2)
+                
+                # Si la chaîne n'a pas été créée par le scan, la créer manuellement
+                if channel_name not in self.manager.channels:
+                    logger.info(f"[{channel_name}] 🔄 Forçage de la création de la chaîne")
+                    self._force_channel_creation(channel_name)
+                
+                return
 
         # Pour les fichiers, vérification du type de fichier et ignorer les tmp_
         path = Path(event.src_path)
@@ -400,7 +369,7 @@ class FileEventHandler(FileSystemEventHandler):
             if event.src_path in self.copying_files:
                 return
 
-            self.copying_files[event.src_path] = time.time()
+            self.copying_files[event.src_path] = time.sleep(1)
 
             # On note la chaîne concernée
             channel_name = self.get_channel_from_path(event.src_path)
@@ -462,31 +431,82 @@ class FileEventHandler(FileSystemEventHandler):
             # Si des chaînes ont changé, planifier un nouveau scan
             if self.changed_channels:
                 logger.info(f"🔄 Scan programmé pour les chaînes: {', '.join(self.changed_channels)}")
-                # Demander un scan au manager
-                self.manager.request_scan(force=True)
-                # Lancer directement un scan forcé pour être sûr
-                threading.Thread(
-                    target=self.manager.scan_channels,
-                    args=(True,),  # Force=True pour garantir l'initialisation complète
-                    daemon=True
-                ).start()
-                self.changed_channels.clear()
+                
+                # Notifier le manager des changements
+                with self.manager.scan_lock:
+                    # 1. Ajouter nos chaînes modifiées à celles du manager
+                    if not hasattr(self.manager, "pending_changes"):
+                        self.manager.pending_changes = set()
+                    self.manager.pending_changes.update(self.changed_channels)
+                    
+                    # 2. Forcer un scan immédiat des chaînes modifiées
+                    logger.info(f"🔍 Scan forcé des chaînes: {', '.join(self.changed_channels)}")
+                    self.manager.scan_channels(force=True)
+                    
+                    # 3. Attendre un peu que le scan se termine
+                    time.sleep(2)
+                    
+                    # 4. Resynchroniser les playlists
+                    if hasattr(self.manager, "_resync_all_playlists"):
+                        logger.info("🔄 Resynchronisation des playlists...")
+                        self.manager._resync_all_playlists()
+                    
+                    # 5. Réinitialiser notre liste locale
+                    self.changed_channels.clear()
+                    
+                    logger.info("✅ Scan et resynchronisation terminés")
 
         except Exception as e:
             logger.error(f"❌ Erreur planification scan: {e}")
+            logger.error(traceback.format_exc())
 
     def _force_channel_creation(self, channel_name: str):
         """Force la création d'une chaîne et son ajout au manager"""
         try:
+            # Vérifier si la chaîne existe déjà
+            if channel_name in self.manager.channels:
+                logger.info(f"[{channel_name}] ℹ️ La chaîne existe déjà, pas besoin de la recréer")
+                return True
+
             from iptv_channel import IPTVChannel
             import subprocess
             
             # Chemin du dossier de la chaîne
             channel_dir = os.path.join(self.manager.content_dir, channel_name)
+            ready_dir = os.path.join(channel_dir, "ready_to_stream")
             
             if not os.path.exists(channel_dir):
                 logger.error(f"[{channel_name}] ❌ Le dossier de la chaîne n'existe pas: {channel_dir}")
                 return False
+            
+            # Attendre que tous les fichiers soient copiés et stables
+            logger.info(f"[{channel_name}] ⏳ Attente de la stabilisation des fichiers...")
+            max_wait = 60  # Maximum 60 secondes d'attente
+            start_time = time.time()
+            
+            while time.time() - start_time < max_wait:
+                if not os.path.exists(ready_dir):
+                    time.sleep(1)
+                    continue
+                
+                mp4_files = [f for f in os.listdir(ready_dir) if f.endswith('.mp4')]
+                if not mp4_files:
+                    time.sleep(1)
+                    continue
+                
+                # Vérifier que tous les fichiers sont stables
+                all_stable = True
+                for mp4 in mp4_files:
+                    file_path = os.path.join(ready_dir, mp4)
+                    if not self.is_file_ready(file_path):
+                        all_stable = False
+                        break
+                
+                if all_stable:
+                    logger.info(f"[{channel_name}] ✅ Tous les fichiers sont stables")
+                    break
+                
+                time.sleep(1)
             
             logger.info(f"[{channel_name}] 🔄 Création forcée de la chaîne")
             
@@ -499,102 +519,211 @@ class FileEventHandler(FileSystemEventHandler):
                 stats_collector=self.manager.stats_collector
             )
             
+            # S'assurer que la chaîne est marquée comme prête
+            channel.ready_for_streaming = True
+            
             # Ajouter la référence au manager
             channel.manager = self.manager
             
             # Ajouter la chaîne au dictionnaire du manager
             with self.manager.scan_lock:
-                self.manager.channels[channel_name] = channel
-                self.manager.channel_ready_status[channel_name] = channel.ready_for_streaming
+                if channel_name not in self.manager.channels:  # Double vérification
+                    self.manager.channels[channel_name] = channel
+                    self.manager.channel_ready_status[channel_name] = True
+                    logger.info(f"[{channel_name}] ✅ Chaîne créée et ajoutée au manager")
+                else:
+                    logger.info(f"[{channel_name}] ℹ️ La chaîne a été créée entre temps")
+                    return True
             
-            logger.info(f"[{channel_name}] ✅ Chaîne créée et ajoutée au manager manuellement")
+            # Créer le dossier HLS
+            hls_dir = f"/app/hls/{channel_name}"
+            os.makedirs(hls_dir, exist_ok=True)
+            os.chmod(hls_dir, 0o777)
+            
+            # Forcer la création de la playlist de concaténation
+            if hasattr(channel, "_create_concat_file"):
+                channel._create_concat_file()
+            
+            # Mise à jour de la playlist principale
+            logger.info(f"[{channel_name}] 🔄 Mise à jour des playlists")
+            self._force_master_playlist_update()
             
             # Attendre un peu pour s'assurer que tout est initialisé
             time.sleep(2)
             
-            # Double vérification que la chaîne est bien dans le manager
-            logger.info(f"[{channel_name}] 🔍 Vérification finale que la chaîne est bien dans le manager")
-            if channel_name in self.manager.channels:
-                logger.info(f"[{channel_name}] ✅ Chaîne confirmée dans le manager")
-            else:
-                logger.warning(f"[{channel_name}] ⚠️ La chaîne n'est toujours pas dans le manager après enregistrement manuel")
-                # Forcer à nouveau l'enregistrement avec trace de la pile d'appels
-                logger.info(f"[{channel_name}] 🔄 Contenus actuels des chaînes du manager: {list(self.manager.channels.keys())}")
-                try:
-                    self.manager.channels[channel_name] = channel
-                    logger.info(f"[{channel_name}] ✅ Chaîne forcée dans le manager, nouvelle liste: {list(self.manager.channels.keys())}")
-                except Exception as e:
-                    logger.error(f"[{channel_name}] ❌ Impossible d'ajouter au manager: {e}")
-                    logger.error(traceback.format_exc())
-            
-            # Mettre à jour la playlist maître
-            if hasattr(self.manager, '_update_master_playlist'):
-                logger.info(f"[{channel_name}] 🔄 Mise à jour de la playlist maître")
-                self.manager._update_master_playlist()
-            
-            # Démarrer le stream si la chaîne est prête
-            if channel.ready_for_streaming:
-                logger.info(f"[{channel_name}] 🚀 Démarrage du stream après création manuelle")
+            # Démarrer le stream une seule fois
+            if hasattr(channel, "start_stream"):
+                logger.info(f"[{channel_name}] 🚀 Démarrage du stream")
                 success = channel.start_stream()
+                
                 if success:
-                    logger.info(f"[{channel_name}] ✅ Stream démarré avec succès après création manuelle!")
+                    logger.info(f"[{channel_name}] ✅ Stream démarré avec succès!")
+                    return True
                 else:
-                    logger.error(f"[{channel_name}] ❌ Échec du démarrage du stream après création manuelle")
-                    
-                    # Tenter un démarrage direct avec ffmpeg en dernier recours
-                    logger.info(f"[{channel_name}] 🔄 Tentative de démarrage direct du stream avec ffmpeg")
-                    
-                    try:
-                        # Récupérer le chemin de la playlist et du dossier HLS
-                        playlist_file = os.path.join(channel_dir, "_playlist.txt")
-                        hls_output_dir = f"/app/hls/{channel_name}"
-                        os.makedirs(hls_output_dir, exist_ok=True)
-                        
-                        # Utiliser ffmpeg directement
-                        ffmpeg_cmd = [
-                            "ffmpeg",
-                            "-hide_banner",
-                            "-loglevel", "warning",
-                            "-f", "concat",
-                            "-safe", "0",
-                            "-stream_loop", "-1",  # Boucle infinie
-                            "-i", playlist_file,
-                            "-c:v", "copy",      # Copier le codec vidéo
-                            "-c:a", "copy",      # Copier le codec audio
-                            "-f", "hls",         # Format HLS
-                            "-hls_time", "10",   # Durée des segments
-                            "-hls_list_size", "6",  # Nombre de segments dans la playlist
-                            "-hls_flags", "delete_segments+append_list+discont_start",
-                            "-hls_segment_type", "mpegts",
-                            "-hls_segment_filename", f"{hls_output_dir}/segment_%03d.ts",
-                            f"{hls_output_dir}/playlist.m3u8"
-                        ]
-                        
-                        # Démarrer ffmpeg en arrière-plan
-                        process = subprocess.Popen(
-                            ffmpeg_cmd,
-                            stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE,
-                            stdin=subprocess.PIPE,
-                            start_new_session=True  # Détache le processus
-                        )
-                        
-                        logger.info(f"[{channel_name}] ✅ Stream ffmpeg démarré directement avec PID {process.pid}")
-                        
-                        # Mettre à jour la playlist principale
-                        self.manager._update_master_playlist()
-                        
-                        return True
-                    except Exception as e:
-                        logger.error(f"[{channel_name}] ❌ Échec du démarrage direct ffmpeg: {e}")
-                        logger.error(traceback.format_exc())
-            else:
-                logger.warning(f"[{channel_name}] ⚠️ La chaîne n'est pas prête pour le streaming après création manuelle")
+                    logger.error(f"[{channel_name}] ❌ Échec du démarrage du stream")
+                    return False
             
             return True
             
         except Exception as e:
             logger.error(f"[{channel_name}] ❌ Erreur lors de la création forcée de la chaîne: {e}")
+            logger.error(traceback.format_exc())
+            return False
+
+    def _force_master_playlist_update(self):
+        """Force la mise à jour de la playlist maître avec une approche simple et directe"""
+        try:
+            # Chemin de la playlist
+            playlist_path = "/app/hls/playlist.m3u"
+            
+            # Créer le contenu de base
+            content = "#EXTM3U\n"
+            
+            # Récupérer toutes les chaînes actives
+            active_channels = []
+            for channel_name, channel in self.manager.channels.items():
+                if hasattr(channel, "ready_for_streaming") and channel.ready_for_streaming:
+                    active_channels.append(channel_name)
+            
+            # Trier les chaînes par ordre alphabétique
+            active_channels.sort()
+            
+            # Ajouter chaque chaîne à la playlist
+            server_url = os.getenv("SERVER_URL", "192.168.10.183")
+            for channel_name in active_channels:
+                content += f'#EXTINF:-1 tvg-id="{channel_name}" tvg-name="{channel_name}",{channel_name}\n'
+                content += f"http://{server_url}/hls/{channel_name}/playlist.m3u8\n"
+            
+            # Écrire le contenu dans un fichier temporaire
+            temp_path = f"{playlist_path}.tmp"
+            with open(temp_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            
+            # Remplacer l'ancien fichier
+            os.replace(temp_path, playlist_path)
+            
+            # S'assurer que le fichier a les bonnes permissions
+            os.chmod(playlist_path, 0o644)
+            
+            logger.info(f"✅ Playlist mise à jour avec {len(active_channels)} chaînes: {', '.join(active_channels)}")
+            
+        except Exception as e:
+            logger.error(f"❌ Erreur mise à jour playlist: {e}")
+            # En cas d'erreur, créer une playlist minimale
+            try:
+                with open(playlist_path, "w", encoding="utf-8") as f:
+                    f.write("#EXTM3U\n")
+            except:
+                pass
+
+    def _force_ffmpeg_start(self, channel_name: str):
+        """Force directement le démarrage d'un stream FFmpeg sans attendre l'initialisation complète"""
+        try:
+            # Chemin du dossier de la chaîne
+            channel_dir = os.path.join(self.manager.content_dir, channel_name)
+            
+            if not os.path.exists(channel_dir):
+                logger.error(f"[{channel_name}] ❌ Le dossier de la chaîne n'existe pas: {channel_dir}")
+                return False
+                
+            # Créer le dossier HLS si nécessaire
+            hls_output_dir = f"/app/hls/{channel_name}"
+            os.makedirs(hls_output_dir, exist_ok=True)
+            os.chmod(hls_output_dir, 0o777)
+            
+            # Vérifier si la playlist de concaténation existe, sinon la créer
+            playlist_file = os.path.join(channel_dir, "_playlist.txt")
+            if not os.path.exists(playlist_file):
+                logger.info(f"[{channel_name}] 🔄 Création de la playlist de concaténation")
+                # Trouver tous les fichiers MP4 dans ready_to_stream
+                ready_dir = os.path.join(channel_dir, "ready_to_stream")
+                mp4_files = []
+                if os.path.exists(ready_dir):
+                    mp4_files = [f for f in os.listdir(ready_dir) if f.endswith('.mp4')]
+                
+                if not mp4_files:
+                    logger.error(f"[{channel_name}] ❌ Aucun fichier MP4 trouvé dans ready_to_stream")
+                    return False
+                
+                # Créer la playlist en mode aléatoire
+                import random
+                random.shuffle(mp4_files)
+                
+                with open(playlist_file, "w", encoding="utf-8") as f:
+                    for mp4 in mp4_files:
+                        mp4_path = os.path.join(ready_dir, mp4)
+                        f.write(f"file '{mp4_path}'\n")
+                
+                logger.info(f"[{channel_name}] ✅ Playlist créée avec {len(mp4_files)} fichiers")
+            
+            # Vérifier qu'il n'y a pas déjà un processus FFmpeg en cours pour cette chaîne
+            import psutil
+            for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+                try:
+                    if proc.info['name'] == 'ffmpeg' and channel_name in str(proc.info['cmdline']):
+                        logger.warning(f"[{channel_name}] ⚠️ Un processus FFmpeg existe déjà, tentative d'arrêt")
+                        proc.terminate()
+                        proc.wait(timeout=5)
+                except (psutil.NoSuchProcess, psutil.TimeoutExpired):
+                    pass
+            
+            # Démarrer FFmpeg avec des paramètres optimisés
+            logger.info(f"[{channel_name}] 🚀 Démarrage direct de FFmpeg")
+            
+            ffmpeg_cmd = [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel", "warning",
+                "-f", "concat",
+                "-safe", "0",
+                "-stream_loop", "-1",  # Boucle infinie
+                "-i", playlist_file,
+                "-c:v", "copy",      # Copier le codec vidéo
+                "-c:a", "copy",      # Copier le codec audio
+                "-f", "hls",         # Format HLS
+                "-hls_time", "10",   # Durée des segments
+                "-hls_list_size", "6",  # Nombre de segments dans la playlist
+                "-hls_flags", "delete_segments+append_list+discont_start",
+                "-hls_segment_type", "mpegts",
+                "-hls_allow_cache", "1",  # Permettre la mise en cache
+                "-hls_segment_filename", f"{hls_output_dir}/segment_%03d.ts",
+                f"{hls_output_dir}/playlist.m3u8"
+            ]
+            
+            # Créer les fichiers de log
+            log_dir = "/app/logs/ffmpeg"
+            os.makedirs(log_dir, exist_ok=True)
+            ffmpeg_log = os.path.join(log_dir, f"{channel_name}_ffmpeg.log")
+            
+            # Démarrer FFmpeg avec redirection des logs
+            with open(ffmpeg_log, "a") as log_file:
+                process = subprocess.Popen(
+                    ffmpeg_cmd,
+                    stdout=log_file,
+                    stderr=log_file,
+                    stdin=subprocess.PIPE,
+                    start_new_session=True
+                )
+            
+            # Vérifier que le processus a bien démarré
+            if process.poll() is None:
+                logger.info(f"[{channel_name}] ✅ Stream FFmpeg démarré avec PID {process.pid}")
+                
+                # Attendre un peu et vérifier que des segments sont générés
+                time.sleep(5)
+                segments = list(Path(hls_output_dir).glob("*.ts"))
+                if segments:
+                    logger.info(f"[{channel_name}] ✅ Segments HLS générés avec succès")
+                    return True
+                else:
+                    logger.warning(f"[{channel_name}] ⚠️ Aucun segment généré après 5s")
+                    return False
+            else:
+                logger.error(f"[{channel_name}] ❌ Échec du démarrage FFmpeg")
+                return False
+            
+        except Exception as e:
+            logger.error(f"[{channel_name}] ❌ Erreur démarrage direct FFmpeg: {e}")
             logger.error(traceback.format_exc())
             return False
 
