@@ -356,8 +356,18 @@ class IPTVChannel:
             hls_path = Path(hls_dir)
             playlist = hls_path / "playlist.m3u8"
 
+            # Vérifier si nous sommes dans la période de grâce du démarrage
+            in_startup_period = False
+            if hasattr(self, "_startup_time"):
+                startup_duration = time.time() - self._startup_time
+                in_startup_period = startup_duration < 10  # 10 secondes de grâce
+
             if not playlist.exists():
-                logger.error(f"[{self.name}] ❌ playlist.m3u8 introuvable")
+                if in_startup_period:
+                    # Durant le démarrage, utiliser un niveau de log moins alarmant
+                    logger.debug(f"[{self.name}] ℹ️ playlist.m3u8 pas encore créée (démarrage en cours)")
+                else:
+                    logger.error(f"[{self.name}] ❌ playlist.m3u8 introuvable")
                 return {"success": False, "error": "playlist_not_found", "segments": []}
 
             # Lecture de la playlist
@@ -365,7 +375,11 @@ class IPTVChannel:
                 segments = [line.strip() for line in f if line.strip().endswith(".ts")]
 
             if not segments:
-                logger.warning(f"[{self.name}] ⚠️ Aucun segment dans la playlist")
+                if in_startup_period:
+                    # Durant le démarrage, utiliser un niveau de log moins alarmant
+                    logger.debug(f"[{self.name}] ℹ️ Aucun segment dans la playlist (démarrage en cours)")
+                else:
+                    logger.warning(f"[{self.name}] ⚠️ Aucun segment dans la playlist")
                 return {"success": False, "error": "no_segments", "segments": []}
 
             # Analyse des segments
@@ -849,8 +863,16 @@ class IPTVChannel:
             if not hasattr(self, "segment_monitor_started"):
                 self.segment_monitor_started = time.time()
                 logger.info(f"[{self.name}] 🔍 Boucle de surveillance des segments démarrée")
-                # Attendre 3 secondes avant le premier health check
-                time.sleep(3)
+                # Attendre 5 secondes avant le premier health check pour donner le temps à FFmpeg
+                # de générer la playlist et d'éviter les erreurs "playlist.m3u8 introuvable"
+                time.sleep(5)
+                # S'assurer que le startup_time est correctement initialisé
+                if not hasattr(self, "_startup_time"):
+                    self._startup_time = time.time() - 5  # Considérer que le démarrage a commencé 5s auparavant
+            
+            # Initialisation du dernier health check pour éviter une vérification immédiate
+            if not hasattr(self, "last_health_check"):
+                self.last_health_check = time.time()
             
             # La boucle s'exécute tant que le processus est en cours
             while self.process_manager.is_running():
@@ -859,8 +881,8 @@ class IPTVChannel:
                 # Vérification des timeouts toutes les 10 secondes
                 self._handle_timeouts(current_time)
 
-                # Health check toutes les 30 secondes
-                if not hasattr(self, "last_health_check") or current_time - self.last_health_check >= 30:
+                # Health check toutes les 30 secondes après le premier délai initial
+                if current_time - self.last_health_check >= 30:
                     self.channel_health_check()
                     self.last_health_check = current_time
 
@@ -1171,14 +1193,21 @@ class IPTVChannel:
                 self._health_check_count = 0
             self._health_check_count += 1
             
-            # Add startup grace period tracking
+            # Ensure startup time is set
             if not hasattr(self, "_startup_time"):
-                self._startup_time = time.time()
+                # Si _startup_time n'est pas défini, c'est probablement un cas où le health check
+                # est exécuté avant que start_stream n'ait eu le temps de s'initialiser
+                self._startup_time = time.time() - 0.1  # Démarrage récent, mais pas 0
             
             current_time = time.time()
             startup_duration = current_time - self._startup_time
+            in_startup_period = startup_duration < 10  # 10 secondes de grâce
             
-            logger.info(f"[{self.name}] 🩺 Health check #{self._health_check_count} - Stream running: {self.process_manager.is_running()}, Watchers: {getattr(self, 'watchers_count', 0)}, Startup duration: {startup_duration:.1f}s")
+            # Utiliser debug pendant la période de démarrage pour réduire le bruit dans les logs
+            if in_startup_period:
+                logger.debug(f"[{self.name}] 🩺 Health check #{self._health_check_count} - Stream running: {self.process_manager.is_running()}, Watchers: {getattr(self, 'watchers_count', 0)}, Startup duration: {startup_duration:.1f}s")
+            else:
+                logger.info(f"[{self.name}] 🩺 Health check #{self._health_check_count} - Stream running: {self.process_manager.is_running()}, Watchers: {getattr(self, 'watchers_count', 0)}, Startup duration: {startup_duration:.1f}s")
             
             # 1. Check if the process is running
             if not self.process_manager.is_running():
@@ -1198,8 +1227,8 @@ class IPTVChannel:
             playlist_path = hls_dir / "playlist.m3u8"
             if not playlist_path.exists():
                 # During startup grace period, be more lenient with playlist generation
-                if startup_duration < 10:  # Augmenté de 5s à 10s
-                    logger.info(f"[{self.name}] ℹ️ Still in startup grace period ({startup_duration:.1f}s), waiting for playlist.m3u8...")
+                if in_startup_period:
+                    logger.debug(f"[{self.name}] ℹ️ Still in startup grace period ({startup_duration:.1f}s), waiting for playlist.m3u8...")
                     return True
                 else:
                     logger.error(f"[{self.name}] ❌ playlist.m3u8 introuvable après {startup_duration:.1f}s")
@@ -1219,8 +1248,8 @@ class IPTVChannel:
                         logger.error(f"[{self.name}] ❌ Error reading playlist.m3u8: {e}")
                 
                 # During startup grace period, be more lenient
-                if startup_duration < 10:  # Augmenté de 5s à 10s
-                    logger.info(f"[{self.name}] ℹ️ Still in startup grace period ({startup_duration:.1f}s), waiting for segments...")
+                if in_startup_period:
+                    logger.debug(f"[{self.name}] ℹ️ Still in startup grace period ({startup_duration:.1f}s), waiting for segments...")
                     return True
                 
                 # If we have active watchers and outside grace period, restart the stream
@@ -1574,6 +1603,9 @@ class IPTVChannel:
         Démarre le flux HLS pour cette chaîne via FFmpeg en mode séquentiel.
         """
         try:
+            # Initialiser le temps de démarrage immédiatement
+            self._startup_time = time.time()
+            
             # 1) Vérifier qu'on a des vidéos prêtes
             if not self.ready_for_streaming:
                 logger.warning(
