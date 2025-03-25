@@ -14,7 +14,7 @@ from pathlib import Path
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 import threading
-from event_handler import FileEventHandler, ReadyContentHandler
+from file_event_handler import FileEventHandler, ReadyContentHandler
 from hls_cleaner import HLSCleaner
 from client_monitor import ClientMonitor
 from resource_monitor import ResourceMonitor
@@ -196,18 +196,19 @@ class IPTVManager:
 
     def _scan_worker(self):
         """Thread qui gère les scans de manière centralisée"""
+        logger.info("🔍 Démarrage du thread de scan worker")
         while not self.stop_scan_thread.is_set():
             try:
                 # Attendre une demande de scan ou le délai périodique
                 try:
-                    force = self.scan_queue.get(timeout=300)  # 5 minutes de délai par défaut
+                    force = self.scan_queue.get(timeout=30)  # 30 secondes de délai par défaut
                 except Empty:  # Fixed: Using imported Empty instead of Queue.Empty
                     force = False  # Scan périodique normal
 
                 current_time = time.time()
                 
                 # Vérifier le cooldown sauf si scan forcé
-                if not force and (current_time - self.last_scan_time) < self.scan_cooldown:
+                if not force and (current_time - self.last_scan_time) < 15:
                     logger.debug("⏭️ Scan ignoré (cooldown)")
                     continue
 
@@ -230,7 +231,10 @@ class IPTVManager:
 
             # Scan des dossiers de chaînes
             channel_dirs = [d for d in content_path.iterdir() if d.is_dir()]
-            logger.info(f"📂 {len(channel_dirs)} dossiers de chaînes trouvés")
+            logger.info(f"📂 {len(channel_dirs)} dossiers de chaînes trouvés: {[d.name for d in channel_dirs]}")
+            
+            # Pour suivre les nouvelles chaînes détectées
+            new_channels = []
 
             for channel_dir in channel_dirs:
                 channel_name = channel_dir.name
@@ -246,9 +250,11 @@ class IPTVManager:
 
                 # Nouvelle chaîne détectée
                 logger.info(f"✅ Nouvelle chaîne trouvée: {channel_name}")
+                new_channels.append(channel_name)
                 
                 # Si c'est un scan forcé, on initialise immédiatement
                 if force:
+                    logger.info(f"🚀 Initialisation forcée de la chaîne {channel_name}")
                     self._init_channel_async({
                         "name": channel_name,
                         "dir": channel_dir,
@@ -256,6 +262,7 @@ class IPTVManager:
                     })
                 else:
                     # Sinon on met dans la queue pour initialisation différée
+                    logger.info(f"⏳ Mise en file d'attente pour initialisation de la chaîne {channel_name}")
                     self.channel_init_queue.put({
                         "name": channel_name,
                         "dir": channel_dir,
@@ -264,9 +271,36 @@ class IPTVManager:
 
             # Mise à jour de la playlist maître
             self._update_master_playlist()
-
+            
+            # NOUVEAU: Démarrer les streams des nouvelles chaînes après un délai pour laisser le temps à l'initialisation
+            if new_channels:
+                logger.info(f"🚀 Planification du démarrage différé pour les nouvelles chaînes: {new_channels}")
+                def delayed_start_streams():
+                    # Attendre 10 secondes pour laisser le temps aux chaînes de s'initialiser
+                    time.sleep(10)
+                    for channel_name in new_channels:
+                        if channel_name in self.channels:
+                            channel = self.channels[channel_name]
+                            if hasattr(channel, "ready_for_streaming") and channel.ready_for_streaming:
+                                logger.info(f"[{channel_name}] 🚀 Démarrage différé du stream après scan")
+                                if hasattr(channel, "start_stream"):
+                                    success = channel.start_stream()
+                                    if success:
+                                        logger.info(f"[{channel_name}] ✅ Stream démarré avec succès après scan différé")
+                                    else:
+                                        logger.error(f"[{channel_name}] ❌ Échec du démarrage différé du stream")
+                                else:
+                                    logger.warning(f"[{channel_name}] ⚠️ Channel does not have start_stream method")
+                            else:
+                                logger.warning(f"[{channel_name}] ⚠️ La chaîne n'est pas prête pour le streaming ou ready_for_streaming n'est pas défini")
+                        else:
+                            logger.warning(f"[{channel_name}] ⚠️ Chaîne non trouvée dans le dictionnaire des chaînes pour le démarrage différé")
+                
+                # Démarrer dans un thread séparé pour ne pas bloquer
+                threading.Thread(target=delayed_start_streams, daemon=True).start()
+                
         except Exception as e:
-            logger.error(f"Erreur scan des chaînes: {e}")
+            logger.error(f"❌ Erreur scan des chaînes: {e}")
             import traceback
             logger.error(traceback.format_exc())
 
@@ -646,6 +680,17 @@ class IPTVManager:
         logger.info(
             f"Playlist mise à jour ({len(ready_channels)} chaînes prêtes sur {len(self.channels)} totales)"
         )
+        
+        # NOUVEAU: Vérifier et démarrer les streams des chaînes prêtes qui ne sont pas encore en cours d'exécution
+        for name, channel in ready_channels:
+            if hasattr(channel, "process_manager") and not channel.process_manager.is_running():
+                logger.info(f"[{name}] 🚀 Démarrage automatique du stream après mise à jour de la playlist")
+                if hasattr(channel, "start_stream"):
+                    # Démarrer dans un thread pour ne pas bloquer
+                    threading.Thread(
+                        target=channel.start_stream,
+                        daemon=True
+                    ).start()
 
     def cleanup_manager(self):
         """Cleanup everything before shutdown"""
@@ -1191,17 +1236,20 @@ class IPTVManager:
 
     def _process_channel_init_queue(self):
         """Thread qui traite la queue d'initialisation des chaînes en parallèle"""
+        logger.info("🔄 Démarrage du thread de traitement de la queue d'initialisation des chaînes")
         while not self.stop_init_thread.is_set():
             try:
                 # Limite le nombre d'initialisations parallèles
                 with self.init_threads_lock:
                     if self.active_init_threads >= self.max_parallel_inits:
+                        logger.debug(f"⏳ Limite d'initialisations parallèles atteinte ({self.active_init_threads}/{self.max_parallel_inits}), attente...")
                         time.sleep(0.5)
                         continue
 
                 # Essaie de récupérer une chaîne de la queue
                 try:
                     channel_data = self.channel_init_queue.get(timeout=5)
+                    logger.info(f"📥 Récupération de {channel_data.get('name', 'unknown')} depuis la queue d'initialisation")
                 except Empty:
                     time.sleep(0.5)
                     continue
@@ -1209,8 +1257,10 @@ class IPTVManager:
                 # Incrémente le compteur de threads actifs
                 with self.init_threads_lock:
                     self.active_init_threads += 1
+                    logger.debug(f"➕ Incrémentation du compteur de threads actifs: {self.active_init_threads}/{self.max_parallel_inits}")
 
                 # Lance un thread pour initialiser cette chaîne
+                logger.info(f"🧵 Démarrage d'un thread pour initialiser {channel_data.get('name', 'unknown')}")
                 threading.Thread(
                     target=self._init_channel_async,
                     args=(channel_data,),
@@ -1260,6 +1310,11 @@ class IPTVManager:
 
             if not ready:
                 logger.warning(f"⚠️ Timeout d'initialisation pour la chaîne {channel_name}")
+            else:
+                # MODIFIÉ: Ne pas démarrer automatiquement ici - laissez les fichiers
+                # se stabiliser complètement avant de démarrer
+                logger.info(f"[{channel_name}] ✅ Chaîne prête à être démarrée quand tous les fichiers seront stables")
+                # Le démarrage sera déclenché par le scan complet une fois tous les fichiers stables
 
             logger.info(f"[{channel_name}] ✅ Initialisation terminée, en attente du démarrage automatique groupé")
 

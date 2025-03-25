@@ -1,4 +1,4 @@
-# event_handler.py
+# file_event_handler.py
 import time
 import threading
 from watchdog.events import FileSystemEventHandler
@@ -20,6 +20,8 @@ class FileEventHandler(FileSystemEventHandler):
         self.scan_cooldown = 10  # 10 secondes minimum entre les scans
         self.changed_channels = set()
         self.scan_timer = None
+        self.channel_file_counters = {}  # Pour compter les fichiers copiés par chaîne
+        self.channel_all_files = {}  # Pour compter tous les fichiers détectés par chaîne
         super().__init__()
 
     def is_file_ready(self, file_path: str, timeout: int = 300) -> bool:
@@ -174,128 +176,72 @@ class FileEventHandler(FileSystemEventHandler):
             return False
 
     def _wait_for_copy_completion(self, file_path: str, channel_name: str = ""):
-        """Attend la fin de la copie et déclenche le scan pour une chaîne spécifique.
-        Version améliorée avec gestion des fichiers MP4 et retentatives."""
+        """Surveille un fichier en cours de copie et attend qu'il soit stable"""
         try:
-            # Ignorer les fichiers temporaires de transcodage
-            if "tmp_" in Path(file_path).name:
-                logger.info(
-                    f"Fichier temporaire de transcodage détecté, suivi via FFmpeg: {Path(file_path).name}"
-                )
+            # Vérification du fichier
+            if not self.is_file_ready(file_path):
+                logger.info(f"❌ Fichier {file_path} non stable après le délai")
+                with self.lock:
+                    if file_path in self.copying_files:
+                        del self.copying_files[file_path]
+                    
+                    # Si c'est un fichier ready_to_stream, le retirer du comptage
+                    if channel_name and "ready_to_stream" in file_path:
+                        if channel_name in self.channel_all_files and file_path in self.channel_all_files[channel_name]:
+                            self.channel_all_files[channel_name].remove(file_path)
                 return
 
-            file_size = (
-                Path(file_path).stat().st_size if Path(file_path).exists() else 0
-            )
-            logger.info(
-                f"Surveillance de la copie de {Path(file_path).name} ({file_size/1024/1024:.1f} MB)"
-            )
+            logger.info(f"✅ Copie terminée: {file_path}")
 
-            # Pour les fichiers volumineux, attente plus longue
-            timeout = 300  # 5 minutes par défaut
-            if file_size > 1024 * 1024 * 1024:  # > 1 GB
-                timeout = 600  # 10 minutes pour les fichiers > 1 GB
-                logger.info(
-                    f"Fichier volumineux détecté (> 1 GB), timeout étendu à {timeout}s"
-                )
-
-            # Ajout de tentatives pour les fichiers MP4
-            max_retries = 3
-            for attempt in range(max_retries):
-                if self.is_file_ready(file_path, timeout=timeout):
-                    logger.info(f"✅ Copie terminée: {file_path}")
-
-                    # On attend un peu pour s'assurer que le système de fichiers a fini
-                    time.sleep(2)
-
-                    # Si on a le nom de la chaîne, on peut demander juste un refresh de celle-ci
-                    if channel_name and channel_name in self.manager.channels:
-                        channel = self.manager.channels[channel_name]
-                        if hasattr(channel, "refresh_videos"):
-                            logger.info(
-                                f"🔄 Rafraîchissement de la chaîne {channel_name}"
-                            )
-                            channel.refresh_videos()
+            # Planifier un scan si on a changé le channel_name
+            if channel_name:
+                # Tracker le fichier complété
+                if "ready_to_stream" in file_path:
+                    with self.lock:
+                        if channel_name not in self.channel_file_counters:
+                            self.channel_file_counters[channel_name] = set()
+                        self.channel_file_counters[channel_name].add(file_path)
+                        
+                        all_files = len(self.channel_all_files.get(channel_name, set()))
+                        completed_files = len(self.channel_file_counters.get(channel_name, set()))
+                        
+                        logger.info(f"[{channel_name}] ⏳ {completed_files}/{all_files} fichiers stables")
+                        
+                        # Vérifier si tous les fichiers de cette chaîne sont maintenant stables
+                        if all_files > 0 and completed_files == all_files:
+                            logger.info(f"[{channel_name}] 🎉 Tous les fichiers sont stables! Démarrage du scan et du stream")
+                            # Forcer un scan immédiat
+                            threading.Thread(
+                                target=self.manager.scan_channels, 
+                                args=(True,),  # Force=True pour assurer l'initialisation
+                                daemon=True
+                            ).start()
                             
-                            # NOUVEAU: Forcer la régénération de la playlist après détection de fichier stable
-                            if hasattr(channel, "_create_concat_file"):
-                                logger.info(
-                                    f"🔄 Régénération de la playlist pour {channel_name} après détection de fichier stable"
-                                )
-                                # On utilise un thread pour ne pas bloquer
-                                # Créer un nouveau thread pour la régénération et le redémarrage
-                                def regenerate_and_restart():
-                                    try:
-                                        # 0. Vérifier l'état actuel de la playlist
-                                        playlist_path = Path(channel.video_dir) / "_playlist.txt"
-                                        old_content = ""
-                                        if playlist_path.exists():
-                                            with open(playlist_path, "r", encoding="utf-8") as f:
-                                                old_content = f.read()
-                                        
-                                        # 1. Régénérer la playlist
-                                        channel._create_concat_file()
-                                        logger.info(f"[{channel_name}] ✅ Playlist mise à jour suite à nouveau fichier stable")
-                                        
-                                        # Vérifier si la playlist a réellement changé
-                                        new_content = ""
-                                        if playlist_path.exists():
-                                            with open(playlist_path, "r", encoding="utf-8") as f:
-                                                new_content = f.read()
-                                        
-                                        # 2. Redémarrer le stream seulement si la playlist a changé
-                                        if old_content != new_content:
-                                            logger.info(f"[{channel_name}] 🔄 Playlist modifiée, redémarrage nécessaire")
-                                            if hasattr(channel, "_restart_stream") and channel.process_manager.is_running():
-                                                logger.info(f"[{channel_name}] 🔄 Redémarrage du stream pour appliquer la nouvelle playlist")
-                                                channel._restart_stream()
-                                            else:
-                                                logger.info(f"[{channel_name}] ℹ️ Pas besoin de redémarrer le stream, déjà arrêté ou pas de méthode de redémarrage")
-                                        else:
-                                            logger.info(f"[{channel_name}] ✓ Playlist inchangée, pas de redémarrage nécessaire")
-                                            
-                                        # 3. Notifier également le ReadyContentHandler pour les autres mises à jour
-                                        if hasattr(self.manager, "ready_event_handler"):
-                                            self.manager.ready_event_handler._update_channel(channel_name)
-                                    except Exception as e:
-                                        logger.error(f"[{channel_name}] ❌ Erreur lors de la régénération et du redémarrage: {e}")
-                                
-                                # Lancer le processus de régénération et redémarrage
-                                threading.Thread(
-                                    target=regenerate_and_restart,
-                                    daemon=True
-                                ).start()
+                            # Démarrer le stream directement si la chaîne existe déjà
+                            if channel_name in self.manager.channels:
+                                channel = self.manager.channels[channel_name]
+                                if hasattr(channel, "ready_for_streaming") and channel.ready_for_streaming:
+                                    logger.info(f"[{channel_name}] 🚀 Démarrage du stream après stabilisation de tous les fichiers")
+                                    threading.Thread(
+                                        target=channel.start_stream,
+                                        daemon=True
+                                    ).start()
                         else:
-                            self._schedule_scan()
-                    else:
-                        # Sinon, on scanne tout
-                        self._schedule_scan()
+                            # Si ce n'est pas le dernier fichier, on lance juste un scan
+                            logger.info(f"🔄 Déclenchement d'un scan pour la chaîne: {channel_name}")
+                            threading.Thread(
+                                target=self.manager.scan_channels, 
+                                args=(True,),
+                                daemon=True
+                            ).start()
 
-                    return  # Sortie réussie
-
-                if Path(file_path).suffix.lower() == ".mp4":
-                    logger.warning(
-                        f"⚠️ Tentative {attempt+1}/{max_retries} échouée pour {Path(file_path).name}"
-                    )
-
-                    # Pour les MP4, on attend plus longtemps entre les tentatives
-                    if attempt < max_retries - 1:
-                        wait_time = 30 * (attempt + 1)  # 30s, puis 60s, puis 90s
-                        logger.info(
-                            f"Attente de {wait_time}s avant nouvelle tentative pour {Path(file_path).name}"
-                        )
-                        time.sleep(wait_time)
-                else:
-                    # Pour les autres types, on sort directement
-                    break
-
-            logger.warning(
-                f"❌ Échec suivi copie après {max_retries} tentatives: {file_path}"
-            )
+        except Exception as e:
+            logger.error(f"❌ Erreur surveillance copie: {e}")
 
         finally:
             with self.lock:
-                self.copying_files.pop(file_path, None)
+                if file_path in self.copying_files:
+                    del self.copying_files[file_path]
 
     def get_channel_from_path(self, path: str) -> str:
         """Extrait le nom de la chaîne à partir du chemin"""
@@ -367,6 +313,13 @@ class FileEventHandler(FileSystemEventHandler):
             channel_name = self.get_channel_from_path(event.src_path)
             if channel_name:
                 self.changed_channels.add(channel_name)
+                
+                # Ajouter à notre compteur de fichiers
+                if "ready_to_stream" in event.src_path:
+                    if channel_name not in self.channel_all_files:
+                        self.channel_all_files[channel_name] = set()
+                    self.channel_all_files[channel_name].add(event.src_path)
+                    logger.info(f"[{channel_name}] ➕ Nouveau fichier détecté: {Path(event.src_path).name} (total: {len(self.channel_all_files[channel_name])})")
 
         # On lance un thread dédié pour surveiller la copie
         threading.Thread(
@@ -418,6 +371,12 @@ class FileEventHandler(FileSystemEventHandler):
                 logger.info(f"🔄 Scan programmé pour les chaînes: {', '.join(self.changed_channels)}")
                 # Demander un scan au manager
                 self.manager.request_scan(force=True)
+                # Lancer directement un scan forcé pour être sûr
+                threading.Thread(
+                    target=self.manager.scan_channels,
+                    args=(True,),  # Force=True pour garantir l'initialisation complète
+                    daemon=True
+                ).start()
                 self.changed_channels.clear()
 
         except Exception as e:
