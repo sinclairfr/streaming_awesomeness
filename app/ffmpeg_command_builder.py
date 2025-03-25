@@ -52,7 +52,6 @@ class FFmpegCommandBuilder:
                 "-analyzeduration", "20M",
                 "-probesize", "20M",
                 "-re",  # Lecture en temps réel
-                "-stream_loop", "-1",  # Boucle infinie
                 "-fflags", "+genpts+igndts+discardcorrupt+autobsf",
                 "-threads", "4",
                 "-avoid_negative_ts", "make_zero",
@@ -82,12 +81,12 @@ class FFmpegCommandBuilder:
                 "-hls_time", "2",
                 "-hls_list_size", "15",
                 "-hls_delete_threshold", "2",
-                "-hls_flags", "delete_segments+append_list+independent_segments+omit_endlist+discont_start",
+                "-hls_flags", "delete_segments+append_list+independent_segments+omit_endlist+discont_start+program_date_time",
                 "-hls_allow_cache", "1",
                 "-start_number", "0",
                 "-hls_segment_type", "mpegts",
                 "-max_delay", "2000000",
-                "-hls_init_time", "2",
+                "-hls_init_time", "1",
                 "-hls_segment_filename", f"{output_dir}/segment_%d.ts",
                 f"{output_dir}/playlist.m3u8"
             ])
@@ -176,7 +175,7 @@ class FFmpegCommandBuilder:
         #                 str(first_video)
         #             ]
         #             result = subprocess.run(cmd, capture_output=True, text=True)
-        #             if result.returncode == 0:
+        #             if result.returncode == 0 and result.stdout.strip():
         #                 try:
         #                     duration = float(result.stdout.strip())
         #                     if duration > 30:
@@ -191,8 +190,6 @@ class FFmpegCommandBuilder:
         params.extend(
             [
                 "-re",  # Lecture en temps réel
-                "-stream_loop",
-                "-1",  # Boucle infinie
                 "-fflags",
                 "+genpts+igndts+discardcorrupt+autobsf",  # Ajout de autobsf pour meilleure gestion des transitions
                 "-threads",
@@ -224,7 +221,7 @@ class FFmpegCommandBuilder:
             "2",  # Réduit pour plus de stabilité
             # Flags HLS optimisés
             "-hls_flags",
-            "delete_segments+append_list+independent_segments+omit_endlist+discont_start",  # Ajout de discont_start pour gérer les discontinuités
+            "delete_segments+append_list+independent_segments+omit_endlist+discont_start+program_date_time",  # Ajout de discont_start pour gérer les discontinuités et program_date_time pour compatibilité
             # Cache autorisé
             "-hls_allow_cache",
             "1",
@@ -237,7 +234,7 @@ class FFmpegCommandBuilder:
             "-max_delay",
             "2000000",  # Réduit pour plus de stabilité
             "-hls_init_time",
-            "2",  # Correspond à hls_time
+            "1",  # Réduit pour générer la playlist plus rapidement
             # Nom des segments
             "-hls_segment_filename",
             f"{output_dir}/segment_%d.ts",

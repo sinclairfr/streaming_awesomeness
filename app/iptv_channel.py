@@ -845,6 +845,13 @@ class IPTVChannel:
     def _segment_monitor_loop(self):
         """Boucle de surveillance des segments"""
         try:
+            # Ajouter un délai initial pour laisser le temps à FFmpeg de générer la playlist
+            if not hasattr(self, "segment_monitor_started"):
+                self.segment_monitor_started = time.time()
+                logger.info(f"[{self.name}] 🔍 Boucle de surveillance des segments démarrée")
+                # Attendre 3 secondes avant le premier health check
+                time.sleep(3)
+            
             # La boucle s'exécute tant que le processus est en cours
             while self.process_manager.is_running():
                 current_time = time.time()
@@ -1191,7 +1198,7 @@ class IPTVChannel:
             playlist_path = hls_dir / "playlist.m3u8"
             if not playlist_path.exists():
                 # During startup grace period, be more lenient with playlist generation
-                if startup_duration < 5:  # Réduit de 15s à 5s
+                if startup_duration < 10:  # Augmenté de 5s à 10s
                     logger.info(f"[{self.name}] ℹ️ Still in startup grace period ({startup_duration:.1f}s), waiting for playlist.m3u8...")
                     return True
                 else:
@@ -1212,7 +1219,7 @@ class IPTVChannel:
                         logger.error(f"[{self.name}] ❌ Error reading playlist.m3u8: {e}")
                 
                 # During startup grace period, be more lenient
-                if startup_duration < 5:  # Réduit de 15s à 5s
+                if startup_duration < 10:  # Augmenté de 5s à 10s
                     logger.info(f"[{self.name}] ℹ️ Still in startup grace period ({startup_duration:.1f}s), waiting for segments...")
                     return True
                 
@@ -1596,7 +1603,24 @@ class IPTVChannel:
                             f"[{self.name}] Erreur suppression playlist: {e}"
                         )
             else:
-                hls_dir.mkdir(parents=True, exist_ok=True)
+                # Créer le dossier HLS avec les bons droits
+                try:
+                    hls_dir.mkdir(parents=True, exist_ok=True)
+                    # S'assurer que le dossier est accessible en écriture
+                    os.chmod(hls_dir, 0o777)
+                    logger.info(f"[{self.name}] 📁 Création du dossier HLS: {hls_dir}")
+                except Exception as e:
+                    logger.error(f"[{self.name}] ❌ Erreur création dossier HLS: {e}")
+                    return False
+
+            # Vérifier que le dossier est accessible en écriture
+            if not os.access(hls_dir, os.W_OK):
+                try:
+                    os.chmod(hls_dir, 0o777)
+                    logger.info(f"[{self.name}] 🔐 Correction des permissions du dossier HLS")
+                except Exception as e:
+                    logger.error(f"[{self.name}] ❌ Impossible de modifier les permissions du dossier HLS: {e}")
+                    return False
 
             # 3) Démarrer le thread de streaming séquentiel
             if not hasattr(self, "_streaming_thread") or not self._streaming_thread.is_alive():
@@ -1718,6 +1742,16 @@ class IPTVChannel:
         """Stream un fichier unique avec ffmpeg"""
         try:
             hls_dir = Path(f"/app/hls/{self.name}")
+            
+            # S'assurer que le dossier HLS existe et a les bonnes permissions
+            if not hls_dir.exists():
+                try:
+                    hls_dir.mkdir(parents=True, exist_ok=True)
+                    os.chmod(hls_dir, 0o777)
+                    logger.info(f"[{self.name}] 📁 Création du dossier HLS: {hls_dir}")
+                except Exception as e:
+                    logger.error(f"[{self.name}] ❌ Erreur création dossier HLS: {e}")
+                    return False
             
             # Obtenir les fichiers de logs
             ffmpeg_log = Path(f"/app/logs/ffmpeg/{self.name}_ffmpeg.log")
