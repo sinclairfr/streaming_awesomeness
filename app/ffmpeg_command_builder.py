@@ -48,12 +48,12 @@ class FFmpegCommandBuilder:
                 "-loglevel", "info",
                 "-y",
                 # Paramètres d'entrée optimisés
-                "-thread_queue_size", "8192",
-                "-analyzeduration", "20M",
-                "-probesize", "20M",
+                "-thread_queue_size", "4096",  # Réduit pour plus de stabilité
+                "-analyzeduration", "5M",      # Réduit pour un démarrage plus rapide
+                "-probesize", "5M",            # Réduit pour un démarrage plus rapide
                 "-re",  # Lecture en temps réel
-                "-fflags", "+genpts+igndts+discardcorrupt+autobsf",
-                "-threads", "4",
+                "-fflags", "+genpts+igndts+discardcorrupt",  # Simplifié
+                "-threads", "2",               # Réduit pour plus de stabilité
                 "-avoid_negative_ts", "make_zero",
             ]
 
@@ -71,7 +71,7 @@ class FFmpegCommandBuilder:
                 "-sn", "-dn",
                 "-map", "0:v:0",
                 "-map", "0:a:0?",
-                "-max_muxing_queue_size", "4096",
+                "-max_muxing_queue_size", "2048",  # Réduit pour plus de stabilité
                 "-fps_mode", "passthrough",
             ])
 
@@ -79,13 +79,13 @@ class FFmpegCommandBuilder:
             command.extend([
                 "-f", "hls",
                 "-hls_time", "2",
-                "-hls_list_size", "15",
-                "-hls_delete_threshold", "2",
-                "-hls_flags", "delete_segments+append_list+independent_segments+omit_endlist+discont_start+program_date_time",
+                "-hls_list_size", "6",        # Réduit pour plus de stabilité
+                "-hls_delete_threshold", "1",  # Réduit pour plus de stabilité
+                "-hls_flags", "delete_segments+append_list+independent_segments",  # Simplifié
                 "-hls_allow_cache", "1",
                 "-start_number", "0",
                 "-hls_segment_type", "mpegts",
-                "-max_delay", "2000000",
+                "-max_delay", "1000000",       # Réduit pour plus de stabilité
                 "-hls_init_time", "1",
                 "-hls_segment_filename", f"{output_dir}/segment_%d.ts",
                 f"{output_dir}/playlist.m3u8"
@@ -149,51 +149,25 @@ class FFmpegCommandBuilder:
         """Construit les paramètres d'entrée avec positionnement précis"""
         params = ["ffmpeg", "-hide_banner", "-loglevel", FFMPEG_LOG_LEVEL, "-y"]
 
-        # Paramètres de buffer (AVANT le -ss pour une meilleure analyse)
+        # Paramètres de buffer optimisés pour réduire le buffering
         params.extend(
             [
                 "-thread_queue_size",
-                "8192",  # Réduit pour plus de stabilité
+                "1024",  # Réduit pour moins de latence
                 "-analyzeduration",
-                "20M",  # Réduit pour un démarrage plus rapide
+                "5M",  # Réduit pour un démarrage plus rapide
                 "-probesize",
-                "20M",  # Réduit pour un démarrage plus rapide
+                "5M",  # Réduit pour un démarrage plus rapide
             ]
         )
-
-        # # Code temporaire pour tester les transitions - commenté
-        # try:
-        #     with open(input_file, "r") as f:
-        #         first_line = f.readline().strip()
-        #         if first_line.startswith("file "):
-        #             first_video = first_line.split("'")[1]
-        #             cmd = [
-        #                 "ffprobe",
-        #                 "-v", "error",
-        #                 "-show_entries", "format=duration",
-        #                 "-of", "default=noprint_wrappers=1:nokey=1",
-        #                 str(first_video)
-        #             ]
-        #             result = subprocess.run(cmd, capture_output=True, text=True)
-        #             if result.returncode == 0 and result.stdout.strip():
-        #                 try:
-        #                     duration = float(result.stdout.strip())
-        #                     if duration > 30:
-        #                         # Ajouter l'offset temporaire (durée - 30 secondes)
-        #                         params.extend(["-ss", str(duration - 30)])
-        #                         logger.info(f"[{self.channel_name}] 🕒 Ajout offset temporaire: {duration - 30}s")
-        #                 except ValueError:
-        #                     pass
-        # except Exception as e:
-        #     logger.error(f"[{self.channel_name}] ❌ Erreur calcul offset temporaire: {e}")
 
         params.extend(
             [
                 "-re",  # Lecture en temps réel
                 "-fflags",
-                "+genpts+igndts+discardcorrupt+autobsf",  # Ajout de autobsf pour meilleure gestion des transitions
+                "+genpts+igndts+discardcorrupt+autobsf",
                 "-threads",
-                "4",
+                "2",  # Réduit pour plus de stabilité
                 "-avoid_negative_ts",
                 "make_zero",
             ]
@@ -214,31 +188,25 @@ class FFmpegCommandBuilder:
             "-f",
             "hls",
             "-hls_time",
-            "2",  # Réduit pour plus de réactivité
+            "1",  # Réduit pour moins de latence
             "-hls_list_size",
-            "15",  # Réduit pour plus de stabilité
+            "5",  # Réduit pour moins de latence
             "-hls_delete_threshold",
-            "2",  # Réduit pour plus de stabilité
-            # Flags HLS optimisés
+            "1",  # Réduit pour moins de latence
             "-hls_flags",
-            "delete_segments+append_list+independent_segments+omit_endlist+discont_start+program_date_time",  # Ajout de discont_start pour gérer les discontinuités et program_date_time pour compatibilité
-            # Cache autorisé
+            "delete_segments+append_list+independent_segments+omit_endlist+discont_start+program_date_time",
             "-hls_allow_cache",
-            "1",
-            # Numérotation continue des segments
+            "0",  # Désactivé pour moins de latence
             "-start_number",
             "0",
             "-hls_segment_type",
             "mpegts",
-            # Paramètres de latence réduite
             "-max_delay",
-            "2000000",  # Réduit pour plus de stabilité
+            "500000",  # Réduit pour moins de latence
             "-hls_init_time",
-            "1",  # Réduit pour générer la playlist plus rapidement
-            # Nom des segments
+            "0.5",  # Réduit pour générer la playlist plus rapidement
             "-hls_segment_filename",
             f"{output_dir}/segment_%d.ts",
-            # Sortie playlist
             f"{output_dir}/playlist.m3u8",
         ]
 
@@ -261,15 +229,15 @@ class FFmpegCommandBuilder:
             "-map",
             "0:a:0?",
             "-max_muxing_queue_size",
-            "4096",  # Buffer augmenté pour plus de stabilité
+            "1024",  # Réduit pour moins de latence
             "-fps_mode",
             "passthrough",
             "-fflags",
-            "+genpts+igndts+discardcorrupt+autobsf",  # Flags pour une meilleure gestion des timestamps
+            "+genpts+igndts+discardcorrupt+autobsf",
             "-thread_queue_size",
-            "8192",  # Queue size augmentée pour plus de stabilité
+            "1024",  # Réduit pour moins de latence
             "-avoid_negative_ts",
-            "make_zero",  # Évite les timestamps négatifs
+            "make_zero",
         ]
 
         # Si on détecte un fichier MKV, on ajuste les paramètres

@@ -25,7 +25,6 @@ from config import (
     CONTENT_DIR,
     NGINX_ACCESS_LOG,
     SERVER_URL,
-    TIMEOUT_NO_VIEWERS,
     logger,
     VIDEO_EXTENSIONS,
     CPU_THRESHOLD,
@@ -358,7 +357,7 @@ class IPTVManager:
             
             # Log seulement si le nombre a changé
             if old_count != watcher_count:
-                logger.info(f"[{channel_name}] 👥 Changement watchers: {old_count} → {watcher_count}")
+                logger.info(f"[{channel_name}] 👁️ Changement watchers: {old_count} → {watcher_count}")
 
             # Forcer une mise à jour immédiate du statut
             if hasattr(self, "channel_status") and self.channel_status is not None:
@@ -608,27 +607,45 @@ class IPTVManager:
             logger.error(f"❌ Erreur création dossiers HLS: {e}")
 
     def _manage_master_playlist(self):
-        """
-        Gère la création et mise à jour de la playlist principale.
-        Cette méthode tourne en boucle et regénère la playlist toutes les 60s,
-        ou peut être appelée explicitement après un changement.
-        """
-        # Si c'est un appel direct (après mise à jour d'une chaîne), faire une mise à jour unique
-        if threading.current_thread() != self.master_playlist_updater:
+        """Gère la mise à jour périodique de la playlist principale"""
+        logger.info("🔄 Démarrage thread de mise à jour de la playlist principale")
+        
+        # S'assurer que la playlist existe avec des permissions correctes dès le départ
+        playlist_path = os.path.abspath("/app/hls/playlist.m3u")
+        if not os.path.exists(playlist_path):
             try:
-                self._update_master_playlist()
-                return
+                # Créer un contenu minimal
+                with open(playlist_path, "w", encoding="utf-8") as f:
+                    f.write("#EXTM3U\n")
+                os.chmod(playlist_path, 0o777)  # Permissions larges pour le debug
+                logger.info(f"✅ Playlist initiale créée: {playlist_path}")
             except Exception as e:
-                logger.error(f"Erreur mise à jour ponctuelle de la playlist: {e}")
-                return
-
-        # Sinon, c'est la boucle normale
+                logger.error(f"❌ Erreur création playlist initiale: {e}")
+        
+        # Mise à jour immédiate au démarrage
+        try:
+            self._update_master_playlist()
+            logger.info("✅ Première mise à jour de la playlist effectuée")
+        except Exception as e:
+            logger.error(f"❌ Erreur première mise à jour playlist: {e}")
+        
+        # Mises à jour fréquentes au démarrage
+        for _ in range(3):
+            try:
+                # Attendre un peu entre les mises à jour
+                time.sleep(10)
+                self._update_master_playlist()
+                logger.info("✅ Mise à jour de démarrage de la playlist effectuée")
+            except Exception as e:
+                logger.error(f"❌ Erreur mise à jour playlist de démarrage: {e}")
+        
+        # Continuer avec des mises à jour périodiques
         while True:
             try:
                 self._update_master_playlist()
                 time.sleep(60)  # On attend 60s avant la prochaine mise à jour
             except Exception as e:
-                logger.error(f"Erreur maj master playlist: {e}")
+                logger.error(f"❌ Erreur maj master playlist: {e}")
                 logger.error(traceback.format_exc())
                 time.sleep(60)  # On attend même en cas d'erreur
 
@@ -636,61 +653,155 @@ class IPTVManager:
         """Effectue la mise à jour de la playlist principale"""
         playlist_path = os.path.abspath("/app/hls/playlist.m3u")
         logger.info(f"🔄 Master playlist maj.: {playlist_path}")
-
-        with open(playlist_path, "w", encoding="utf-8") as f:
-            f.write("#EXTM3U\n")
+        
+        try:
+            # On sauvegarde d'abord le contenu actuel au cas où
+            existing_content = "#EXTM3U\n"
+            if os.path.exists(playlist_path) and os.path.getsize(playlist_path) > 0:
+                try:
+                    with open(playlist_path, "r", encoding="utf-8") as f:
+                        existing_content = f.read()
+                    logger.info(f"✅ Contenu actuel sauvegardé: {len(existing_content)} octets")
+                except Exception as e:
+                    logger.error(f"❌ Erreur lecture playlist existante: {e}")
+            
+            # Préparation du nouveau contenu
+            content = "#EXTM3U\n"
 
             # Re-vérifie chaque chaîne pour confirmer qu'elle est prête
             with self.scan_lock:
-                for name, channel in self.channels.items():
-                    # Vérification directe des fichiers
-                    ready_dir = Path(channel.video_dir) / "ready_to_stream"
-                    has_videos = (
-                        list(ready_dir.glob("*.mp4")) if ready_dir.exists() else []
-                    )
-
-                    # Mise à jour du statut si nécessaire
-                    if has_videos and not self.channel_ready_status.get(name, False):
-                        logger.info(
-                            f"[{name}] 🔄 Mise à jour auto du statut: chaîne prête (vidéos trouvées)"
+                ready_channels = []
+                
+                # Méthode 1: Vérification directe des fichiers dans le dossier HLS
+                hls_dir = Path("/app/hls")
+                for channel_dir in hls_dir.iterdir():
+                    if channel_dir.is_dir() and channel_dir.name != "stats" and (channel_dir / "playlist.m3u8").exists():
+                        channel_name = channel_dir.name
+                        # Vérifier qu'il y a au moins un segment
+                        segments = list(channel_dir.glob("segment_*.ts"))
+                        if segments:
+                            ready_channels.append((channel_name, None))
+                            logger.info(f"[{channel_name}] ✅ Chaîne prête (vérification directe HLS)")
+                
+                # Méthode 2: Vérification basée sur les fichiers dans ready_to_stream
+                if not ready_channels:
+                    for name, channel in sorted(self.channels.items()):
+                        # Vérification directe des fichiers
+                        ready_dir = Path(channel.video_dir) / "ready_to_stream"
+                        has_videos = (
+                            list(ready_dir.glob("*.mp4")) if ready_dir.exists() else []
                         )
-                        self.channel_ready_status[name] = True
-                        channel.ready_for_streaming = True
-                    elif not has_videos and self.channel_ready_status.get(name, False):
-                        logger.info(
-                            f"[{name}] ⚠️ Mise à jour auto du statut: chaîne non prête (aucune vidéo)"
-                        )
-                        self.channel_ready_status[name] = False
-                        channel.ready_for_streaming = False
 
-            # Ne référence que les chaînes prêtes
-            ready_channels = []
-            for name, channel in sorted(self.channels.items()):
-                if (
-                    name in self.channel_ready_status
-                    and self.channel_ready_status[name]
-                ):
-                    ready_channels.append((name, channel))
+                        # Mise à jour du statut si nécessaire
+                        if has_videos:
+                            logger.info(f"[{name}] ✅ Chaîne prête avec {len(has_videos)} vidéos")
+                            self.channel_ready_status[name] = True
+                            channel.ready_for_streaming = True
+                            ready_channels.append((name, channel))
+                        else:
+                            logger.warning(f"[{name}] ⚠️ Chaîne non prête (aucune vidéo)")
+                            self.channel_ready_status[name] = False
+                            channel.ready_for_streaming = False
 
             # Écriture des chaînes prêtes
-            for name, channel in ready_channels:
-                f.write(f'#EXTINF:-1 tvg-id="{name}" tvg-name="{name}",{name}\n')
-                f.write(f"http://{SERVER_URL}/hls/{name}/playlist.m3u8\n")
+            server_url = os.getenv("SERVER_URL", "192.168.10.183")
+            if ready_channels:
+                for name, _ in ready_channels:
+                    content += f'#EXTINF:-1 tvg-id="{name}" tvg-name="{name}",{name}\n'
+                    content += f"http://{server_url}/hls/{name}/playlist.m3u8\n"
+            else:
+                # Si aucune chaîne n'est prête, ajouter un commentaire
+                content += "# Aucune chaîne active pour le moment\n"
+                logger.warning("⚠️ Aucune chaîne active détectée pour la playlist")
+            
+            # Log du contenu qui sera écrit
+            logger.info(f"📝 Contenu de la playlist à écrire:\n{content}")
+            
+            # Écrire dans un fichier temporaire d'abord
+            temp_path = f"{playlist_path}.tmp"
+            with open(temp_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            
+            # Vérifier que le fichier temporaire a été créé correctement
+            if os.path.exists(temp_path) and os.path.getsize(temp_path) > 0:
+                # Remplacer l'ancien fichier
+                os.replace(temp_path, playlist_path)
+                logger.info(f"✅ Playlist remplacée avec succès")
+            else:
+                logger.error(f"❌ Fichier temporaire vide ou non créé: {temp_path}")
+                # Ne pas remplacer l'ancien fichier si le temporaire est vide
+                raise Exception("Fichier temporaire vide ou non créé")
+            
+            # Vérifier permissions et que le fichier a bien été écrit
+            os.chmod(playlist_path, 0o777)  # Permissions larges pour le debug
+            
+            # Vérification que le fichier a été correctement écrit
+            if os.path.exists(playlist_path):
+                size = os.path.getsize(playlist_path)
+                logger.info(f"✅ Playlist écrite: {playlist_path}, taille: {size} octets")
+                
+                # Lire le contenu pour vérification
+                with open(playlist_path, "r", encoding="utf-8") as f:
+                    read_content = f.read()
+                    if read_content == content:
+                        logger.info("✅ Contenu vérifié, identique à ce qui devait être écrit")
+                    else:
+                        logger.error("❌ Contenu lu différent du contenu qui devait être écrit")
+                        logger.error(f"📄 Contenu lu:\n{read_content}")
+                        # Essayer d'écrire directement
+                        with open(playlist_path, "w", encoding="utf-8") as f:
+                            f.write(content)
+                        logger.info("🔄 Tentative d'écriture directe effectuée")
+            else:
+                logger.error(f"❌ Fichier non trouvé après écriture: {playlist_path}")
+                # Recréer avec le contenu existant
+                with open(playlist_path, "w", encoding="utf-8") as f:
+                    f.write(existing_content)
+                logger.warning("🔄 Restauration du contenu précédent")
 
-        logger.info(
-            f"Playlist mise à jour ({len(ready_channels)} chaînes prêtes sur {len(self.channels)} totales)"
-        )
+            logger.info(
+                f"✅ Playlist mise à jour avec {len(ready_channels)} chaînes prêtes sur {len(self.channels)} totales"
+            )
+        except Exception as e:
+            logger.error(f"❌ Erreur mise à jour playlist: {e}")
+            logger.error(traceback.format_exc())
+            
+            # En cas d'erreur, vérifier si le fichier existe toujours
+            if not os.path.exists(playlist_path) or os.path.getsize(playlist_path) == 0:
+                # Restaurer le contenu précédent s'il existe
+                if existing_content and len(existing_content) > 8:  # Plus que juste "#EXTM3U\n"
+                    try:
+                        with open(playlist_path, "w", encoding="utf-8") as f:
+                            f.write(existing_content)
+                        os.chmod(playlist_path, 0o777)
+                        logger.info("✅ Contenu précédent restauré")
+                    except Exception as restore_e:
+                        logger.error(f"❌ Erreur restauration contenu: {restore_e}")
+                
+                # Si pas de contenu précédent ou erreur, créer une playlist minimale
+                if not os.path.exists(playlist_path) or os.path.getsize(playlist_path) == 0:
+                    try:
+                        with open(playlist_path, "w", encoding="utf-8") as f:
+                            f.write("#EXTM3U\n# Playlist de secours\n")
+                        os.chmod(playlist_path, 0o777)
+                        logger.info("✅ Playlist minimale créée en fallback")
+                    except Exception as inner_e:
+                        logger.error(f"❌ Échec création playlist minimale: {inner_e}")
         
-        # NOUVEAU: Vérifier et démarrer les streams des chaînes prêtes qui ne sont pas encore en cours d'exécution
+        # Vérifier et démarrer les streams des chaînes prêtes qui ne sont pas encore en cours d'exécution
         for name, channel in ready_channels:
-            if hasattr(channel, "process_manager") and not channel.process_manager.is_running():
+            if channel and hasattr(channel, "process_manager") and not channel.process_manager.is_running():
                 logger.info(f"[{name}] 🚀 Démarrage automatique du stream après mise à jour de la playlist")
                 if hasattr(channel, "start_stream"):
-                    # Démarrer dans un thread pour ne pas bloquer
-                    threading.Thread(
-                        target=channel.start_stream,
-                        daemon=True
-                    ).start()
+                    try:
+                        # Démarrer directement sans thread pour s'assurer que ça fonctionne
+                        success = channel.start_stream()
+                        if success:
+                            logger.info(f"[{name}] ✅ Stream démarré avec succès")
+                        else:
+                            logger.error(f"[{name}] ❌ Échec du démarrage du stream")
+                    except Exception as e:
+                        logger.error(f"[{name}] ❌ Erreur lors du démarrage du stream: {e}")
 
     def cleanup_manager(self):
         """Cleanup everything before shutdown"""
@@ -1311,12 +1422,18 @@ class IPTVManager:
             if not ready:
                 logger.warning(f"⚠️ Timeout d'initialisation pour la chaîne {channel_name}")
             else:
-                # MODIFIÉ: Ne pas démarrer automatiquement ici - laissez les fichiers
-                # se stabiliser complètement avant de démarrer
-                logger.info(f"[{channel_name}] ✅ Chaîne prête à être démarrée quand tous les fichiers seront stables")
-                # Le démarrage sera déclenché par le scan complet une fois tous les fichiers stables
+                # Démarrer immédiatement le stream si la chaîne est prête
+                logger.info(f"[{channel_name}] 🚀 Démarrage immédiat du stream")
+                if hasattr(channel, "start_stream"):
+                    success = channel.start_stream()
+                    if success:
+                        logger.info(f"[{channel_name}] ✅ Stream démarré avec succès")
+                    else:
+                        logger.error(f"[{channel_name}] ❌ Échec du démarrage du stream")
+                else:
+                    logger.warning(f"[{channel_name}] ⚠️ Channel does not have start_stream method")
 
-            logger.info(f"[{channel_name}] ✅ Initialisation terminée, en attente du démarrage automatique groupé")
+            logger.info(f"[{channel_name}] ✅ Initialisation terminée")
 
         except Exception as e:
             logger.error(f"❌ Erreur initialisation de la chaîne {channel_data.get('name')}: {e}")

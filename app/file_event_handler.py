@@ -216,28 +216,32 @@ class FileEventHandler(FileSystemEventHandler):
                             # Vérifier si on a déjà fait une vérification de stabilité pour cette chaîne
                             stability_check_key = f"{channel_name}_stability_check"
                             if hasattr(self, stability_check_key) and getattr(self, stability_check_key):
-                                logger.info(f"[{channel_name}] ℹ️ Vérification de stabilité déjà effectuée, on passe au démarrage")
-                            else:
-                                # Attendre un peu plus longtemps pour s'assurer que tout est bien stable
-                                time.sleep(2)
+                                logger.info(f"[{channel_name}] ℹ️ Vérification de stabilité déjà effectuée, on ignore")
+                                return
+                            
+                            # Attendre un peu plus longtemps pour s'assurer que tout est bien stable
+                            time.sleep(2)
+                            
+                            # Vérifier une dernière fois que tous les fichiers sont toujours stables
+                            ready_dir = os.path.join(self.manager.content_dir, channel_name, "ready_to_stream")
+                            if os.path.exists(ready_dir):
+                                mp4_files = [f for f in os.listdir(ready_dir) if f.endswith('.mp4')]
+                                all_stable = True
+                                for mp4 in mp4_files:
+                                    file_path = os.path.join(ready_dir, mp4)
+                                    if not self.is_file_ready(file_path):
+                                        all_stable = False
+                                        break
                                 
-                                # Vérifier une dernière fois que tous les fichiers sont toujours stables
-                                ready_dir = os.path.join(self.manager.content_dir, channel_name, "ready_to_stream")
-                                if os.path.exists(ready_dir):
-                                    mp4_files = [f for f in os.listdir(ready_dir) if f.endswith('.mp4')]
-                                    all_stable = True
-                                    for mp4 in mp4_files:
-                                        file_path = os.path.join(ready_dir, mp4)
-                                        if not self.is_file_ready(file_path):
-                                            all_stable = False
-                                            break
-                                    
-                                    if not all_stable:
-                                        logger.warning(f"[{channel_name}] ⚠️ Certains fichiers ne sont plus stables, attente...")
-                                        return
-                                
-                                # Marquer que la vérification de stabilité a été faite
-                                setattr(self, stability_check_key, True)
+                                if not all_stable:
+                                    logger.warning(f"[{channel_name}] ⚠️ Certains fichiers ne sont plus stables, attente...")
+                                    return
+                            
+                            # Marquer que la vérification de stabilité a été faite
+                            setattr(self, stability_check_key, True)
+
+                            # Attendre un peu plus longtemps pour s'assurer que tout est bien initialisé
+                            time.sleep(5)
 
                             # Si la chaîne existe déjà, forcer un redémarrage direct
                             if channel_name in self.manager.channels:
@@ -484,6 +488,7 @@ class FileEventHandler(FileSystemEventHandler):
             max_wait = 60  # Maximum 60 secondes d'attente
             start_time = time.time()
             
+            # Attendre que le dossier ready_to_stream existe
             while time.time() - start_time < max_wait:
                 if not os.path.exists(ready_dir):
                     time.sleep(1)
@@ -507,6 +512,11 @@ class FileEventHandler(FileSystemEventHandler):
                     break
                 
                 time.sleep(1)
+            
+            # Si on n'a pas réussi à avoir des fichiers stables, on abandonne
+            if not all_stable:
+                logger.error(f"[{channel_name}] ❌ Impossible d'avoir des fichiers stables après {max_wait}s")
+                return False
             
             logger.info(f"[{channel_name}] 🔄 Création forcée de la chaîne")
             
@@ -548,8 +558,8 @@ class FileEventHandler(FileSystemEventHandler):
             logger.info(f"[{channel_name}] 🔄 Mise à jour des playlists")
             self._force_master_playlist_update()
             
-            # Attendre un peu pour s'assurer que tout est initialisé
-            time.sleep(2)
+            # Attendre un peu plus longtemps pour s'assurer que tout est bien initialisé
+            time.sleep(5)
             
             # Démarrer le stream une seule fois
             if hasattr(channel, "start_stream"):
@@ -581,9 +591,24 @@ class FileEventHandler(FileSystemEventHandler):
             
             # Récupérer toutes les chaînes actives
             active_channels = []
-            for channel_name, channel in self.manager.channels.items():
-                if hasattr(channel, "ready_for_streaming") and channel.ready_for_streaming:
-                    active_channels.append(channel_name)
+            
+            # Vérification directe des dossiers HLS au lieu d'utiliser ready_for_streaming
+            hls_dir = Path("/app/hls")
+            for channel_dir in hls_dir.iterdir():
+                if channel_dir.is_dir() and (channel_dir / "playlist.m3u8").exists():
+                    channel_name = channel_dir.name
+                    # Vérifier qu'il y a au moins un segment
+                    segments = list(channel_dir.glob("segment_*.ts"))
+                    if segments:
+                        active_channels.append(channel_name)
+                        logger.info(f"✅ Chaîne active détectée: {channel_name} avec {len(segments)} segments")
+            
+            # Si aucune chaîne n'est active selon la méthode directe, essayer la méthode basée sur l'attribut
+            if not active_channels:
+                for channel_name, channel in self.manager.channels.items():
+                    if hasattr(channel, "ready_for_streaming") and channel.ready_for_streaming:
+                        active_channels.append(channel_name)
+                        logger.info(f"✅ Chaîne active selon l'attribut: {channel_name}")
             
             # Trier les chaînes par ordre alphabétique
             active_channels.sort()
@@ -594,27 +619,41 @@ class FileEventHandler(FileSystemEventHandler):
                 content += f'#EXTINF:-1 tvg-id="{channel_name}" tvg-name="{channel_name}",{channel_name}\n'
                 content += f"http://{server_url}/hls/{channel_name}/playlist.m3u8\n"
             
-            # Écrire le contenu dans un fichier temporaire
-            temp_path = f"{playlist_path}.tmp"
-            with open(temp_path, "w", encoding="utf-8") as f:
+            # Log du contenu qui sera écrit
+            logger.info(f"📝 Contenu de la playlist à écrire:\n{content}")
+            
+            # Écrire le contenu directement sans fichier temporaire pour débugger
+            with open(playlist_path, "w", encoding="utf-8") as f:
                 f.write(content)
             
-            # Remplacer l'ancien fichier
-            os.replace(temp_path, playlist_path)
-            
             # S'assurer que le fichier a les bonnes permissions
-            os.chmod(playlist_path, 0o644)
+            os.chmod(playlist_path, 0o777)  # Permissions plus larges pour le débogage
+            
+            # Vérifier que le fichier a bien été écrit
+            if os.path.exists(playlist_path):
+                size = os.path.getsize(playlist_path)
+                logger.info(f"✅ Playlist écrite: {playlist_path}, taille: {size} octets")
+                
+                # Lire le contenu pour vérification
+                with open(playlist_path, "r", encoding="utf-8") as f:
+                    read_content = f.read()
+                    logger.info(f"📄 Contenu lu:\n{read_content}")
+            else:
+                logger.error(f"❌ Fichier non trouvé après écriture: {playlist_path}")
             
             logger.info(f"✅ Playlist mise à jour avec {len(active_channels)} chaînes: {', '.join(active_channels)}")
             
         except Exception as e:
             logger.error(f"❌ Erreur mise à jour playlist: {e}")
+            logger.error(traceback.format_exc())
             # En cas d'erreur, créer une playlist minimale
             try:
                 with open(playlist_path, "w", encoding="utf-8") as f:
                     f.write("#EXTM3U\n")
-            except:
-                pass
+                logger.info(f"✅ Playlist minimale créée en fallback")
+            except Exception as inner_e:
+                logger.error(f"❌ Échec création playlist minimale: {inner_e}")
+                logger.error(traceback.format_exc())
 
     def _force_ffmpeg_start(self, channel_name: str):
         """Force directement le démarrage d'un stream FFmpeg sans attendre l'initialisation complète"""

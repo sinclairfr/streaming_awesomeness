@@ -6,7 +6,7 @@ from pathlib import Path
 from config import logger
 import os
 import signal
-from config import TIMEOUT_NO_VIEWERS, FFMPEG_LOG_LEVEL, logger, WATCHERS_LOG_CYCLE
+from config import FFMPEG_LOG_LEVEL, logger, WATCHERS_LOG_CYCLE
 import random
 
 
@@ -81,18 +81,9 @@ class FFmpegMonitor(threading.Thread):
                 self.last_inspect_time[channel_name] = current_time
 
             # Si on a plusieurs processus OU qu'on a dépassé le temps d'inactivité, on nettoie
-            if len(pids) > 1 or time_since_last_watcher > TIMEOUT_NO_VIEWERS:
-                if len(pids) > 1:
-                    logger.warning(
-                        f"⚠️ {channel_name}: {len(pids)} processus FFmpeg actifs détectés"
-                    )
-                elif time_since_last_watcher > TIMEOUT_NO_VIEWERS:
-                    logger.warning(
-                        f"⚠️ {channel_name}: Processus FFmpeg inactif depuis {time_since_last_watcher:.1f}s, arrêt programmé"
-                    )
-                    # Ajout critique - on arrête le stream directement, sans passer par la fonction  
-                    channel.stop_stream_if_needed()  # AJOUT IMPORTANT
-
+            if len(pids) > 1:  # On ne garde que la vérification des processus multiples
+                logger.warning(f"⚠️ {channel_name}: {len(pids)} processus FFmpeg actifs détectés")
+                
                 # Ajouter un délai aléatoire avant le nettoyage pour éviter les cascades
                 jitter = random.uniform(0.5, 3.0)
                 time.sleep(jitter)
@@ -114,7 +105,6 @@ class FFmpegMonitor(threading.Thread):
         while True:
             try:
                 current_time = time.time()
-                channels_to_stop = []
 
                 # Ajout du health check toutes les 5 minutes
                 if current_time - last_health_check > 300:  # 5 minutes
@@ -132,35 +122,6 @@ class FFmpegMonitor(threading.Thread):
                 if current_time - last_summary_time > summary_cycle:
                     self._log_channels_summary()
                     last_summary_time = current_time
-
-                # Pour chaque chaîne, on vérifie l'inactivité
-                for channel_name, channel in self.channels.items():
-                    if not hasattr(channel, "last_watcher_time"):
-                        continue
-
-                    # On calcule l'inactivité
-                    inactivity_duration = current_time - channel.last_watcher_time
-
-                    # Si inactif depuis plus de TIMEOUT_NO_VIEWERS
-                    if inactivity_duration > TIMEOUT_NO_VIEWERS:
-                        if channel.process_manager.is_running():
-                            logger.warning(
-                                f"[{channel_name}] ⚠️ Stream inactif depuis {inactivity_duration:.1f}s, arrêt programmé"
-                            )
-                            channels_to_stop.append(channel)
-                            
-                            # CORRECTION: Forcer l'arrêt immédiat pour les streams très inactifs
-                            if inactivity_duration > TIMEOUT_NO_VIEWERS * 2:  # Double timeout = forcer l'arrêt
-                                logger.error(
-                                    f"[{channel_name}] 🔥 Inactivité CRITIQUE ({inactivity_duration:.1f}s), arrêt forcé"
-                                )
-                                channel.stop_stream_if_needed()
-
-                # Arrêt des chaînes sans watchers (avec un délai pour éviter les cascades)
-                for i, channel in enumerate(channels_to_stop):
-                    # Ajout d'un petit délai entre les arrêts (0.5s entre chaque)
-                    time.sleep(i * 0.5)
-                    channel.stop_stream_if_needed()
 
                 # Log périodique des watchers actifs (moins fréquent)
                 if current_time - last_log_time > log_cycle:
@@ -183,6 +144,7 @@ class FFmpegMonitor(threading.Thread):
             except Exception as e:
                 logger.error(f"❌ Erreur watchers_loop: {e}")
                 time.sleep(10)
+    
     def _save_stats_periodically(self):
         """Sauvegarde périodiquement les statistiques"""
         if hasattr(self.channels, "stats_collector") and self.channels.stats_collector:
@@ -220,3 +182,19 @@ class FFmpegMonitor(threading.Thread):
         except Exception as e:
             logger.error(f"[{channel_name}] ❌ Erreur vérification santé: {e}")
             return False
+
+    def check_stream_health(self):
+        """Vérifie la santé du stream"""
+        if not self.process:
+            return False
+
+        # Vérifie si le processus est toujours en cours d'exécution
+        if self.process.poll() is not None:
+            logger.error(f"Le processus FFmpeg pour {self.channel_name} s'est terminé avec le code {self.process.returncode}")
+            return False
+
+        # Vérifie les ressources système
+        if not self.check_system_resources():
+            return False
+
+        return True

@@ -5,7 +5,6 @@ from pathlib import Path
 from config import logger
 from typing import Dict, Tuple, List, Set
 import re
-from config import TIMEOUT_NO_VIEWERS
 from watcher_timer import WatcherTimer
 from log_utils import parse_access_log
 

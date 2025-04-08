@@ -77,13 +77,81 @@ class Application:
             setup_log_rotation("/app/logs")
             setup_log_rotation("/app/logs/ffmpeg")
             setup_log_rotation("/app/logs/nginx")
+            
+            # Créer la playlist maître initiale
+            try:
+                # Utiliser notre script dédié
+                logger.info("🔄 Création de la playlist maître initiale...")
+                import subprocess
+                result = subprocess.run(
+                    ["/app/create_master_playlist.py"],
+                    capture_output=True, 
+                    text=True
+                )
+                
+                if result.returncode == 0:
+                    logger.info("✅ Playlist maître initiale créée avec succès")
+                    # Enregistrer les logs du script pour debug
+                    for line in result.stdout.splitlines():
+                        logger.debug(f"📝 [create_master_playlist] {line}")
+                else:
+                    logger.warning("⚠️ Échec création playlist via script, création manuelle")
+                    logger.warning(f"Erreur: {result.stderr}")
+                    
+                    # Création manuelle en fallback
+                    master_playlist = Path("/app/hls/playlist.m3u")
+                    with open(master_playlist, "w", encoding="utf-8") as f:
+                        f.write("#EXTM3U\n# Playlist initiale (fallback)\n")
+                    os.chmod(str(master_playlist), 0o777)
+                    logger.info("✅ Playlist maître minimale créée manuellement")
+            except Exception as e:
+                logger.error(f"❌ Erreur création playlist initiale: {e}")
+                # Dernière tentative
+                try:
+                    with open("/app/hls/playlist.m3u", "w", encoding="utf-8") as f:
+                        f.write("#EXTM3U\n")
+                    os.chmod("/app/hls/playlist.m3u", 0o777)
+                    logger.info("✅ Playlist maître créée en dernier recours")
+                except:
+                    logger.error("❌ Impossible de créer la playlist maître")
+            
+            # Démarrer le watchdog de playlist
+            self._start_playlist_watchdog()
                     
             return True
             
         except Exception as e:
             logger.error(f"Erreur setup: {e}")
             return False
-
+            
+    def _start_playlist_watchdog(self):
+        """Démarre le service de surveillance des playlists en arrière-plan"""
+        try:
+            watchdog_path = "/app/playlist_watchdog.py"
+            if os.path.exists(watchdog_path) and os.access(watchdog_path, os.X_OK):
+                logger.info("🔄 Démarrage du service de surveillance des playlists...")
+                
+                # Démarrer le processus en arrière-plan, détaché, avec redirection stdout/stderr vers un log
+                import subprocess
+                log_file = open("/app/logs/playlist_watchdog.log", "a")
+                
+                process = subprocess.Popen(
+                    [watchdog_path],
+                    stdout=log_file,
+                    stderr=log_file,
+                    start_new_session=True
+                )
+                
+                # Vérifier si le processus a bien démarré
+                if process.poll() is None:
+                    logger.info(f"✅ Service de surveillance des playlists démarré avec PID {process.pid}")
+                else:
+                    logger.error(f"❌ Échec du démarrage du service de surveillance")
+            else:
+                logger.warning(f"⚠️ Script de surveillance non trouvé ou non exécutable: {watchdog_path}")
+        except Exception as e:
+            logger.error(f"❌ Erreur démarrage service de surveillance: {e}")
+            
     def run_main_loop(self):
         """Boucle principale avec gestion des erreurs"""
         if not self.setup():

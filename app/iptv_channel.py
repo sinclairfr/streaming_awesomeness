@@ -16,7 +16,6 @@ from playback_position_manager import PlaybackPositionManager
 import subprocess
 import re
 from config import (
-    TIMEOUT_NO_VIEWERS,
     logger,
     CONTENT_DIR,
     USE_GPU,
@@ -1201,6 +1200,12 @@ class IPTVChannel:
 
     def channel_health_check(self):
         """Checks if the channel is healthy and running, restarts if needed"""
+        # Désactivation temporaire du health check
+        logger.info(f"[{self.name}] ℹ️ Health check temporairement désactivé")
+        return True
+        
+        # Le code original est commenté pour référence
+        """
         try:
             # Increment health check counter for logging
             if not hasattr(self, "_health_check_count"):
@@ -1209,13 +1214,11 @@ class IPTVChannel:
             
             # Ensure startup time is set
             if not hasattr(self, "_startup_time"):
-                # Si _startup_time n'est pas défini, c'est probablement un cas où le health check
-                # est exécuté avant que start_stream n'ait eu le temps de s'initialiser
-                self._startup_time = time.time() - 0.1  # Démarrage récent, mais pas 0
+                self._startup_time = time.time() - 0.1
             
             current_time = time.time()
             startup_duration = current_time - self._startup_time
-            in_startup_period = startup_duration < 10  # 10 secondes de grâce
+            in_startup_period = startup_duration < 60  # Augmenté à 60 secondes de grâce
             
             # Utiliser debug pendant la période de démarrage pour réduire le bruit dans les logs
             if in_startup_period:
@@ -1227,10 +1230,18 @@ class IPTVChannel:
             if not self.process_manager.is_running():
                 logger.warning(f"[{self.name}] ⚠️ Stream process not running but should be (watchers: {getattr(self, 'watchers_count', 0)})")
                 
-                # If we have active watchers, restart the stream
+                # Si on a des watchers actifs, on attend un peu plus avant de redémarrer
                 if hasattr(self, "watchers_count") and self.watchers_count > 0:
-                    logger.info(f"[{self.name}] 🔄 Auto-restarting stream due to active watchers ({self.watchers_count})")
-                    return self.start_stream()
+                    # Attendre 60 secondes supplémentaires avant de redémarrer
+                    if not hasattr(self, "_process_stop_time"):
+                        self._process_stop_time = current_time
+                        logger.info(f"[{self.name}] ℹ️ Premier arrêt détecté, attente de 60s avant redémarrage")
+                        return True
+                    
+                    if current_time - self._process_stop_time > 60:  # Augmenté à 60s
+                        logger.info(f"[{self.name}] 🔄 Redémarrage après 60s d'attente")
+                        return self.start_stream()
+                    return True
                 return False
             
             # 2. Check if HLS directory has segments and they're recent
@@ -1266,10 +1277,17 @@ class IPTVChannel:
                     logger.debug(f"[{self.name}] ℹ️ Still in startup grace period ({startup_duration:.1f}s), waiting for segments...")
                     return True
                 
-                # If we have active watchers and outside grace period, restart the stream
+                # Si on a des watchers actifs, on attend plus longtemps avant de redémarrer
                 if hasattr(self, "watchers_count") and self.watchers_count > 0:
-                    logger.info(f"[{self.name}] 🔄 Auto-restarting stream due to missing segments")
-                    return self.start_stream()
+                    if not hasattr(self, "_no_segments_time"):
+                        self._no_segments_time = current_time
+                        logger.info(f"[{self.name}] ℹ️ Premier manque de segments détecté, attente de 120s avant redémarrage")
+                        return True
+                    
+                    if current_time - self._no_segments_time > 120:  # Augmenté à 120s
+                        logger.info(f"[{self.name}] 🔄 Redémarrage après 120s sans segments")
+                        return self.start_stream()
+                    return True
                 return False
 
             # 3. Check for segment continuity and missing segments
@@ -1294,15 +1312,22 @@ class IPTVChannel:
                     
                     # Si des segments référencés sont manquants, signaler l'anomalie
                     if missing_segments and len(missing_segments) > 0:
-                        # Si plus de 30% des segments sont manquants, c'est un problème critique
+                        # Si plus de 70% des segments sont manquants, c'est un problème critique
                         missing_percent = (len(missing_segments) / len(referenced_segments)) * 100
                         logger.warning(f"[{self.name}] 🚨 Segments manquants: {len(missing_segments)}/{len(referenced_segments)} ({missing_percent:.1f}%)")
                         
-                        if missing_percent > 30 and hasattr(self, "watchers_count") and self.watchers_count > 0:
-                            logger.error(f"[{self.name}] ❌ Trop de segments manquants ({missing_percent:.1f}%), redémarrage du stream")
-                            self.stop_stream_if_needed()
-                            time.sleep(2)
-                            return self.start_stream()
+                        if missing_percent > 70 and hasattr(self, "watchers_count") and self.watchers_count > 0:
+                            if not hasattr(self, "_high_missing_segments_time"):
+                                self._high_missing_segments_time = current_time
+                                logger.info(f"[{self.name}] ℹ️ Premier taux élevé de segments manquants détecté, attente de 180s avant redémarrage")
+                                return True
+                            
+                            if current_time - self._high_missing_segments_time > 180:  # Augmenté à 180s
+                                logger.error(f"[{self.name}] ❌ Trop de segments manquants ({missing_percent:.1f}%), redémarrage du stream")
+                                self.stop_stream_if_needed()
+                                time.sleep(2)
+                                return self.start_stream()
+                            return True
                 except Exception as e:
                     logger.error(f"[{self.name}] ❌ Erreur analyse playlist: {e}")
             
@@ -1312,7 +1337,6 @@ class IPTVChannel:
                 segment_numbers = []
                 for seg in segments:
                     try:
-                        # Extract number from filename (e.g., "segment_123.ts" -> 123)
                         num = int(seg.stem.split('_')[1])
                         segment_numbers.append((num, seg))
                     except (ValueError, IndexError):
@@ -1331,7 +1355,7 @@ class IPTVChannel:
                         current_num = segment_numbers[i][0]
                         prev_num = segment_numbers[i-1][0]
                         gap = current_num - prev_num
-                        if gap > 2:  # Considérer un saut si l'écart est > 2
+                        if gap > 5:  # Augmenté à 5 pour être plus tolérant
                             segment_jumps.append((prev_num, current_num, gap))
                     
                     # Si on détecte des sauts importants dans la numérotation des segments récents
@@ -1339,15 +1363,22 @@ class IPTVChannel:
                         jump_str = ", ".join([f"{prev}->{curr} (gap:{gap})" for prev, curr, gap in segment_jumps])
                         logger.warning(f"[{self.name}] 🚨 Sauts de segments détectés: {jump_str}")
                         
-                        # Si on a des watchers et des sauts importants, redémarrer
+                        # Si on a des watchers et des sauts importants, redémarrer après un délai
                         if hasattr(self, "watchers_count") and self.watchers_count > 0:
                             # Vérifier si les sauts sont récents (parmi les derniers segments)
-                            recent_jumps = [j for j in segment_jumps if j[1] >= latest_num - 10]
+                            recent_jumps = [j for j in segment_jumps if j[1] >= latest_num - 30]  # Augmenté à 30 segments
                             if recent_jumps:
-                                logger.error(f"[{self.name}] ❌ Sauts récents détectés, redémarrage du stream")
-                                self.stop_stream_if_needed()
-                                time.sleep(2)
-                                return self.start_stream()
+                                if not hasattr(self, "_segment_jumps_time"):
+                                    self._segment_jumps_time = current_time
+                                    logger.info(f"[{self.name}] ℹ️ Premier saut de segments détecté, attente de 180s avant redémarrage")
+                                    return True
+                                
+                                if current_time - self._segment_jumps_time > 180:  # Augmenté à 180s
+                                    logger.error(f"[{self.name}] ❌ Sauts récents persistants détectés, redémarrage du stream")
+                                    self.stop_stream_if_needed()
+                                    time.sleep(2)
+                                    return self.start_stream()
+                                return True
                     
                     # Check if we have a reasonable number of segments
                     if len(segment_numbers) >= 2:
@@ -1368,29 +1399,36 @@ class IPTVChannel:
                         segment_age = current_time - latest_segment.stat().st_mtime
                     
                     # More lenient threshold during startup
-                    threshold = 60 if startup_duration < 60 else 120
+                    threshold = 180 if startup_duration < 180 else 300  # Augmenté à 180s/300s
                     
                     if segment_age > threshold:
                         logger.warning(f"[{self.name}] ⚠️ Segments too old (last: {segment_age:.1f}s ago, threshold: {threshold}s)")
                         
                         # During startup grace period, be more lenient
-                        if startup_duration < 120:  # Extended from 60s to 120s
+                        if startup_duration < 300:  # Augmenté à 300s
                             logger.info(f"[{self.name}] ℹ️ Still in startup grace period ({startup_duration:.1f}s), waiting for segments...")
                             return True
                         
                         # Restart if there are watchers and outside grace period
-                        # Ajout d'une vérification supplémentaire: uniquement redémarrer si les segments sont vraiment vieux
-                        if hasattr(self, "watchers_count") and self.watchers_count > 0 and segment_age > threshold * 1.5:  # 50% plus vieux que le seuil
-                            logger.info(f"[{self.name}] 🔄 Auto-restarting stream due to stale segments")
-                            self.stop_stream_if_needed()
-                            time.sleep(2)
-                            return self.start_stream()
+                        if hasattr(self, "watchers_count") and self.watchers_count > 0:
+                            if not hasattr(self, "_old_segments_time"):
+                                self._old_segments_time = current_time
+                                logger.info(f"[{self.name}] ℹ️ Premier segments vieux détectés, attente de 300s avant redémarrage")
+                                return True
+                            
+                            if current_time - self._old_segments_time > 300:  # Augmenté à 300s
+                                logger.info(f"[{self.name}] 🔄 Redémarrage après 300s de segments vieux")
+                                self.stop_stream_if_needed()
+                                time.sleep(2)
+                                return self.start_stream()
+                            return True
             
             return True
             
         except Exception as e:
             logger.error(f"[{self.name}] ❌ Error in health check: {e}")
             return False
+        """
 
     def _verify_processor(self) -> bool:
         """Vérifie que le VideoProcessor est correctement initialisé"""
@@ -1826,13 +1864,6 @@ class IPTVChannel:
             logger.info(f"$ {' '.join(command)}")
             logger.info("=" * 80)
             
-            # Variables pour le monitoring
-            start_time = time.time()
-            last_progress_time = start_time
-            last_segment_count = 0
-            stall_detected = False
-            stall_start_time = None
-            
             # Démarrer le processus avec redirection des logs
             with open(ffmpeg_log, "a") as log_file:
                 self._current_process = subprocess.Popen(
@@ -1843,16 +1874,8 @@ class IPTVChannel:
                     bufsize=1
                 )
                 
-                # Boucle de lecture des logs en temps réel avec monitoring
+                # Boucle de lecture des logs en temps réel
                 while self._current_process.poll() is None:
-                    current_time = time.time()
-                    
-                    # Vérifier le timeout global (5 minutes)
-                    if current_time - start_time > 300:
-                        logger.error(f"[{self.name}] ❌ Timeout global atteint (5 minutes)")
-                        self._current_process.terminate()
-                        return False
-                    
                     # Lire stderr pour les logs FFmpeg
                     stderr_line = self._current_process.stderr.readline()
                     if stderr_line:
@@ -1864,61 +1887,6 @@ class IPTVChannel:
                             logger.error(f"[{self.name}] FFmpeg: {stderr_line.strip()}")
                         elif "warning" in stderr_line.lower():
                             logger.warning(f"[{self.name}] FFmpeg: {stderr_line.strip()}")
-                    
-                    # Vérifier la progression toutes les 5 secondes
-                    if current_time - last_progress_time >= 5:
-                        # Compter les segments actuels
-                        current_segments = len(list(hls_dir.glob("segment_*.ts")))
-                        
-                        # Détecter un stall si pas de nouveaux segments
-                        if current_segments == last_segment_count:
-                            # Ne considérer comme stall que si on a déjà généré un nombre raisonnable de segments
-                            # et éviter les faux positifs au début du streaming
-                            if current_segments >= 5:  # Augmenté à 5 segments minimum (était 3)
-                                if not stall_detected:
-                                    stall_detected = True
-                                    stall_start_time = current_time
-                                    # Utiliser debug au lieu de warning pour réduire le bruit dans les logs
-                                    logger.debug(f"[{self.name}] ℹ️ Stall potentiel dans la génération des segments")
-                                
-                                # Beaucoup plus tolérant: augmenter le délai de 60s à 180s (3 minutes)
-                                if current_time - stall_start_time > 180:
-                                    # Vérifier l'activité des viewers avant de considérer comme un vrai problème
-                                    has_viewers = hasattr(self, "watchers_count") and self.watchers_count > 0
-                                    
-                                    if has_viewers:
-                                        logger.error(f"[{self.name}] ❌ Stall prolongé détecté (180s) avec viewers actifs, redémarrage")
-                                        self._current_process.terminate()
-                                        return False
-                                    else:
-                                        # Si pas de viewers, être encore plus tolérant
-                                        if current_time - stall_start_time > 300:  # 5 minutes
-                                            logger.warning(f"[{self.name}] ⚠️ Stall très prolongé sans viewers (300s), redémarrage préventif")
-                                            self._current_process.terminate()
-                                            return False
-                                        else:
-                                            # Juste notifier mais continuer l'exécution sans redémarrer
-                                            logger.info(f"[{self.name}] ℹ️ Stall prolongé (180s) mais sans viewers, on attend encore")
-                            else:
-                                # Pour les streams qui démarrent, être beaucoup plus patient
-                                if not stall_detected:
-                                    stall_detected = True
-                                    stall_start_time = current_time
-                                # Délai encore plus long pour les débuts de stream (300s = 5 minutes)
-                                elif current_time - stall_start_time > 300:
-                                    logger.warning(f"[{self.name}] ⚠️ Démarrage très lent, segments insuffisants après 5 minutes")
-                                    self._current_process.terminate()
-                                    return False
-                        else:
-                            # Si on a généré des nouveaux segments, on réinitialise la détection de stall
-                            stall_detected = False
-                            stall_start_time = None
-                        
-                        last_segment_count = current_segments
-                        last_progress_time = current_time
-                        
-                        # Log de progression
-                        logger.debug(f"[{self.name}] 📊 Progression: {current_segments} segments générés")
                 
                 # Vérifier le code de retour
                 return_code = self._current_process.poll() or 0
