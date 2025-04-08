@@ -153,11 +153,11 @@ class FFmpegCommandBuilder:
         params.extend(
             [
                 "-thread_queue_size",
-                "1024",  # Réduit pour moins de latence
+                "8192",  # Augmenté pour meilleure stabilité
                 "-analyzeduration",
-                "5M",  # Réduit pour un démarrage plus rapide
+                "10M",  # Augmenté pour une analyse plus précise
                 "-probesize",
-                "5M",  # Réduit pour un démarrage plus rapide
+                "10M",  # Augmenté pour une meilleure détection
             ]
         )
 
@@ -165,9 +165,9 @@ class FFmpegCommandBuilder:
             [
                 "-re",  # Lecture en temps réel
                 "-fflags",
-                "+genpts+igndts+discardcorrupt+autobsf",
+                "+genpts+igndts+discardcorrupt+autobsf+nobuffer",  # Ajout nobuffer pour réduire la latence
                 "-threads",
-                "2",  # Réduit pour plus de stabilité
+                "4",  # Augmenté pour meilleures performances
                 "-avoid_negative_ts",
                 "make_zero",
             ]
@@ -229,13 +229,13 @@ class FFmpegCommandBuilder:
             "-map",
             "0:a:0?",
             "-max_muxing_queue_size",
-            "1024",  # Réduit pour moins de latence
+            "4096",  # Augmenté pour éviter les blocages
             "-fps_mode",
             "passthrough",
             "-fflags",
-            "+genpts+igndts+discardcorrupt+autobsf",
+            "+genpts+igndts+discardcorrupt+autobsf+nobuffer",  # Ajout nobuffer pour réduire la latence
             "-thread_queue_size",
-            "1024",  # Réduit pour moins de latence
+            "8192",  # Augmenté pour meilleure stabilité
             "-avoid_negative_ts",
             "make_zero",
         ]
@@ -260,11 +260,11 @@ class FFmpegCommandBuilder:
                 "-map",
                 "0:a:0?",
                 "-max_muxing_queue_size",
-                "4096",  # Buffer plus grand pour MKV
+                "8192",  # Augmenté encore plus pour MKV
                 "-fps_mode",
                 "passthrough",
                 "-fflags",
-                "+genpts+igndts+discardcorrupt",
+                "+genpts+igndts+discardcorrupt+nobuffer",  # Ajout nobuffer pour réduire la latence
                 "-thread_queue_size",
                 "16384",  # Queue size encore plus grande pour MKV
                 "-avoid_negative_ts",
