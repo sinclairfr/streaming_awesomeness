@@ -268,26 +268,76 @@ class FFmpegProcessManager:
     def _monitor_process(self, hls_dir):
         """Surveille le processus FFmpeg en continu"""
         try:
+            # Initialisation des variables de surveillance
+            last_health_check = time.time()
+            health_check_interval = 30  # Vérification de santé toutes les 30 secondes
+            last_segment_check = time.time()
+            segment_check_interval = 10  # Vérification des segments toutes les 10 secondes
+            
             while not self.stop_monitoring.is_set():
+                current_time = time.time()
+                
+                # 1. Vérification de base du processus
                 if not self.process or not self.process.poll() is None:
-                    # Le processus est mort
                     return_code = self.process.poll() if self.process else -999
+                    logger.error(f"[{self.channel_name}] ❌ Processus FFmpeg arrêté (code: {return_code})")
                     if self.on_process_died:
-                        # On passe le code de retour comme argument
                         self.on_process_died(return_code)
                     break
 
-                # Mise à jour de la position de lecture
+                # 2. Vérification périodique de la santé du stream
+                if current_time - last_health_check >= health_check_interval:
+                    if not self.check_stream_health():
+                        logger.warning(f"[{self.channel_name}] ⚠️ Problème de santé détecté")
+                        if self.on_process_died:
+                            self.on_process_died(-2)  # Code spécial pour problème de santé
+                        break
+                    last_health_check = current_time
+
+                # 3. Vérification des segments HLS
+                if current_time - last_segment_check >= segment_check_interval:
+                    try:
+                        segments = list(Path(hls_dir).glob("*.ts"))
+                        if segments:
+                            # Vérifier l'âge du dernier segment
+                            latest_segment = max(segments, key=lambda s: s.stat().st_mtime)
+                            segment_age = current_time - latest_segment.stat().st_mtime
+                            
+                            # Seuil plus tolérant pendant le démarrage
+                            startup_duration = current_time - getattr(self, "_startup_time", 0)
+                            threshold = 180 if startup_duration < 180 else 300
+                            
+                            if segment_age > threshold:
+                                logger.warning(f"[{self.channel_name}] ⚠️ Dernier segment trop vieux ({segment_age:.1f}s)")
+                                if self.on_process_died:
+                                    self.on_process_died(-3)  # Code spécial pour segments trop vieux
+                                break
+                    except Exception as e:
+                        logger.error(f"[{self.channel_name}] ❌ Erreur vérification segments: {e}")
+                    last_segment_check = current_time
+
+                # 4. Mise à jour de la position de lecture
                 if self.on_position_update:
                     self.on_position_update(self.playback_offset)
 
+                # 5. Vérification des ressources système
+                try:
+                    memory = psutil.virtual_memory()
+                    if memory.percent > 90:
+                        logger.error(f"[{self.channel_name}] ❌ Mémoire système critique: {memory.percent}%")
+                        if self.on_process_died:
+                            self.on_process_died(-4)  # Code spécial pour mémoire critique
+                        break
+                except Exception as e:
+                    logger.error(f"[{self.channel_name}] ❌ Erreur vérification mémoire: {e}")
+
+                # Pause entre les vérifications
                 time.sleep(1)
 
         except Exception as e:
             logger.error(f"[{self.channel_name}] ❌ Erreur surveillance processus: {e}")
             if self.on_process_died:
-                # On passe un code d'erreur -1 en cas d'exception
-                self.on_process_died(-1)
+                self.on_process_died(-1)  # Code d'erreur général
 
     def set_total_duration(self, duration):
         """
@@ -397,4 +447,118 @@ class FFmpegProcessManager:
             
         except Exception as e:
             logger.error(f"[{self.channel_name}] ❌ Erreur lors du redémarrage: {e}")
+            return False
+
+    def check_stream_health(self) -> bool:
+        """
+        Vérifie la santé du stream et retourne True si tout est OK, False sinon.
+        Cette méthode centralise toute la logique de vérification de la santé du stream.
+        """
+        try:
+            # 1. Vérifier si le processus est en cours d'exécution
+            if not self.is_running():
+                logger.warning(f"[{self.channel_name}] ⚠️ Processus FFmpeg arrêté")
+                return False
+
+            # 2. Vérifier les ressources système
+            if not self.check_system_resources():
+                logger.warning(f"[{self.channel_name}] ⚠️ Problème de ressources système")
+                return False
+
+            # 3. Vérifier la présence et la validité des segments HLS
+            hls_dir = Path(f"/app/hls/{self.channel_name}")
+            if not hls_dir.exists():
+                logger.error(f"[{self.channel_name}] ❌ Dossier HLS introuvable")
+                return False
+
+            # Vérifier la playlist
+            playlist_path = hls_dir / "playlist.m3u8"
+            if not playlist_path.exists():
+                logger.error(f"[{self.channel_name}] ❌ playlist.m3u8 introuvable")
+                return False
+
+            # Vérifier les segments
+            segments = list(hls_dir.glob("*.ts"))
+            if not segments:
+                logger.warning(f"[{self.channel_name}] ⚠️ Aucun segment trouvé")
+                return False
+
+            # 4. Vérifier l'âge des segments
+            current_time = time.time()
+            latest_segment = max(segments, key=lambda s: s.stat().st_mtime)
+            segment_age = current_time - latest_segment.stat().st_mtime
+
+            # Seuil plus tolérant pendant la période de démarrage
+            startup_duration = current_time - getattr(self, "_startup_time", 0)
+            threshold = 180 if startup_duration < 180 else 300  # 3 minutes pendant le démarrage, 5 minutes après
+
+            if segment_age > threshold:
+                logger.warning(f"[{self.channel_name}] ⚠️ Segments trop vieux (dernier: {segment_age:.1f}s)")
+                return False
+
+            # 5. Vérifier la continuité des segments
+            segment_numbers = []
+            for seg in segments:
+                try:
+                    num = int(seg.stem.split('_')[1])
+                    segment_numbers.append((num, seg))
+                except (ValueError, IndexError):
+                    continue
+
+            if segment_numbers:
+                segment_numbers.sort(key=lambda x: x[0])
+                for i in range(1, len(segment_numbers)):
+                    current_num = segment_numbers[i][0]
+                    prev_num = segment_numbers[i-1][0]
+                    gap = current_num - prev_num
+                    if gap > 5:  # Tolérance de 5 segments manquants
+                        logger.warning(f"[{self.channel_name}] ⚠️ Saut de segments détecté: {prev_num} -> {current_num}")
+                        return False
+
+            # 6. Vérifier les erreurs dans les logs
+            if not self._check_ffmpeg_log():
+                logger.error(f"[{self.channel_name}] ❌ Erreurs détectées dans les logs FFmpeg")
+                return False
+
+            return True
+
+        except Exception as e:
+            logger.error(f"[{self.channel_name}] ❌ Erreur vérification santé: {e}")
+            return False
+
+    def _check_ffmpeg_log(self) -> bool:
+        """Vérifie les logs FFmpeg pour détecter des erreurs"""
+        try:
+            log_path = Path(f"/app/logs/ffmpeg/{self.channel_name}_ffmpeg.log")
+            if not log_path.exists():
+                return True  # Pas de log = pas d'erreur
+
+            with open(log_path, "r") as f:
+                content = f.read()
+                # Détecter les erreurs critiques
+                if "error" in content.lower() or "failed" in content.lower():
+                    return False
+            return True
+        except Exception as e:
+            logger.error(f"[{self.channel_name}] ❌ Erreur lecture log: {e}")
+            return False
+
+    def check_system_resources(self) -> bool:
+        """Vérifie les ressources système"""
+        try:
+            # Vérifier la mémoire disponible
+            memory = psutil.virtual_memory()
+            if memory.percent > 90:  # 90% d'utilisation max
+                logger.warning(f"[{self.channel_name}] ⚠️ Mémoire système critique: {memory.percent}%")
+                return False
+
+            # Vérifier l'espace disque
+            disk = psutil.disk_usage('/')
+            if disk.percent > 90:  # 90% d'utilisation max
+                logger.warning(f"[{self.channel_name}] ⚠️ Espace disque critique: {disk.percent}%")
+                return False
+
+            return True
+        except Exception as e:
+            logger.error(f"[{self.channel_name}] ❌ Erreur vérification ressources: {e}")
             return False

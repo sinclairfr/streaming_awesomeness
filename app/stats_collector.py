@@ -3,6 +3,7 @@ import os
 import json
 import time
 import threading
+import re
 from pathlib import Path
 from config import logger
 
@@ -704,3 +705,60 @@ class StatsCollector:
             logger.error(f"❌ Erreur mise à jour stats quotidiennes: {e}")
             import traceback
             logger.error(traceback.format_exc())
+
+    def handle_segment_request(self, channel, ip, line, user_agent):
+        """Gère une requête de segment et met à jour les statistiques"""
+        with self.lock:
+            try:
+                # Identifier le segment
+                segment_match = re.search(r"segment_(\d+)\.ts", line)
+                segment_id = segment_match.group(1) if segment_match else "unknown"
+
+                # Ajouter du temps de visionnage
+                segment_duration = 4.0  # secondes par segment
+                self.add_watch_time(channel, ip, segment_duration)
+                
+                # Mettre à jour les stats utilisateur
+                if user_agent:
+                    self.update_user_stats(ip, channel, segment_duration, user_agent)
+
+                # Mettre à jour les stats de segments
+                self.update_segment_stats(channel, segment_id, 0)  # Taille inconnue pour l'instant
+
+                logger.debug(f"[{channel}] 📊 Segment {segment_id} traité pour {ip}")
+
+            except Exception as e:
+                logger.error(f"❌ Erreur traitement segment: {e}")
+
+    def handle_playlist_request(self, channel, ip, elapsed, user_agent):
+        """Gère une requête de playlist et met à jour les statistiques"""
+        with self.lock:
+            try:
+                # Ajouter du temps de visionnage
+                self.add_watch_time(channel, ip, elapsed)
+                
+                # Mettre à jour les stats utilisateur
+                if user_agent:
+                    self.update_user_stats(ip, channel, elapsed, user_agent)
+
+                logger.debug(f"[{channel}] 📊 Playlist traitée pour {ip} ({elapsed:.1f}s)")
+
+            except Exception as e:
+                logger.error(f"❌ Erreur traitement playlist: {e}")
+
+    def handle_channel_change(self, ip, old_channel, new_channel):
+        """Gère un changement de chaîne et met à jour les statistiques"""
+        with self.lock:
+            try:
+                # Mettre à jour les stats de l'ancienne chaîne
+                if old_channel:
+                    self.update_channel_watchers(old_channel, 0)  # Réduire le compteur
+
+                # Mettre à jour les stats de la nouvelle chaîne
+                if new_channel:
+                    self.update_channel_watchers(new_channel, 1)  # Augmenter le compteur
+
+                logger.debug(f"🔄 Changement de chaîne traité: {ip} de {old_channel} vers {new_channel}")
+
+            except Exception as e:
+                logger.error(f"❌ Erreur traitement changement de chaîne: {e}")

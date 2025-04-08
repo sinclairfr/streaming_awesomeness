@@ -14,7 +14,8 @@ from pathlib import Path
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 import threading
-from file_event_handler import FileEventHandler, ReadyContentHandler
+from file_event_handler import FileEventHandler
+from ready_content_handler import ReadyContentHandler
 from hls_cleaner import HLSCleaner
 from client_monitor import ClientMonitor
 from resource_monitor import ResourceMonitor
@@ -54,6 +55,14 @@ class IPTVManager:
         except Exception as e:
             logger.error(f"❌ Error initializing ReadyContentHandler: {e}")
             self.ready_event_handler = None
+        
+        # Initialize file_event_handler
+        try:
+            self.file_event_handler = FileEventHandler(self)
+            logger.info("✅ FileEventHandler initialized")
+        except Exception as e:
+            logger.error(f"❌ Error initializing FileEventHandler: {e}")
+            self.file_event_handler = None
         
         # Configuration
         self.content_dir = content_dir
@@ -367,11 +376,11 @@ class IPTVManager:
                 # Récupérer la liste des watchers actifs
                 active_watchers = self._active_watchers.get(channel_name, set())
                 
-                # Mise à jour du statut
+                # Mise à jour du statut avec le nouveau nombre de viewers
                 self.channel_status.update_channel(
                     channel_name, 
                     is_active=is_active,
-                    viewers=watcher_count,
+                    viewers=watcher_count,  # Utiliser directement watcher_count
                     streaming=is_streaming,
                     watchers=list(active_watchers)
                 )

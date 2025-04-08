@@ -1483,33 +1483,19 @@ class IPTVChannel:
             logger.error(f"[{self.name}] Erreur lors de la gestion de la mort du processus: {e}")
 
     def _check_stream_health(self) -> bool:
-        """Vérifie la santé du stream"""
+        """
+        Vérifie la santé du stream en utilisant FFmpegProcessManager.
+        Retourne True si le stream est sain, False sinon.
+        """
         try:
-            if not self.process_manager.is_running():
-                if self.add_error("process_not_running"):
-                    logger.warning(f"[{self.name}] Processus FFmpeg arrêté, redémarrage nécessaire")
-                    self._restart_stream()
+            if not self.ffmpeg_manager:
+                logger.error(f"[{self.name}] ❌ FFmpegProcessManager non initialisé")
                 return False
 
-            # Vérifier les erreurs critiques
-            if self.has_critical_errors():
-                logger.error(f"[{self.name}] Erreurs critiques détectées")
-                self.stop_stream()
-                return False
-
-            # Vérifier la continuité du stream
-            if not self._check_stream_continuity():
-                if self.add_error("stream_discontinuity"):
-                    logger.warning(f"[{self.name}] Discontinuité détectée, redémarrage nécessaire")
-                    self._restart_stream()
-                return False
-
-            # Si tout est OK, reset les erreurs
-            self.reset_errors()
-            return True
+            return self.ffmpeg_manager.check_stream_health()
 
         except Exception as e:
-            logger.error(f"[{self.name}] ❌ Erreur check santé: {e}")
+            logger.error(f"[{self.name}] ❌ Erreur vérification santé: {e}")
             return False
 
     def _handle_segment_created(self, segment_path, size):

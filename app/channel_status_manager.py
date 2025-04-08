@@ -57,10 +57,10 @@ class ChannelStatusManager:
     def _save_status(self):
         """Save current status to file"""
         try:
-            # Create a temporary file
+            # Create a temporary file in the same directory
             temp_file = f"{self.status_file}.tmp"
             
-            # Write to temporary file
+            # Write to temporary file with proper permissions
             with open(temp_file, 'w') as f:
                 json.dump({
                     'channels': self.channels,
@@ -68,10 +68,10 @@ class ChannelStatusManager:
                     'active_viewers': self.active_viewers
                 }, f, indent=2)
             
-            # Give permissions
+            # Set permissions before atomic rename
             os.chmod(temp_file, 0o666)
             
-            # Rename atomically
+            # Atomic rename to ensure file integrity
             os.replace(temp_file, self.status_file)
             
             # Ensure final file has correct permissions
@@ -80,6 +80,12 @@ class ChannelStatusManager:
             return True
         except Exception as e:
             logger.error(f"Error saving status file: {e}")
+            # Try to clean up temp file if it exists
+            try:
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
+            except:
+                pass
             return False
     
     def update_channel(self, channel_name: str, is_active: bool = False, viewers: int = 0, streaming: bool = False, watchers: list = None):
@@ -94,24 +100,40 @@ class ChannelStatusManager:
             watchers: List of current watchers
         """
         with self._lock:
-            if channel_name not in self.channels:
-                self.channels[channel_name] = {}
+            # Check if we need to update at all
+            current_channel = self.channels.get(channel_name, {})
+            current_viewers = current_channel.get('viewers', 0)
+            current_active = current_channel.get('active', False)
+            current_streaming = current_channel.get('streaming', False)
+            current_watchers = current_channel.get('watchers', [])
             
-            self.channels[channel_name].update({
-                'active': is_active,
-                'streaming': streaming,
-                'viewers': viewers,
-                'watchers': watchers or []
-            })
+            # Only update if there are actual changes
+            if (viewers != current_viewers or 
+                is_active != current_active or 
+                streaming != current_streaming or 
+                (watchers is not None and set(watchers) != set(current_watchers))):
+                
+                if channel_name not in self.channels:
+                    self.channels[channel_name] = {}
+                
+                self.channels[channel_name].update({
+                    'active': is_active,
+                    'streaming': streaming,
+                    'viewers': viewers,
+                    'watchers': watchers or []
+                })
+                
+                self.last_updated = int(time.time())
+                
+                # Update total active viewers
+                self.active_viewers = sum(ch.get('viewers', 0) for ch in self.channels.values())
+                
+                # Save immediately only if there were changes
+                self._save_status()
+                
+                return True
             
-            self.last_updated = int(time.time())
-            
-            # Update total active viewers
-            self.active_viewers = sum(ch.get('viewers', 0) for ch in self.channels.values())
-            
-            # Don't save here - let the update loop handle it
-            # This prevents constant file writes
-            return True
+            return False
     
     def update_all_channels(self, channels_dict):
         """
@@ -165,11 +187,7 @@ class ChannelStatusManager:
             import traceback
             logger.error(traceback.format_exc())
             return False
-    
-    def get_status_data(self):
-        """Get a copy of the current status data"""
-        with self._lock:
-            return dict(self.channels)
+
     
     def _update_loop(self):
         """Background thread to periodically update status file"""
