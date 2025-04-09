@@ -48,12 +48,12 @@ class FFmpegCommandBuilder:
                 "-loglevel", "info",
                 "-y",
                 # Paramètres d'entrée optimisés
-                "-thread_queue_size", "4096",  # Réduit pour plus de stabilité
-                "-analyzeduration", "5M",      # Réduit pour un démarrage plus rapide
-                "-probesize", "5M",            # Réduit pour un démarrage plus rapide
+                "-thread_queue_size", "8192",  # Augmenté pour plus de stabilité
+                "-analyzeduration", "10M",     # Augmenté pour une meilleure détection
+                "-probesize", "10M",           # Augmenté pour une meilleure détection
                 "-re",  # Lecture en temps réel
-                "-fflags", "+genpts+igndts+discardcorrupt",  # Simplifié
-                "-threads", "2",               # Réduit pour plus de stabilité
+                "-fflags", "+genpts+igndts+discardcorrupt+autobsf+nobuffer",  # Ajout nobuffer pour réduire la latence
+                "-threads", "4",               # Augmenté pour meilleures performances
                 "-avoid_negative_ts", "make_zero",
             ]
 
@@ -71,22 +71,22 @@ class FFmpegCommandBuilder:
                 "-sn", "-dn",
                 "-map", "0:v:0",
                 "-map", "0:a:0?",
-                "-max_muxing_queue_size", "2048",  # Réduit pour plus de stabilité
+                "-max_muxing_queue_size", "4096",  # Augmenté pour plus de stabilité
                 "-fps_mode", "passthrough",
             ])
 
             # Paramètres HLS optimisés
             command.extend([
                 "-f", "hls",
-                "-hls_time", "2",
-                "-hls_list_size", "6",        # Réduit pour plus de stabilité
-                "-hls_delete_threshold", "1",  # Réduit pour plus de stabilité
-                "-hls_flags", "delete_segments+append_list+independent_segments",  # Simplifié
-                "-hls_allow_cache", "1",
+                "-hls_time", "1",              # Réduit pour moins de latence
+                "-hls_list_size", "5",         # Réduit pour moins de latence
+                "-hls_delete_threshold", "1",  # Réduit pour moins de latence
+                "-hls_flags", "delete_segments+append_list+independent_segments+omit_endlist+discont_start+program_date_time",
+                "-hls_allow_cache", "0",       # Désactivé pour moins de latence
                 "-start_number", "0",
                 "-hls_segment_type", "mpegts",
-                "-max_delay", "1000000",       # Réduit pour plus de stabilité
-                "-hls_init_time", "1",
+                "-max_delay", "500000",        # Réduit pour moins de latence
+                "-hls_init_time", "0.5",       # Réduit pour générer la playlist plus rapidement
                 "-hls_segment_filename", f"{output_dir}/segment_%d.ts",
                 f"{output_dir}/playlist.m3u8"
             ])

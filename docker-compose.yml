@@ -39,7 +39,7 @@ services:
       - "80:80"
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:rw
-      - ./app/hls:/hls:rw
+      - ./app/hls:/app/hls:rw
       - ./app/logs/nginx:/var/log/nginx:rw
     tmpfs:
       - /var/run/nginx
