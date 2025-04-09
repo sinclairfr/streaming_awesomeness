@@ -71,6 +71,19 @@ class ClientMonitor(threading.Thread):
                 # Utiliser le TimeTracker pour le nettoyage
                 self.time_tracker.cleanup_inactive_watchers()
                 
+                # Forcer la mise à jour des compteurs pour toutes les chaînes
+                active_channels = {}
+                for ip, data in self.watchers.items():
+                    channel = data.get("current_channel")
+                    if channel and channel not in active_channels:
+                        active_channels[channel] = set()
+                    if channel:
+                        active_channels[channel].add(ip)
+                
+                # Mettre à jour chaque chaîne
+                for channel in active_channels:
+                    self._update_channel_watchers_count(channel)
+                
                 # Log périodique des watchers actifs
                 current_time = time.time()
                 if current_time - self.last_cleanup_log > 30:
@@ -126,8 +139,14 @@ class ClientMonitor(threading.Thread):
             # Parse la ligne
             ip, channel, request_type, is_valid, user_agent = self._parse_access_log(line)
 
+            # Log plus détaillé pour le diagnostic
+            if is_valid and channel and "/hls/" in line:
+                logger.info(f"📝 TRAITEMENT LIGNE: ip={ip}, channel={channel}, type={request_type}, valid={is_valid}")
+
             # Si la ligne n'est pas valide ou pas de channel, on ignore
             if not is_valid or not channel:
+                if "/hls/" in line and not is_valid:
+                    logger.warning(f"⚠️ Ligne non valide ignorée: {line[:100]}...")
                 return
 
             # Si c'est la playlist principale, on ignore
@@ -178,6 +197,8 @@ class ClientMonitor(threading.Thread):
                     "last_activity": current_time
                 }
                 logger.info(f"🆕 Nouveau watcher détecté: {ip} sur {channel}")
+                # Forcer une mise à jour du compteur de watchers
+                self._update_channel_watchers_count(channel)
             else:
                 # Vérifier si la chaîne a changé
                 old_channel = self.watchers[ip].get("current_channel")
@@ -187,6 +208,11 @@ class ClientMonitor(threading.Thread):
                     if self.stats_collector:
                         self.stats_collector.handle_channel_change(ip, old_channel, channel)
                     self.watchers[ip]["current_channel"] = channel
+                    
+                    # Mettre à jour les compteurs pour l'ancienne et la nouvelle chaîne
+                    if old_channel:
+                        self._update_channel_watchers_count(old_channel)
+                    self._update_channel_watchers_count(channel)
                 else:
                     # Même chaîne, vérifier le temps écoulé depuis la dernière requête
                     last_seen = self.watchers[ip].get("last_seen", 0)
@@ -215,17 +241,9 @@ class ClientMonitor(threading.Thread):
                         elapsed = min(current_time - last_seen, 5.0)
                         self.stats_collector.handle_playlist_request(channel, ip, elapsed, user_agent)
 
-            # Mettre à jour le compteur de watchers pour cette chaîne
-            active_ips = set()
-            for ip in self.watchers:
-                if self.watchers[ip].get("current_channel") == channel:
-                    active_ips.add(ip)
-            
-            # Appeler le callback du manager avec le nombre de watchers actifs
-            if hasattr(self, 'update_watchers') and callable(self.update_watchers):
-                self.update_watchers(channel, len(active_ips), "/hls/")
-            else:
-                logger.debug(f"[{channel}] ❌ Callback update_watchers non disponible")
+            # Si c'est un segment ou une playlist, forcer la mise à jour du compteur
+            if request_type in ["segment", "playlist"]:
+                self._update_channel_watchers_count(channel)
 
     def _check_log_file_exists(self, retry_count, max_retries):
         """Vérifie si le fichier de log existe et est accessible"""
@@ -381,40 +399,59 @@ class ClientMonitor(threading.Thread):
         # Pour éviter les mises à jour trop fréquentes
         if hasattr(self, "last_update_time"):
             elapsed = current_time - self.last_update_time
-            if elapsed < 2:  # Au moins 2 secondes entre les mises à jour
+            if elapsed < 1:  # Au moins 1 seconde entre les mises à jour (réduit de 2 à 1)
                 return
 
         channels_updated = 0
 
+        # Vérifier également les chaînes avec des watchers actifs via TimeTracker
+        all_channels_to_update = set(self.modified_channels)
+        
+        # Ajouter toutes les chaînes avec des watchers actifs dans TimeTracker
+        if hasattr(self.time_tracker, "_active_segments"):
+            for channel in self.time_tracker._active_segments:
+                if channel and channel != "master_playlist":
+                    all_channels_to_update.add(channel)
+
         with self.lock:
-            for channel in list(self.modified_channels):
+            for channel in list(all_channels_to_update):
                 # IMPORTANT: Ignorer la playlist principale
                 if channel == "master_playlist":
                     continue
 
                 # Calcule les watchers actifs pour cette chaîne
                 active_ips = set()
-                ip_times = {}  # Pour stocker le temps d'activité de chaque IP
 
-                for ip, data in self.watchers.items():
-                    if data.get("current_channel") == channel and "timer" in data:
-                        # Vérifier si le timer est actif
-                        timer = data["timer"]
-                        if timer.is_running():
+                # Méthode 1: via TimeTracker (plus fiable)
+                active_ips = self.time_tracker.get_active_watchers(channel)
+                
+                # Méthode 2: via self.watchers en backup
+                if not active_ips:
+                    for ip, data in self.watchers.items():
+                        if (data.get("current_channel") == channel and 
+                            current_time - data.get("last_activity", 0) < self.time_tracker.WATCHER_INACTIVITY_TIMEOUT):
                             active_ips.add(ip)
-                            ip_times[ip] = timer.get_total_time()
                 
                 # Nombre de watchers pour cette chaîne
                 count = len(active_ips)
 
                 # Évite les logs si aucun changement réel
                 old_count = self.get_channel_watchers(channel)
-                if count != old_count:
+                if count != old_count or count > 0:  # Toujours mettre à jour si count > 0
                     logger.info(
                         f"[{channel}] 👁️ MAJ watchers: {count} actifs - {list(active_ips)}"
                     )
-                    self.update_watchers(channel, count, "/hls/")
-                    channels_updated += 1
+                    if self.update_watchers:
+                        self.update_watchers(channel, count, "/hls/")
+                        channels_updated += 1
+                    else:
+                        logger.warning(f"[{channel}] ⚠️ Callback update_watchers non disponible")
+                elif old_count > 0 and count == 0:
+                    # Si on avait des watchers avant mais plus maintenant, mettre à jour
+                    logger.info(f"[{channel}] 👁️ Réinitialisation watchers: {old_count} -> 0")
+                    if self.update_watchers:
+                        self.update_watchers(channel, 0, "/hls/")
+                        channels_updated += 1
 
             # Réinitialise les chaînes modifiées
             self.modified_channels.clear()
@@ -508,22 +545,8 @@ class ClientMonitor(threading.Thread):
             # Utiliser le TimeTracker pour gérer le segment
             self.time_tracker.handle_segment_request(channel, ip)
             
-            # Compter les watchers actifs pour cette chaîne
-            active_ips = set()
-            for watcher_ip, data in self.watchers.items():
-                if data.get("current_channel") == channel:
-                    # Vérifier si le watcher est actif (dernière activité < 30 secondes)
-                    if current_time - data.get("last_activity", 0) < self.SEGMENT_TIMEOUT:
-                        active_ips.add(watcher_ip)
-            
-            logger.debug(f"[{channel}] 👥 Watchers actifs après requête segment: {active_ips}")
-            
-            # Mettre à jour le compteur de watchers
-            if self.update_watchers:
-                self.update_watchers(channel, len(active_ips), "/hls/")
-                logger.debug(f"[{channel}] 📊 Mise à jour compteur watchers: {len(active_ips)}")
-            else:
-                logger.warning(f"[{channel}] ⚠️ Callback update_watchers non disponible")
+            # Mettre à jour le compteur de watchers pour cette chaîne
+            self._update_channel_watchers_count(channel)
 
     def _handle_playlist_request(self, channel, ip):
         """Traite une requête de playlist"""
@@ -548,22 +571,8 @@ class ClientMonitor(threading.Thread):
             # Utiliser le TimeTracker pour gérer la playlist
             self.time_tracker.handle_playlist_request(channel, ip)
             
-            # Compter les watchers actifs pour cette chaîne
-            active_ips = set()
-            for watcher_ip, data in self.watchers.items():
-                if data.get("current_channel") == channel:
-                    # Vérifier si le watcher est actif (dernière activité < 20 secondes)
-                    if current_time - data.get("last_activity", 0) < self.PLAYLIST_TIMEOUT:
-                        active_ips.add(watcher_ip)
-            
-            logger.debug(f"[{channel}] 👥 Watchers actifs après requête playlist: {active_ips}")
-            
-            # Mettre à jour le compteur de watchers
-            if self.update_watchers:
-                self.update_watchers(channel, len(active_ips), "/hls/")
-                logger.debug(f"[{channel}] 📊 Mise à jour compteur watchers: {len(active_ips)}")
-            else:
-                logger.warning(f"[{channel}] ⚠️ Callback update_watchers non disponible")
+            # Mettre à jour le compteur de watchers pour cette chaîne
+            self._update_channel_watchers_count(channel)
 
     def _update_channel_watchers_count(self, channel):
         """Met à jour le compteur de watchers pour une chaîne"""
@@ -572,37 +581,83 @@ class ClientMonitor(threading.Thread):
             active_watchers = set()
             current_time = time.time()
             
-            for ip, data in self.watchers.items():
-                # Validation stricte de l'IP
-                try:
-                    # Vérifier le format de base
-                    ip_pattern = r'^(\d{1,3}\.){3}\d{1,3}$'
-                    if not ip or not re.match(ip_pattern, ip):
-                        logger.warning(f"⚠️ Format IP invalide ignoré dans le compteur: {ip}")
+            # Méthode 1: Utiliser TimeTracker (prioritaire et plus fiable)
+            active_watchers = self.time_tracker.get_active_watchers(channel)
+            
+            # Méthode 2: Si TimeTracker n'a pas de watchers, utiliser notre dictionnaire local
+            if not active_watchers:
+                for ip, data in self.watchers.items():
+                    # Vérifier si l'IP est en cours de suppression dans le buffer
+                    if hasattr(self.time_tracker, 'is_being_removed') and self.time_tracker.is_being_removed(ip):
+                        logger.debug(f"[{channel}] 🕒 Watcher {ip} dans le buffer de suppression, mais toujours pris en compte")
+                        if data.get("current_channel") == channel:
+                            active_watchers.add(ip)
                         continue
-                        
-                    # Vérifier que chaque partie est un nombre valide
-                    ip_parts = ip.split('.')
-                    if not all(0 <= int(part) <= 255 for part in ip_parts):
-                        logger.warning(f"⚠️ Valeurs IP hors limites ignorées dans le compteur: {ip}")
+                            
+                    # Validation stricte de l'IP
+                    try:
+                        # Vérifier le format de base
+                        ip_pattern = r'^(\d{1,3}\.){3}\d{1,3}$'
+                        if not ip or not re.match(ip_pattern, ip):
+                            logger.warning(f"⚠️ Format IP invalide ignoré dans le compteur: {ip}")
+                            continue
+                            
+                        # Vérifier que chaque partie est un nombre valide
+                        ip_parts = ip.split('.')
+                        if not all(0 <= int(part) <= 255 for part in ip_parts):
+                            logger.warning(f"⚠️ Valeurs IP hors limites ignorées dans le compteur: {ip}")
+                            continue
+                    except ValueError:
+                        logger.warning(f"⚠️ IP avec valeurs non numériques ignorée dans le compteur: {ip}")
                         continue
-                except ValueError:
-                    logger.warning(f"⚠️ IP avec valeurs non numériques ignorée dans le compteur: {ip}")
-                    continue
-                
-                # Vérifier que le watcher est actif et sur la bonne chaîne
-                if (data.get("current_channel") == channel and 
-                    current_time - data.get("last_activity", 0) < self.SEGMENT_TIMEOUT):
-                    active_watchers.add(ip)
+                    
+                    # Utiliser un timeout plus long pour éviter les suppressions prématurées
+                    extended_timeout = self.time_tracker.WATCHER_INACTIVITY_TIMEOUT
+                    
+                    # Vérifier que le watcher est actif et sur la bonne chaîne
+                    if (data.get("current_channel") == channel and 
+                        current_time - data.get("last_activity", 0) < extended_timeout):
+                        active_watchers.add(ip)
+                        log_level = "debug" if current_time - data.get("last_activity", 0) > 60 else "info"
+                        if log_level == "debug":
+                            logger.debug(f"[{channel}] ✅ Watcher actif détecté: {ip} (dernière activité il y a {current_time - data.get('last_activity', 0):.1f}s)")
+                        elif len(active_watchers) <= 5:  # Limiter les logs info pour éviter le spam
+                            logger.info(f"[{channel}] ✅ Watcher actif détecté: {ip} (dernière activité il y a {current_time - data.get('last_activity', 0):.1f}s)")
 
-            # Mettre à jour le compteur dans le manager via le callback
-            if self.update_watchers:
-                self.update_watchers(channel, len(active_watchers), "/hls/")
-                logger.debug(f"[{channel}] 👥 Mise à jour compteur: {len(active_watchers)} watchers actifs")
+            # Éviter de mettre à jour trop fréquemment si le compteur n'a pas changé
+            old_count = self.get_channel_watchers(channel)
+            
+            # Mettre à jour seulement si le nombre de watchers a changé ou toutes les 60 secondes
+            update_interval = getattr(self, "_last_update_time", {}).get(channel, 0)
+            force_update = current_time - update_interval > 60
+            
+            if old_count != len(active_watchers) or force_update:
+                # Mettre à jour le timestamp de dernière mise à jour
+                if not hasattr(self, "_last_update_time"):
+                    self._last_update_time = {}
+                self._last_update_time[channel] = current_time
+                
+                # Mettre à jour le compteur dans le manager via le callback
+                if self.update_watchers:
+                    # Toujours mettre à jour si on a des watchers actifs
+                    if active_watchers:
+                        logger.info(f"[{channel}] 👥 MAJ compteur: {len(active_watchers)} watchers actifs (ancien: {old_count})")
+                        if len(active_watchers) <= 10:  # Limiter la taille du log
+                            logger.info(f"[{channel}] 👥 IPs actives: {', '.join(active_watchers)}")
+                        else:
+                            logger.info(f"[{channel}] 👥 {len(active_watchers)} IPs actives (trop nombreuses pour log)")
+                        self.update_watchers(channel, len(active_watchers), "/hls/")
+                    else:
+                        # Ne pas remettre à zéro trop facilement
+                        if old_count > 0 and force_update:
+                            logger.info(f"[{channel}] 👥 Réinitialisation compteur: {old_count} -> 0 watchers (timeout)")
+                            self.update_watchers(channel, 0, "/hls/")
                 
                 # Log pour debug
-                if active_watchers:
+                if active_watchers and len(active_watchers) <= 10:  # Limiter la taille du log
                     logger.debug(f"[{channel}] 👥 {len(active_watchers)} watchers actifs: {', '.join(active_watchers)}")
+                elif active_watchers:
+                    logger.debug(f"[{channel}] 👥 {len(active_watchers)} watchers actifs (trop nombreux pour le log)")
 
         except Exception as e:
             logger.error(f"❌ Erreur mise à jour compteur watchers pour {channel}: {e}")
@@ -754,6 +809,18 @@ class ClientMonitor(threading.Thread):
         """Méthode principale qui suit le fichier de log nginx"""
         logger.info("🔄 Démarrage du suivi des logs nginx")
         
+        # Augmenter le délai avant de considérer un watcher comme inactif
+        # Utiliser les mêmes timeouts que le TimeTracker pour cohérence
+        self.SEGMENT_TIMEOUT = self.time_tracker.SEGMENT_TIMEOUT  # 5 minutes (300 secondes)
+        self.PLAYLIST_TIMEOUT = self.time_tracker.PLAYLIST_TIMEOUT  # 5 minutes (300 secondes)
+        self.WATCHER_INACTIVITY_TIMEOUT = self.time_tracker.WATCHER_INACTIVITY_TIMEOUT  # 10 minutes (600 secondes)
+        
+        logger.info(f"⏱️ Timeouts reconfigurés - SEGMENT_TIMEOUT={self.SEGMENT_TIMEOUT}s, PLAYLIST_TIMEOUT={self.PLAYLIST_TIMEOUT}s, INACTIVE_TIMEOUT={self.WATCHER_INACTIVITY_TIMEOUT}s")
+        
+        # Initialiser le suivi des chaînes modifiées
+        self.modified_channels = set()
+        self.last_update_time = time.time()
+        
         while not self.stop_event.is_set():
             try:
                 # Vérifier que le fichier de log existe
@@ -771,19 +838,39 @@ class ClientMonitor(threading.Thread):
                         line = f.readline()
                         if not line:
                             time.sleep(0.1)  # Petite pause pour ne pas surcharger le CPU
+                            
+                            # Appliquer régulièrement les mises à jour en attente
+                            self._apply_pending_updates()
                             continue
                             
                         # Traiter la ligne
                         if "/hls/" in line:
-                            ip, channel, request_type, is_valid, user_agent = self._parse_access_log(line)
-                            if channel and ip and is_valid:
-                                if request_type == "segment":
-                                    self._handle_segment_request(channel, ip, line, user_agent)
-                                elif request_type == "playlist":
-                                    self._handle_playlist_request(channel, ip)
+                            try:
+                                # Journaliser chaque ligne traitée en détail si elle contient un motif intéressant
+                                if ".ts" in line or ".m3u8" in line:
+                                    logger.info(f"🔍 TRAITEMENT_HLS: {line.strip()[:100]}...")
                                 
-                                # Log pour le debug
-                                logger.debug(f"📝 Traité: {request_type} pour {channel} par {ip}")
+                                ip, channel, request_type, is_valid, user_agent = self._parse_access_log(line)
+                                if channel and ip and is_valid:
+                                    logger.info(f"✅ LIGNE VALIDE: ip={ip}, channel={channel}, type={request_type}")
+                                    
+                                    if request_type == "segment":
+                                        self._handle_segment_request(channel, ip, line, user_agent)
+                                    elif request_type == "playlist":
+                                        self._handle_playlist_request(channel, ip)
+                                    
+                                    # Ajouter la chaîne à la liste des chaînes modifiées
+                                    if channel:
+                                        self.modified_channels.add(channel)
+                                    
+                                    # Log pour le debug
+                                    logger.debug(f"📝 Traité: {request_type} pour {channel} par {ip}")
+                                else:
+                                    # Si la ligne contient /hls/ mais n'est pas valide, logger pour debug
+                                    logger.warning(f"⚠️ Ligne HLS non valide: ip={ip}, channel={channel}, valid={is_valid}")
+                            except Exception as e:
+                                logger.error(f"❌ Erreur traitement ligne: {e}")
+                                logger.error(f"LIGNE: {line[:200]}")
 
             except Exception as e:
                 logger.error(f"❌ Erreur suivi logs: {e}")

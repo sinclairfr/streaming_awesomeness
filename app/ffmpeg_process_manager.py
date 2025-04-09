@@ -127,58 +127,45 @@ class FFmpegProcessManager:
                     log_file.close()
                 return False
 
-    def stop_process(self):
-        """Arrête proprement le processus FFmpeg en cours, sans sauvegarder la position"""
+    def stop_process(self, timeout: int = 5) -> bool:
+        """
+        Arrête proprement le processus FFmpeg en cours (si existant)
+        Retourne True si le processus a été arrêté avec succès
+        """
         with self.lock:
-            if not self.process:
-                return
+            if not self.is_running():
+                logger.info(f"[{self.channel_name}] Aucun processus FFmpeg à arrêter")
+                return True
 
             try:
-                # On arrête la surveillance
-                if self.monitor_thread and self.monitor_thread.is_alive():
-                    self.stop_monitoring.set()
-                    # Évite le join() si c'est le thread courant
-                    if self.monitor_thread != threading.current_thread():
-                        self.monitor_thread.join(timeout=3)
+                pid = self.process.pid if self.process else None
+                logger.info(f"[{self.channel_name}] 🛑 Arrêt du processus FFmpeg PID {pid}")
 
-                pid = self.process.pid
-                logger.info(f"[{self.channel_name}] 🛑 Arrêt du processus FFmpeg {pid}")
-
-                # Tentative d'arrêt propre avec SIGTERM
+                # Signaler proprement au processus de s'arrêter (SIGTERM)
                 self.process.terminate()
-
-                # On attend un peu que ça se termine
-                for _ in range(5):  # 5 secondes max
-                    if self.process.poll() is not None:
-                        logger.info(
-                            f"[{self.channel_name}] ✅ Processus {pid} terminé proprement"
-                        )
-                        break
-                    time.sleep(1)
-
-                # Si toujours en vie, on force avec SIGKILL
-                if self.process.poll() is None:
-                    logger.warning(
-                        f"[{self.channel_name}] ⚠️ Processus {pid} résistant, envoi de SIGKILL"
-                    )
+                
+                # Attendre que le processus se termine proprement
+                try:
+                    self.process.wait(timeout=timeout)
+                    logger.info(f"[{self.channel_name}] ✅ Processus FFmpeg arrêté proprement")
+                except subprocess.TimeoutExpired:
+                    # Si le processus ne s'arrête pas proprement, on le tue
+                    logger.warning(f"[{self.channel_name}] ⚠️ Le processus FFmpeg ne s'arrête pas, kill forcé")
                     self.process.kill()
-                    time.sleep(1)
+                    time.sleep(0.5)
 
-                # On retire ce PID des actifs
-                self.active_pids.discard(pid)
+                # Vérifier que le processus est bien terminé
+                if self.process.poll() is None:
+                    logger.error(f"[{self.channel_name}] ❌ Impossible d'arrêter le processus FFmpeg")
+                    return False
 
-                # Nettoyage
+                # Nettoyer
+                self._handle_process_exit(self.process.returncode)
                 self.process = None
-
-                # On nettoie aussi les autres processus au cas où
-                self._clean_orphan_processes()
-
-                logger.info(f"[{self.channel_name}] 🧹 Processus FFmpeg nettoyé")
                 return True
 
             except Exception as e:
-                logger.error(f"[{self.channel_name}] ❌ Erreur arrêt FFmpeg: {e}")
-                self.process = None
+                logger.error(f"[{self.channel_name}] ❌ Erreur lors de l'arrêt de FFmpeg: {e}")
                 return False
 
     def _clean_existing_processes(self):
@@ -451,114 +438,53 @@ class FFmpegProcessManager:
 
     def check_stream_health(self) -> bool:
         """
-        Vérifie la santé du stream et retourne True si tout est OK, False sinon.
-        Cette méthode centralise toute la logique de vérification de la santé du stream.
+        Vérifie l'état de santé du stream et effectue des actions correctives si nécessaire
+        Retourne True si le stream est en bonne santé ou a été réparé
         """
-        try:
-            # 1. Vérifier si le processus est en cours d'exécution
+        with self.lock:
+            # Si le processus n'est pas en cours, il ne peut pas être en bonne santé
             if not self.is_running():
                 logger.warning(f"[{self.channel_name}] ⚠️ Processus FFmpeg arrêté")
+                # Notifier les observateurs
+                if self.on_process_died:
+                    self.on_process_died(0, "process not running")
                 return False
-
-            # 2. Vérifier les ressources système
-            if not self.check_system_resources():
-                logger.warning(f"[{self.channel_name}] ⚠️ Problème de ressources système")
-                return False
-
-            # 3. Vérifier la présence et la validité des segments HLS
-            hls_dir = Path(f"/app/hls/{self.channel_name}")
-            if not hls_dir.exists():
-                logger.error(f"[{self.channel_name}] ❌ Dossier HLS introuvable")
-                return False
-
-            # Vérifier la playlist
-            playlist_path = hls_dir / "playlist.m3u8"
-            if not playlist_path.exists():
-                logger.error(f"[{self.channel_name}] ❌ playlist.m3u8 introuvable")
-                return False
-
-            # Vérifier les segments
-            segments = list(hls_dir.glob("*.ts"))
-            if not segments:
-                logger.warning(f"[{self.channel_name}] ⚠️ Aucun segment trouvé")
-                return False
-
-            # 4. Vérifier l'âge des segments
-            current_time = time.time()
-            latest_segment = max(segments, key=lambda s: s.stat().st_mtime)
-            segment_age = current_time - latest_segment.stat().st_mtime
-
-            # Seuil plus tolérant pendant la période de démarrage
-            startup_duration = current_time - getattr(self, "_startup_time", 0)
-            threshold = 180 if startup_duration < 180 else 300  # 3 minutes pendant le démarrage, 5 minutes après
-
-            if segment_age > threshold:
-                logger.warning(f"[{self.channel_name}] ⚠️ Segments trop vieux (dernier: {segment_age:.1f}s)")
-                return False
-
-            # 5. Vérifier la continuité des segments
-            segment_numbers = []
-            for seg in segments:
-                try:
-                    num = int(seg.stem.split('_')[1])
-                    segment_numbers.append((num, seg))
-                except (ValueError, IndexError):
-                    continue
-
-            if segment_numbers:
-                segment_numbers.sort(key=lambda x: x[0])
-                for i in range(1, len(segment_numbers)):
-                    current_num = segment_numbers[i][0]
-                    prev_num = segment_numbers[i-1][0]
-                    gap = current_num - prev_num
-                    if gap > 5:  # Tolérance de 5 segments manquants
-                        logger.warning(f"[{self.channel_name}] ⚠️ Saut de segments détecté: {prev_num} -> {current_num}")
-                        return False
-
-            # 6. Vérifier les erreurs dans les logs
-            if not self._check_ffmpeg_log():
-                logger.error(f"[{self.channel_name}] ❌ Erreurs détectées dans les logs FFmpeg")
-                return False
-
-            return True
-
-        except Exception as e:
-            logger.error(f"[{self.channel_name}] ❌ Erreur vérification santé: {e}")
-            return False
-
-    def _check_ffmpeg_log(self) -> bool:
-        """Vérifie les logs FFmpeg pour détecter des erreurs"""
-        try:
-            log_path = Path(f"/app/logs/ffmpeg/{self.channel_name}_ffmpeg.log")
-            if not log_path.exists():
-                return True  # Pas de log = pas d'erreur
-
-            with open(log_path, "r") as f:
-                content = f.read()
-                # Détecter les erreurs critiques
-                if "error" in content.lower() or "failed" in content.lower():
+            
+            # Vérifier le temps écoulé depuis le dernier segment
+            if hasattr(self, "last_segment_time"):
+                elapsed = time.time() - self.last_segment_time
+                segment_threshold = CRASH_THRESHOLD * 2  # Doubler la tolérance
+                
+                if elapsed > segment_threshold:
+                    logger.warning(f"[{self.channel_name}] ⚠️ Pas de nouveau segment depuis {elapsed:.1f}s (seuil: {segment_threshold}s)")
                     return False
-            return True
-        except Exception as e:
-            logger.error(f"[{self.channel_name}] ❌ Erreur lecture log: {e}")
-            return False
-
-    def check_system_resources(self) -> bool:
-        """Vérifie les ressources système"""
-        try:
-            # Vérifier la mémoire disponible
-            memory = psutil.virtual_memory()
-            if memory.percent > 90:  # 90% d'utilisation max
-                logger.warning(f"[{self.channel_name}] ⚠️ Mémoire système critique: {memory.percent}%")
+            
+            # Vérifier que le processus est toujours en cours
+            if self.process.poll() is not None:
+                # Le processus s'est arrêté
+                return_code = self.process.returncode
+                logger.warning(f"[{self.channel_name}] ⚠️ Processus FFmpeg arrêté avec code {return_code}")
+                self._handle_process_exit(return_code)
                 return False
-
-            # Vérifier l'espace disque
-            disk = psutil.disk_usage('/')
-            if disk.percent > 90:  # 90% d'utilisation max
-                logger.warning(f"[{self.channel_name}] ⚠️ Espace disque critique: {disk.percent}%")
-                return False
-
+                
+            # Tout va bien
             return True
-        except Exception as e:
-            logger.error(f"[{self.channel_name}] ❌ Erreur vérification ressources: {e}")
-            return False
+
+    def _handle_process_exit(self, return_code):
+        """
+        Gère la sortie du processus FFmpeg et met en place les actions nécessaires
+        """
+        if self.on_process_died:
+            self.on_process_died(return_code)
+
+        # Mettre à jour les compteurs et les états
+        self.crash_count += 1
+        self.last_crash_time = time.time()
+
+        # Vérifier si le processus a été arrêté à cause d'un problème de santé
+        if return_code in [-2, -3, -4]:
+            logger.warning(f"[{self.channel_name}] ⚠️ Processus FFmpeg arrêté à cause d'un problème de santé (code: {return_code})")
+            # Mettre à jour le flag de streaming
+            channel = FFmpegProcessManager.all_channels.get(self.channel_name)
+            if channel:
+                channel._streaming_active = False

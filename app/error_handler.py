@@ -6,15 +6,16 @@ from config import logger
 from typing import Set
 
 class ErrorHandler:
-    """Gère les erreurs et les redémarrages pour une chaîne IPTV"""
+    """Gère les erreurs et les stratégies de redémarrage"""
     
     def __init__(self, channel_name: str, max_restarts: int = 5, restart_cooldown: int = 60):
         self.channel_name = channel_name
-        self.error_count = 0
-        self.restart_count = 0
         self.max_restarts = max_restarts
         self.restart_cooldown = restart_cooldown
+        self.errors = {}  # {error_type: {count: N, last_time: timestamp}}
+        self.restart_count = 0
         self.last_restart_time = 0
+        self.critical_threshold = 10  # Augmenter le seuil critique
         self.error_types: Set[str] = set()
         self.lock = threading.Lock()
         
@@ -22,83 +23,85 @@ class ErrorHandler:
         self.crash_log_path = Path(f"/app/logs/crashes_{self.channel_name}.log")
         self.crash_log_path.parent.mkdir(exist_ok=True)
 
+    def add_error(self, error_type: str) -> bool:
+        """
+        Ajoute une erreur et détermine si un redémarrage est nécessaire
+        
+        Returns:
+            bool: True si un redémarrage est nécessaire
+        """
+        current_time = time.time()
+        
+        if error_type not in self.errors:
+            self.errors[error_type] = {"count": 0, "last_time": 0}
+        
+        # Mettre à jour le compteur d'erreurs
+        self.errors[error_type]["count"] += 1
+        self.errors[error_type]["last_time"] = current_time
+        
+        total_errors = sum(e["count"] for e in self.errors.values())
+        logger.warning(f"[{self.channel_name}] Erreur détectée: {error_type}, total: {total_errors}")
+        
+        # Vérifier si on devrait redémarrer
+        if self._should_restart(error_type):
+            return True
+            
+        return False
+        
+    def _should_restart(self, error_type: str) -> bool:
+        """Détermine si un redémarrage est nécessaire en fonction du type d'erreur"""
+        current_time = time.time()
+        error_info = self.errors.get(error_type, {"count": 0, "last_time": 0})
+        
+        # Signal 2 (SIGINT) - s'il ne vient pas de quelque part d'autre, 
+        # c'est probablement une erreur grave
+        if error_type == "signal_2" and error_info["count"] >= 2:
+            logger.warning(f"[{self.channel_name}] SIGINT détecté plusieurs fois, redémarrage requis")
+            return True
+        
+        # Pour les signaux en général, ils sont plus graves
+        if error_type.startswith("signal_") and error_info["count"] >= 3:
+            logger.warning(f"[{self.channel_name}] Trop de signaux détectés, redémarrage requis")
+            return True
+            
+        # Pour les erreurs génériques, être plus tolérant
+        total_errors = sum(e["count"] for e in self.errors.values())
+        if total_errors >= 5:
+            logger.warning(f"[{self.channel_name}] Trop d'erreurs accumulées, redémarrage requis")
+            return True
+            
+        return False
+        
+    def should_restart(self) -> bool:
+        """Vérifie si le cooldown est passé avant d'autoriser un redémarrage"""
+        current_time = time.time()
+        
+        # Si on a dépassé le nombre max de redémarrages
+        if self.restart_count >= self.max_restarts:
+            logger.warning(f"[{self.channel_name}] Nombre maximum de redémarrages atteint: {self.restart_count}")
+            return False
+            
+        # Si le cooldown n'est pas encore passé
+        if current_time - self.last_restart_time < self.restart_cooldown:
+            logger.info(f"[{self.channel_name}] Attente du cooldown: {current_time - self.last_restart_time:.1f}s/{self.restart_cooldown}s")
+            return False
+            
+        # OK pour redémarrer
+        self.restart_count += 1
+        self.last_restart_time = current_time
+        logger.info(f"[{self.channel_name}] Redémarrage autorisé ({self.restart_count}/{self.max_restarts})")
+        return True
+        
+    def reset(self):
+        """Réinitialise les erreurs après un redémarrage réussi"""
+        # On ne réinitialise pas restart_count pour limiter le nombre total de redémarrages
+        self.errors = {}
+        logger.info(f"[{self.channel_name}] Compteurs d'erreurs réinitialisés")
+        
     def has_critical_errors(self) -> bool:
         """Vérifie si des erreurs critiques sont présentes"""
-        with self.lock:
-            # On considère qu'il y a une erreur critique si :
-            # - On a eu trop de redémarrages
-            if self.restart_count >= self.max_restarts:
-                return True
-                
-            # - On a eu trop d'erreurs du même type
-            if self.error_count >= 3 and len(self.error_types) == 1:
-                return True
-                
-            # - On a eu plusieurs types d'erreurs différentes
-            if len(self.error_types) >= 3:
-                return True
-                
-            return False
-
-    def add_error(self, error_type: str) -> bool:
-        """Ajoute une erreur et retourne True si un restart est nécessaire"""
-        with self.lock:
-            self.error_count += 1
-            self.error_types.add(error_type)
-            
-            logger.warning(f"[{self.channel_name}] Erreur détectée: {error_type}, total: {self.error_count}")
-            
-            # Log le crash
-            self._log_crash(error_type)
-
-            # On regroupe les erreurs similaires
-            if self.error_count >= 3 and len(self.error_types) >= 2:
-                return self.should_restart()
-            return False
-
-    def should_restart(self) -> bool:
-        """Vérifie si on peut/doit redémarrer"""
-        with self.lock:
-            if self.restart_count >= self.max_restarts:
-                logger.error(f"[{self.channel_name}] Trop de redémarrages")
-                return False
-                
-            current_time = time.time()
-            if current_time - self.last_restart_time < self.restart_cooldown:
-                return False
-                
-            self.restart_count += 1
-            self.last_restart_time = current_time
-            
-            # Log le redémarrage
-            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            try:
-                with open(self.crash_log_path, "a") as f:
-                    f.write(f"{timestamp} - [{self.channel_name}] Redémarrage #{self.restart_count}\n")
-                    f.write("-" * 80 + "\n")
-            except Exception as e:
-                logger.error(f"Erreur lors de l'écriture du log de redémarrage: {e}")
-            
-            self.error_count = 0
-            self.error_types.clear()
-            return True
-
-    def reset(self):
-        """Reset après un stream stable"""
-        with self.lock:
-            if self.error_count > 0 or self.restart_count > 0:
-                timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                try:
-                    with open(self.crash_log_path, "a") as f:
-                        f.write(f"{timestamp} - [{self.channel_name}] Reset des erreurs\n")
-                        f.write("-" * 80 + "\n")
-                except Exception as e:
-                    logger.error(f"Erreur lors de l'écriture du log de reset: {e}")
-                    
-            self.error_count = 0
-            self.restart_count = 0
-            self.error_types.clear()
-            return True
+        total_errors = sum(e["count"] for e in self.errors.values())
+        return total_errors >= self.critical_threshold  # Valeur augmentée
 
     def _log_crash(self, error_type: str):
         """Log des erreurs dans un fichier de crash dédié"""
@@ -106,7 +109,7 @@ class ErrorHandler:
         try:
             with open(self.crash_log_path, "a") as f:
                 f.write(f"{timestamp} - Erreur détectée: {error_type}\n")
-                f.write(f"Compteur d'erreurs: {self.error_count}, Types d'erreurs: {', '.join(self.error_types)}\n")
+                f.write(f"Compteur d'erreurs: {sum(e['count'] for e in self.errors.values())}, Types d'erreurs: {', '.join(self.errors.keys())}\n")
                 f.write("-" * 80 + "\n")
         except Exception as e:
             logger.error(f"Erreur écriture log crash pour {self.channel_name}: {e}")
@@ -115,8 +118,8 @@ class ErrorHandler:
         """Retourne l'état actuel des erreurs"""
         with self.lock:
             return {
-                "count": self.error_count,
-                "types": list(self.error_types),
+                "count": sum(e["count"] for e in self.errors.values()),
+                "types": list(self.errors.keys()),
                 "restarts": self.restart_count,
                 "has_critical": self.has_critical_errors()
             } 

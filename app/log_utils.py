@@ -19,6 +19,9 @@ def parse_access_log(line):
             - is_valid: Booléen indiquant si la requête est valide
             - path_or_user_agent: Le chemin ou l'user agent selon le contexte d'appel
     """
+    # Log détaillé pour déboguer le traitement des lignes
+    logger.info(f"PARSE_LOG: {line[:100]}...")
+    
     # Si pas de /hls/ dans la ligne, on ignore direct
     if "/hls/" not in line:
         return None, None, None, False, None
@@ -94,8 +97,16 @@ def parse_access_log(line):
     is_valid = status_code in [
         "200",
         "206",
+        "304",  # Ajouter le code 304 (Not Modified) pour les requêtes de mise en cache
         "404",
     ]
+    
+    # Log de debug pour les codes 304
+    if status_code == "304" and is_valid:
+        logger.debug(f"✅ Requête 304 validée: {channel} par {ip} - {request_type}")
+    
+    # Log détaillé du résultat du parsing
+    logger.info(f"PARSE_RESULT: ip={ip}, channel={channel}, type={request_type}, valid={is_valid}, code={status_code}")
 
     # Pour IPTVManager, on retourne le chemin, pour ClientMonitor, on retourne l'user agent
     return_value = path if path else user_agent

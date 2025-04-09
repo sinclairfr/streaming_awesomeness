@@ -20,6 +20,7 @@ from config import (
 from video_processor import verify_file_ready, get_accurate_duration
 import datetime
 from error_handler import ErrorHandler
+from time_tracker import TimeTracker
 
 
 class IPTVChannel:
@@ -36,14 +37,22 @@ class IPTVChannel:
         use_gpu: bool = False,
         stats_collector=None,
     ):
+        """Initialise une chaîne IPTV"""
         self.name = name
-        self.channel_name = name
         self.video_dir = video_dir
-        self.use_gpu = use_gpu
         self.hls_cleaner = hls_cleaner
-        self.stats_collector = stats_collector
+        self.use_gpu = use_gpu
 
-        # Initialisation de l'error handler
+        # Configuration du logger
+        self.logger = FFmpegLogger(name)
+
+        # Stats collector optionnel
+        self.stats_collector = stats_collector
+        
+        # Gestion centralisée du temps de visionnage
+        self.time_tracker = TimeTracker(stats_collector) if stats_collector else None
+
+        # Gestion des erreurs et des arrêts d'urgence
         self.error_handler = ErrorHandler(
             channel_name=self.name,
             max_restarts=5,
@@ -60,9 +69,10 @@ class IPTVChannel:
 
         # Initialiser les composants dans le bon ordre
         self.position_manager = PlaybackPositionManager(name)
-        self.logger = FFmpegLogger(name)
         self.command_builder = FFmpegCommandBuilder(name, use_gpu=use_gpu)
-        self.process_manager = FFmpegProcessManager(name, self.logger)
+        self.process_manager = FFmpegProcessManager(
+            self.name, self.logger
+        )
 
         # Ajouter cette chaîne au registre global
         if hasattr(FFmpegProcessManager, "all_channels"):

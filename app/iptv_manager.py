@@ -360,13 +360,31 @@ class IPTVManager:
             channel = self.channels[channel_name]
             old_count = getattr(channel, 'watchers_count', 0)
             
-            # Toujours mettre à jour le compteur et le timestamp
-            channel.watchers_count = watcher_count
+            # Toujours mettre à jour le timestamp de dernier watcher
             channel.last_watcher_time = time.time()
             
-            # Log seulement si le nombre a changé
-            if old_count != watcher_count:
+            # Le nombre a-t-il réellement changé?
+            count_changed = old_count != watcher_count
+            
+            # Mettre à jour le compteur seulement si nécessaire
+            if count_changed:
+                # Stocker l'heure du dernier changement de watchers
+                if not hasattr(channel, 'last_watcher_change_time'):
+                    channel.last_watcher_change_time = time.time()
+                else:
+                    channel.last_watcher_change_time = time.time()
+                    
+                # Mettre à jour le compteur
+                channel.watchers_count = watcher_count
+                
+                # Log pour les changements significatifs
                 logger.info(f"[{channel_name}] 👁️ Changement watchers: {old_count} → {watcher_count}")
+                
+                # Log plus détaillé pour diagnostic
+                logger.debug(f"[{channel_name}] 🔍 État des watchers actuels: {self._active_watchers.get(channel_name, set())}")
+            else:
+                # Mettre à jour sans log si pas de changement
+                channel.watchers_count = watcher_count
 
             # Forcer une mise à jour immédiate du statut
             if hasattr(self, "channel_status") and self.channel_status is not None:
@@ -387,25 +405,48 @@ class IPTVManager:
 
             # Vérifier si la chaîne est arrêtée mais devrait être active
             if watcher_count > 0 and not channel.process_manager.is_running():
-                logger.warning(f"[{channel_name}] ⚠️ Chaîne arrêtée avec {watcher_count} watchers actifs")
+                # Vérifier quand était le dernier redémarrage pour éviter les redémarrages trop fréquents
+                last_restart_time = getattr(channel, 'last_restart_time', 0)
+                current_time = time.time()
+                restart_delay = 30  # 30 secondes minimum entre tentatives de redémarrage
                 
-                if channel.ready_for_streaming:
-                    logger.info(f"[{channel_name}] 🔄 Redémarrage automatique de la chaîne")
-                    if channel.start_stream():
-                        logger.info(f"[{channel_name}] ✅ Chaîne redémarrée avec succès")
+                if current_time - last_restart_time > restart_delay:
+                    logger.warning(f"[{channel_name}] ⚠️ Chaîne arrêtée avec {watcher_count} watchers actifs")
+                    
+                    if channel.ready_for_streaming:
+                        logger.info(f"[{channel_name}] 🔄 Redémarrage automatique de la chaîne")
+                        
+                        # Marquer l'heure du redémarrage
+                        channel.last_restart_time = current_time
+                        
+                        # Tenter le redémarrage avec un retardateur pour éviter les redémarrages en cascade
+                        def delayed_restart():
+                            time.sleep(1.5)  # Petit délai pour éviter les démarrages simultanés
+                            result = channel.start_stream()
+                            if result:
+                                logger.info(f"[{channel_name}] ✅ Chaîne redémarrée avec succès")
+                            else:
+                                logger.error(f"[{channel_name}] ❌ Échec du redémarrage de la chaîne")
+                        
+                        restart_thread = threading.Thread(target=delayed_restart)
+                        restart_thread.daemon = True
+                        restart_thread.start()
                     else:
-                        logger.error(f"[{channel_name}] ❌ Échec du redémarrage de la chaîne")
+                        logger.warning(f"[{channel_name}] ⚠️ Chaîne non prête pour le streaming")
                 else:
-                    logger.warning(f"[{channel_name}] ⚠️ Chaîne non prête pour le streaming")
+                    logger.debug(f"[{channel_name}] ⏳ Délai min. entre redémarrages pas écoulé ({current_time - last_restart_time:.1f}s < {restart_delay}s)")
 
-            # Mise à jour des statistiques
+            # Mise à jour des statistiques seulement en cas de watchers actifs
             if hasattr(self, 'stats_collector') and self.stats_collector and watcher_count > 0:
                 # Mise à jour du temps de visionnage pour chaque IP active
-                if active_watchers:
+                if active_watchers := self._active_watchers.get(channel_name, set()):
                     for ip in active_watchers:
                         self.stats_collector.add_watch_time(channel_name, ip, 5.0)
-                    self.stats_collector.save_stats()
-                    self.stats_collector.save_user_stats()
+                    
+                    # Ne pas sauvegarder les stats à chaque mise à jour pour éviter la surcharge d'I/O
+                    if count_changed:
+                        self.stats_collector.save_stats()
+                        self.stats_collector.save_user_stats()
 
         except Exception as e:
             logger.error(f"❌ Erreur mise à jour watchers pour {channel_name}: {e}")
@@ -1039,15 +1080,40 @@ class IPTVManager:
         """Nettoie les watchers inactifs du IPTVManager"""
         current_time = time.time()
         inactive_watchers = []
+        
+        # Vérifier si TimeTracker est disponible pour communiquer avec son buffer
+        has_time_tracker_buffer = False
+        for channel_name, channel in self.channels.items():
+            if hasattr(channel, "time_tracker") and hasattr(channel.time_tracker, "is_being_removed"):
+                has_time_tracker_buffer = True
+                break
+        
+        # Durée d'inactivité plus longue pour éviter les suppressions prématurées
+        inactivity_threshold = 300  # 5 minutes d'inactivité
 
         # Identifier les watchers inactifs
         with self.lock:
             for (channel, ip), last_seen_time in self.watchers.items():
-                # Si pas d'activité depuis plus de 60 secondes
-                if current_time - last_seen_time > 60:  # 1 minute d'inactivité
+                # Période d'inactivité
+                inactivity_time = current_time - last_seen_time
+                
+                # Si l'IP est dans le buffer de suppression de TimeTracker, on ne la supprime pas encore
+                if has_time_tracker_buffer:
+                    time_tracker = next((ch.time_tracker for ch_name, ch in self.channels.items() 
+                                         if hasattr(ch, "time_tracker")), None)
+                    if time_tracker and hasattr(time_tracker, "is_being_removed") and time_tracker.is_being_removed(ip):
+                        logger.debug(f"⏱️ Manager: Watcher {ip} dans le buffer de TimeTracker, suppression différée")
+                        continue
+                
+                # Si pas d'activité depuis plus de la période d'inactivité définie
+                if inactivity_time > inactivity_threshold:
                     inactive_watchers.append((channel, ip))
-                    logger.debug(f"⏱️ Manager: Watcher {ip} inactif depuis {current_time - last_seen_time:.1f}s sur {channel}")
+                    logger.debug(f"⏱️ Manager: Watcher {ip} inactif depuis {inactivity_time:.1f}s sur {channel}")
 
+            # Si aucun watcher inactif, on arrête ici
+            if not inactive_watchers:
+                return
+                
             # Supprimer les watchers inactifs et mettre à jour les chaînes affectées
             channels_to_update = set()
             for (channel, ip) in inactive_watchers:
@@ -1059,15 +1125,23 @@ class IPTVManager:
                 if channel in self._active_watchers and ip in self._active_watchers[channel]:
                     self._active_watchers[channel].remove(ip)
                     channels_to_update.add(channel)
-                    logger.info(f"🧹 Manager: Suppression du watcher inactif: {ip} sur {channel}")
+                    logger.info(f"🧹 Manager: Suppression du watcher inactif: {ip} sur {channel} (inactif depuis plus de {inactivity_threshold}s)")
 
             # Mettre à jour les compteurs de watchers pour les chaînes affectées
             for channel in channels_to_update:
                 if channel in self.channels:
                     watcher_count = len(self._active_watchers.get(channel, set()))
-                    self.channels[channel].watchers_count = watcher_count
-                    self.channels[channel].last_watcher_time = current_time
-                    logger.info(f"[{channel}] 👁️ Manager: Mise à jour après nettoyage: {watcher_count} watchers actifs")
+                    
+                    # Ne pas mettre à jour si ça fait passer de quelque chose à zéro
+                    old_count = getattr(self.channels[channel], 'watchers_count', 0)
+                    
+                    if watcher_count > 0 or old_count == 0:
+                        self.channels[channel].watchers_count = watcher_count
+                        self.channels[channel].last_watcher_time = current_time
+                        logger.info(f"[{channel}] 👁️ Manager: Mise à jour après nettoyage: {watcher_count} watchers actifs (ancien: {old_count})")
+                    else:
+                        # Si on passe de viewers à zéro, on log mais on ne met pas à jour pour éviter les arrêts intempestifs
+                        logger.warning(f"[{channel}] ⚠️ Manager: Détection chute de viewers à zéro, vérification supplémentaire nécessaire")
 
     def _cleanup_thread_loop(self):
         """Thread de nettoyage périodique"""
