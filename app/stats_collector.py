@@ -53,6 +53,12 @@ class StatsCollector:
         logger.info(
             f"📊 StatsCollector initialisé (sauvegarde dans {self.stats_file}, user stats dans {self.user_stats_file})"
         )
+
+        # Ajout des métriques de performance
+        self.buffer_issues = {}  # Dictionnaire pour stocker les problèmes de buffer par chaîne
+        self.latency_issues = {}  # Dictionnaire pour stocker les problèmes de latence par chaîne
+        self.performance_metrics = {}  # Dictionnaire pour stocker les métriques de performance par chaîne
+
     def add_watch_time(self, channel, ip, duration):
         """Ajoute du temps de visionnage pour un watcher avec limitation de fréquence"""
         try:
@@ -762,3 +768,89 @@ class StatsCollector:
 
             except Exception as e:
                 logger.error(f"❌ Erreur traitement changement de chaîne: {e}")
+
+    def record_buffer_issue(self, channel_name: str, delay: float, viewers: int):
+        """Enregistre un problème de buffer pour une chaîne"""
+        try:
+            if channel_name not in self.buffer_issues:
+                self.buffer_issues[channel_name] = []
+                
+            # Ajouter l'incident avec timestamp
+            self.buffer_issues[channel_name].append({
+                'timestamp': time.time(),
+                'delay': delay,
+                'viewers': viewers
+            })
+            
+            # Garder seulement les 100 derniers incidents
+            if len(self.buffer_issues[channel_name]) > 100:
+                self.buffer_issues[channel_name].pop(0)
+                
+            # Mettre à jour les métriques de performance
+            if channel_name not in self.performance_metrics:
+                self.performance_metrics[channel_name] = {
+                    'buffer_issues_count': 0,
+                    'avg_buffer_delay': 0,
+                    'max_buffer_delay': 0
+                }
+                
+            metrics = self.performance_metrics[channel_name]
+            metrics['buffer_issues_count'] += 1
+            metrics['avg_buffer_delay'] = sum(issue['delay'] for issue in self.buffer_issues[channel_name]) / len(self.buffer_issues[channel_name])
+            metrics['max_buffer_delay'] = max(issue['delay'] for issue in self.buffer_issues[channel_name])
+            
+            logger.warning(
+                f"[{channel_name}] 📊 Problème de buffer enregistré: "
+                f"délai={delay:.2f}s, viewers={viewers}"
+            )
+            
+        except Exception as e:
+            logger.error(f"❌ Erreur enregistrement problème buffer: {e}")
+            
+    def record_latency_issue(self, channel_name: str, latency: float, viewers: int):
+        """Enregistre un problème de latence pour une chaîne"""
+        try:
+            if channel_name not in self.latency_issues:
+                self.latency_issues[channel_name] = []
+                
+            # Ajouter l'incident avec timestamp
+            self.latency_issues[channel_name].append({
+                'timestamp': time.time(),
+                'latency': latency,
+                'viewers': viewers
+            })
+            
+            # Garder seulement les 100 derniers incidents
+            if len(self.latency_issues[channel_name]) > 100:
+                self.latency_issues[channel_name].pop(0)
+                
+            # Mettre à jour les métriques de performance
+            if channel_name not in self.performance_metrics:
+                self.performance_metrics[channel_name] = {
+                    'latency_issues_count': 0,
+                    'avg_latency': 0,
+                    'max_latency': 0
+                }
+                
+            metrics = self.performance_metrics[channel_name]
+            metrics['latency_issues_count'] += 1
+            metrics['avg_latency'] = sum(issue['latency'] for issue in self.latency_issues[channel_name]) / len(self.latency_issues[channel_name])
+            metrics['max_latency'] = max(issue['latency'] for issue in self.latency_issues[channel_name])
+            
+            logger.warning(
+                f"[{channel_name}] 📊 Problème de latence enregistré: "
+                f"latence={latency:.2f}s, viewers={viewers}"
+            )
+            
+        except Exception as e:
+            logger.error(f"❌ Erreur enregistrement problème latence: {e}")
+            
+    def get_performance_metrics(self, channel_name: str = None):
+        """Récupère les métriques de performance pour une chaîne ou toutes les chaînes"""
+        try:
+            if channel_name:
+                return self.performance_metrics.get(channel_name, {})
+            return self.performance_metrics
+        except Exception as e:
+            logger.error(f"❌ Erreur récupération métriques performance: {e}")
+            return {}
