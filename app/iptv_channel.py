@@ -348,15 +348,18 @@ class IPTVChannel:
         self.last_segment_time = time.time()
         logger.debug(f"[{self.name}] ⏱️ Segment créé: {Path(segment_path).name}")
 
-    def _handle_process_died(self, exit_code: int, stderr: str = ""):
-        """Gère la mort du processus FFmpeg"""
+    def _handle_process_died(self, exit_code, stderr=None):
+        """Gère la mort du processus FFmpeg et décide des actions à prendre"""
         try:
             # Analyser l'erreur pour détecter le type
             error_type = "unknown_error"
             if exit_code < 0:
+                # Signal négatif, indique une terminaison par signal
                 error_type = f"signal_{abs(exit_code)}"
+                logger.warning(f"[{self.name}] Processus terminé par signal {abs(exit_code)}")
+                
             elif stderr and "error" in stderr.lower():
-                # Extraction simple du type d'erreur à partir du message
+                # Extraction du type d'erreur à partir du message
                 if "no such file" in stderr.lower():
                     error_type = "missing_file"
                 elif "invalid data" in stderr.lower():
@@ -366,16 +369,37 @@ class IPTVChannel:
                 elif "timeout" in stderr.lower():
                     error_type = "timeout"
             
-            # Utiliser l'error handler pour gérer l'erreur
-            if self.error_handler.add_error(error_type):
-                logger.warning(f"[{self.name}] Redémarrage nécessaire après erreur: {error_type}")
-                self._restart_stream()
-            elif self.error_handler.has_critical_errors():
-                logger.error(f"[{self.name}] Erreurs critiques détectées, arrêt du stream")
-                self.stop_stream_if_needed()
+            # Approche plus tolérante pour la gestion des erreurs
+            if exit_code == -2:  # Code spécial pour problème de santé
+                # On incrémente progressivement un compteur d'avertissements
+                # au lieu de redémarrer immédiatement
+                if not hasattr(self, "_health_warnings"):
+                    self._health_warnings = 0
+                self._health_warnings += 1
+                
+                # On redémarre seulement après plusieurs avertissements
+                if self._health_warnings >= 3:
+                    logger.warning(f"[{self.name}] Redémarrage après {self._health_warnings} avertissements de santé")
+                    self._health_warnings = 0
+                    self._restart_stream()
+                else:
+                    logger.info(f"[{self.name}] Avertissement de santé {self._health_warnings}/3, surveillance continue")
+            else:
+                # Pour les autres erreurs, on utilise l'error handler avec sa logique améliorée
+                if self.error_handler.add_error(error_type):
+                    logger.warning(f"[{self.name}] Redémarrage nécessaire après erreur: {error_type}")
+                    # On ajoute un petit délai aléatoire pour éviter les redémarrages simultanés
+                    time.sleep(random.uniform(0.5, 3.0))
+                    self._restart_stream()
+                elif self.error_handler.has_critical_errors():
+                    logger.error(f"[{self.name}] Erreurs critiques détectées, arrêt du stream")
+                    # Attendre un peu avant d'arrêter pour éviter les actions trop rapprochées
+                    time.sleep(2)
+                    self.stop_stream_if_needed()
                 
         except Exception as e:
-            logger.error(f"[{self.name}] Erreur lors de la gestion de la mort du processus: {e}")
+            logger.error(f"[{self.name}] Erreur lors de la gestion du processus: {e}")
+            logger.error(traceback.format_exc())
 
     def _restart_stream(self) -> bool:
         """Redémarre le stream en cas de problème"""
@@ -748,21 +772,45 @@ class IPTVChannel:
         return self.process_manager.is_running()
 
     def check_stream_health(self):
-        """Vérifie la santé du stream et redémarre si nécessaire"""
+        """
+        Vérifie la santé du stream avec une approche plus tolérante
+        Logge les problèmes mais ne force pas le redémarrage immédiatement
+        """
         try:
-            # Utiliser le ProcessManager pour vérifier la santé du stream
-            if not self.process_manager.check_stream_health():
-                # Si le stream n'est pas sain et qu'il y a des viewers, on redémarre
-                if hasattr(self, "watchers_count") and self.watchers_count > 0:
-                    logger.warning(f"[{self.name}] ⚠️ Problème de santé détecté, redémarrage")
+            # Initialiser le compteur d'avertissements si nécessaire
+            if not hasattr(self, "_health_check_warnings"):
+                self._health_check_warnings = 0
+                self._last_health_check_time = time.time()
+            
+            # Réinitialiser périodiquement les avertissements (toutes les 30 minutes)
+            if time.time() - getattr(self, "_last_health_check_time", 0) > 1800:
+                self._health_check_warnings = 0
+                self._last_health_check_time = time.time()
+                logger.info(f"[{self.name}] Réinitialisation périodique des avertissements de santé")
+            
+            # Vérifier l'état de base: processus en cours?
+            if not self.process_manager.is_running():
+                logger.warning(f"[{self.name}] ⚠️ Processus FFmpeg inactif")
+                self._health_check_warnings += 1
+                
+                # Seuil de tolérance plus élevé
+                if self._health_check_warnings >= 3 and getattr(self, "watchers_count", 0) > 0:
+                    logger.warning(f"[{self.name}] ⚠️ {self._health_check_warnings} avertissements accumulés, tentative de redémarrage")
+                    self._health_check_warnings = 0
                     return self._restart_stream()
                 else:
-                    logger.info(f"[{self.name}] ⚠️ Problème de santé détecté mais aucun viewer actif")
+                    logger.info(f"[{self.name}] Avertissement {self._health_check_warnings}/3 (attente avant action)")
+                    return False
+            
+            # Processus en cours, santé OK
+            if self._health_check_warnings > 0:
+                self._health_check_warnings -= 1  # Réduction progressive des avertissements
+                logger.info(f"[{self.name}] ✅ Santé améliorée, avertissements: {self._health_check_warnings}")
             
             return True
             
         except Exception as e:
-            logger.error(f"[{self.name}] ❌ Error in health check: {e}")
+            logger.error(f"[{self.name}] ❌ Erreur vérification santé: {e}")
             return False
             
     def check_watchers_timeout(self):
