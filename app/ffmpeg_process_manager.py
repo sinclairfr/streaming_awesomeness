@@ -221,33 +221,146 @@ class FFmpegProcessManager:
         """
         # Si le processus n'est pas en cours, pas besoin d'analyser
         if not self.is_running():
+            logger.warning(f"[{self.channel_name}] ⚠️ Check de santé: processus inactif")
             return False
             
         # Vérifier le temps écoulé depuis le dernier segment
         if hasattr(self, "last_segment_time"):
-            elapsed = time.time() - self.last_segment_time
+            current_time = time.time()
+            elapsed = current_time - self.last_segment_time
             # Augmenter le seuil pour être plus tolérant
             segment_threshold = CRASH_THRESHOLD * 3  # 90 secondes sans segment (était 2x=60s)
             
+            # Vérifier l'utilisation CPU du processus
+            cpu_usage = 0
+            memory_usage_mb = 0
+            try:
+                if self.process:
+                    pid = self.process.pid
+                    process = psutil.Process(pid)
+                    cpu_usage = process.cpu_percent(interval=0.1)
+                    memory_usage_mb = process.memory_info().rss / (1024 * 1024)
+            except Exception as e:
+                logger.debug(f"[{self.channel_name}] Impossible de vérifier les ressources: {e}")
+            
+            # Vérification des segments dans le dossier HLS et leur date de création
+            hls_dir = f"/app/hls/{self.channel_name}"
+            ts_files = 0
+            latest_segment_time = 0
+            oldest_segment_time = current_time
+            average_segment_size = 0
+            
+            try:
+                ts_files_list = list(Path(hls_dir).glob("*.ts"))
+                ts_files = len(ts_files_list)
+                playlist_exists = Path(f"{hls_dir}/playlist.m3u8").exists()
+                
+                # Analyser les segments pour obtenir plus d'informations
+                if ts_files > 0:
+                    total_size = 0
+                    for segment in ts_files_list:
+                        stat = segment.stat()
+                        total_size += stat.st_size
+                        segment_time = stat.st_mtime
+                        if segment_time > latest_segment_time:
+                            latest_segment_time = segment_time
+                        if segment_time < oldest_segment_time:
+                            oldest_segment_time = segment_time
+                    
+                    average_segment_size = total_size / ts_files if ts_files > 0 else 0
+                    segment_age = current_time - latest_segment_time if latest_segment_time > 0 else 0
+                    segments_timespan = latest_segment_time - oldest_segment_time if latest_segment_time > oldest_segment_time else 0
+                    
+                    logger.warning(f"[{self.channel_name}] 📂 Segments HLS: {ts_files} segments, dernier créé il y a {segment_age:.1f}s, taille moyenne: {average_segment_size/1024:.1f}KB")
+                    
+                    # Vérifier si les segments sont générés mais pas téléchargés
+                    if segment_age < 10 and elapsed > segment_threshold:
+                        logger.warning(f"[{self.channel_name}] ⚠️ Segments générés mais non téléchargés! Dernier segment créé il y a {segment_age:.1f}s")
+                else:
+                    logger.warning(f"[{self.channel_name}] 📂 Aucun segment trouvé dans {hls_dir}, playlist: {playlist_exists}")
+            except Exception as e:
+                logger.warning(f"[{self.channel_name}] Erreur vérification HLS: {e}")
+            
+            # Collecter des métriques pour les problèmes
             if elapsed > segment_threshold:
+                # Log détaillé des métriques système
+                logger.warning(f"[{self.channel_name}] ⚠️ Pas de segment traité depuis {elapsed:.1f}s | CPU: {cpu_usage:.1f}% | RAM: {memory_usage_mb:.1f}MB")
+                
                 # Accumulation d'avertissements plutôt que décision immédiate
                 self.health_warnings += 1
-                logger.warning(f"[{self.channel_name}] ⚠️ Pas de segment depuis {elapsed:.1f}s (avertissement {self.health_warnings}/3)")
                 
-                # Décider d'un problème seulement après plusieurs avertissements
+                # S'assurer que le compteur ne dépasse pas 3 pour la logique de traitement
+                health_warnings_for_display = min(self.health_warnings, 3)
+                
+                logger.warning(f"[{self.channel_name}] 🚨 Avertissement santé {health_warnings_for_display}/3 - Dernier segment il y a {elapsed:.1f}s")
+                
+                # Vérification des logs FFmpeg pour indices supplémentaires
+                try:
+                    ffmpeg_log = Path(f"/app/logs/ffmpeg/{self.channel_name}_ffmpeg.log")
+                    if ffmpeg_log.exists():
+                        # Lire les 5 dernières lignes du log
+                        with open(ffmpeg_log, 'r') as f:
+                            lines = f.readlines()
+                            last_lines = lines[-10:] if len(lines) >= 10 else lines
+                            log_excerpt = "".join(last_lines).strip()
+                            
+                            # Vérifier des problèmes connus dans les logs
+                            issues = []
+                            if "error" in log_excerpt.lower():
+                                issues.append("Erreur FFmpeg détectée")
+                            if "dropping" in log_excerpt.lower():
+                                issues.append("FFmpeg abandonne des frames")
+                            if "delay" in log_excerpt.lower() and "too large" in log_excerpt.lower():
+                                issues.append("Délai trop important")
+                            if "stalled" in log_excerpt.lower():
+                                issues.append("Lecture bloquée")
+                            
+                            if issues:
+                                logger.warning(f"[{self.channel_name}] 📝 Problèmes détectés dans les logs FFmpeg: {', '.join(issues)}")
+                                logger.warning(f"[{self.channel_name}] 📝 Extrait des logs FFmpeg:\n{log_excerpt}")
+                except Exception as e:
+                    logger.debug(f"[{self.channel_name}] Impossible de lire les logs FFmpeg: {e}")
+                
+                # Décider d'un problème seulement après 3 avertissements
                 if self.health_warnings >= 3:
-                    logger.error(f"[{self.channel_name}] ❌ Problème de santé confirmé après {self.health_warnings} avertissements")
+                    # Diagnostic détaillé
+                    diagnosis = "Aucun segment traité (génération ou téléchargement)"
+                    if ts_files > 0 and (current_time - latest_segment_time) < 30:
+                        diagnosis = "Segments générés mais non téléchargés par les clients"
+                    elif cpu_usage > 90:
+                        diagnosis = f"CPU surchargé ({cpu_usage:.1f}%), FFmpeg ne peut pas générer les segments assez rapidement"
+                    elif ts_files == 0:
+                        diagnosis = "Aucun segment généré, FFmpeg a peut-être des problèmes avec le fichier source"
+                    
+                    logger.error(f"[{self.channel_name}] ❌ PROBLÈME DE SANTÉ CONFIRMÉ après {self.health_warnings} avertissements")
+                    logger.error(f"[{self.channel_name}] 📊 Résumé: {elapsed:.1f}s sans segment | CPU: {cpu_usage:.1f}% | {ts_files} segments TS")
+                    logger.error(f"[{self.channel_name}] 🔍 DIAGNOSTIC: {diagnosis}")
+                    
                     # Notifier seulement après confirmation du problème
                     if self.on_process_died:
-                        self.on_process_died(-2, "health_check_failed")
+                        # Structurer les informations de diagnostic pour le callback
+                        error_details = {
+                            "type": "health_check_failed",
+                            "elapsed": elapsed,
+                            "cpu_usage": cpu_usage,
+                            "segments_count": ts_files,
+                            "diagnosis": diagnosis,
+                            "average_segment_size": average_segment_size
+                        }
+                        
+                        self.on_process_died(-2, str(error_details))
                     return False
                 
                 # Continuer à surveiller si pas assez d'avertissements
                 return True
             else:
+                # Santé normale - log périodique pour surveillance
+                if (int(current_time) % 300) < 1:  # Log toutes les ~5 minutes 
+                    logger.debug(f"[{self.channel_name}] ✅ Santé OK: dernier segment il y a {elapsed:.1f}s | CPU: {cpu_usage:.1f}%")
+                
                 # Réinitialiser les avertissements si tout va bien
                 if self.health_warnings > 0:
-                    logger.info(f"[{self.channel_name}] ✅ Stream de nouveau en bonne santé")
+                    logger.info(f"[{self.channel_name}] ✅ Stream de nouveau en bonne santé (dernier segment il y a {elapsed:.1f}s)")
                     self.health_warnings = 0
         
         # Processus en vie et santé OK

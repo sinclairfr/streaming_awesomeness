@@ -21,6 +21,7 @@ from video_processor import verify_file_ready, get_accurate_duration
 import datetime
 from error_handler import ErrorHandler
 from time_tracker import TimeTracker
+import psutil
 
 
 class IPTVChannel:
@@ -353,6 +354,8 @@ class IPTVChannel:
         try:
             # Analyser l'erreur pour détecter le type
             error_type = "unknown_error"
+            diagnosis = ""
+            
             if exit_code < 0:
                 # Signal négatif, indique une terminaison par signal
                 error_type = f"signal_{abs(exit_code)}"
@@ -368,31 +371,91 @@ class IPTVChannel:
                     error_type = "dts_error"
                 elif "timeout" in stderr.lower():
                     error_type = "timeout"
+                
+                # Enregistrer le message d'erreur complet pour plus de contexte
+                logger.warning(f"[{self.name}] 📝 Message d'erreur FFmpeg: {stderr[:200]}...")
             
-            # Approche plus tolérante pour la gestion des erreurs
+            # Traiter les erreurs de diagnostic enrichi (format dictionnaire)
+            if stderr and stderr.startswith("{'type':"):
+                try:
+                    # Tenter de récupérer le diagnostic structuré
+                    import ast
+                    error_info = ast.literal_eval(stderr)
+                    
+                    if isinstance(error_info, dict) and 'diagnosis' in error_info:
+                        diagnosis = error_info['diagnosis']
+                        error_type = "health_check_detailed"
+                        
+                        # Logs détaillés du diagnostic
+                        elapsed = error_info.get('elapsed', 0)
+                        cpu_usage = error_info.get('cpu_usage', 0)
+                        segments_count = error_info.get('segments_count', 0)
+                        avg_segment_size = error_info.get('average_segment_size', 0)
+                        
+                        logger.warning(f"[{self.name}] 📊 DIAGNOSTIC DÉTAILLÉ: {diagnosis}")
+                        logger.warning(f"[{self.name}] ⏱️ {elapsed:.1f}s sans activité | CPU: {cpu_usage:.1f}% | Segments: {segments_count} | Taille moy: {avg_segment_size/1024:.1f}KB")
+                except:
+                    # Si échec du parsing, utiliser le message standard
+                    error_type = "health_check_failed"
+                    logger.warning(f"[{self.name}] Diagnostic non structuré: {stderr[:100]}...")
+            
+            # Approche spécifique pour les problèmes de santé
             if exit_code == -2:  # Code spécial pour problème de santé
                 # On incrémente progressivement un compteur d'avertissements
                 # au lieu de redémarrer immédiatement
                 if not hasattr(self, "_health_warnings"):
                     self._health_warnings = 0
+                    self._health_check_details = []
+                
+                # Collecter des détails sur le problème de santé
+                current_time = time.time()
+                elapsed_since_last_segment = current_time - getattr(self.process_manager, "last_segment_time", current_time)
+                duration_threshold = getattr(self, "current_file_duration", 0) or 300  # Durée par défaut de 5 minutes
+                
+                health_details = {
+                    "timestamp": current_time,
+                    "elapsed_since_segment": elapsed_since_last_segment,
+                    "file_duration": duration_threshold,
+                    "diagnosis": diagnosis or "Problème de santé non spécifié",
+                    "stderr": stderr[:100] if stderr else "Aucune erreur spécifique"
+                }
+                
                 self._health_warnings += 1
+                self._health_check_details.append(health_details)
+                
+                # Log détaillé du problème de santé
+                logger.warning(f"[{self.name}] ⚠️ Problème de santé détecté - Avertissement {min(self._health_warnings, 3)}/3")
+                
+                if diagnosis:
+                    logger.warning(f"[{self.name}] 🔍 Cause probable: {diagnosis}")
+                else:
+                    logger.warning(f"[{self.name}] ⏱️ Temps écoulé depuis dernier segment: {elapsed_since_last_segment:.1f}s")
                 
                 # On redémarre seulement après plusieurs avertissements
                 if self._health_warnings >= 3:
-                    logger.warning(f"[{self.name}] Redémarrage après {self._health_warnings} avertissements de santé")
+                    logger.warning(f"[{self.name}] ❗ Redémarrage après {self._health_warnings} avertissements de santé")
+                    details_log = "\n".join([f"  - {i+1}: {details['elapsed_since_segment']:.1f}s sans segment, diagnostic: {details['diagnosis']}" 
+                                            for i, details in enumerate(self._health_check_details)])
+                    logger.warning(f"[{self.name}] 📊 Historique des problèmes de santé:\n{details_log}")
+                    
                     self._health_warnings = 0
-                    self._restart_stream()
+                    self._health_check_details = []
+                    self._restart_stream(diagnostic=diagnosis)
                 else:
-                    logger.info(f"[{self.name}] Avertissement de santé {self._health_warnings}/3, surveillance continue")
+                    logger.info(f"[{self.name}] 🔍 Avertissement de santé {min(self._health_warnings, 3)}/3, surveillance continue")
             else:
                 # Pour les autres erreurs, on utilise l'error handler avec sa logique améliorée
                 if self.error_handler.add_error(error_type):
-                    logger.warning(f"[{self.name}] Redémarrage nécessaire après erreur: {error_type}")
+                    logger.warning(f"[{self.name}] ❗ Redémarrage nécessaire après erreur: {error_type}")
+                    # Log des erreurs accumulées
+                    error_counts = [f"{err_type}: {data['count']}" for err_type, data in self.error_handler.errors.items() if data['count'] > 0]
+                    logger.warning(f"[{self.name}] 📊 Erreurs accumulées: {', '.join(error_counts)}")
+                    
                     # On ajoute un petit délai aléatoire pour éviter les redémarrages simultanés
                     time.sleep(random.uniform(0.5, 3.0))
-                    self._restart_stream()
+                    self._restart_stream(diagnostic=error_type)
                 elif self.error_handler.has_critical_errors():
-                    logger.error(f"[{self.name}] Erreurs critiques détectées, arrêt du stream")
+                    logger.error(f"[{self.name}] ❌ Erreurs critiques détectées, arrêt du stream")
                     # Attendre un peu avant d'arrêter pour éviter les actions trop rapprochées
                     time.sleep(2)
                     self.stop_stream_if_needed()
@@ -401,10 +464,27 @@ class IPTVChannel:
             logger.error(f"[{self.name}] Erreur lors de la gestion du processus: {e}")
             logger.error(traceback.format_exc())
 
-    def _restart_stream(self) -> bool:
+    def _restart_stream(self, diagnostic=None) -> bool:
         """Redémarre le stream en cas de problème"""
         try:
-            logger.info(f"🔄 Redémarrage du stream {self.name}")
+            # Récupérer la dernière raison du redémarrage depuis l'error handler
+            error_summary = self.error_handler.get_errors_summary() 
+            error_count = sum(e["count"] for e in self.error_handler.errors.values() if e["count"] > 0)
+            error_types = [k for k, v in self.error_handler.errors.items() if v["count"] > 0]
+
+            # Création d'un message détaillé avec les raisons du redémarrage
+            if diagnostic:
+                restart_reason = f"diagnostic: {diagnostic}"
+            elif hasattr(self, "_health_warnings") and getattr(self, "_health_warnings", 0) > 0:
+                restart_reason = f"problèmes de santé du stream ({self._health_warnings}/3 avertissements)"
+            elif error_types:
+                restart_reason = f"erreurs accumulées ({error_count}): {', '.join(error_types)}"
+            else:
+                restart_reason = "raison inconnue"
+
+            # Log verbeux du redémarrage avec raisons détaillées
+            logger.info(f"[{self.name}] 🔄🔄🔄 REDÉMARRAGE DU STREAM - Raison: {restart_reason}")
+            logger.info(f"[{self.name}] 📊 Détails des erreurs: {error_summary}")
 
             # Ajouter un délai aléatoire pour éviter les redémarrages en cascade
             jitter = random.uniform(0.5, 2.0)
@@ -412,14 +492,32 @@ class IPTVChannel:
 
             # Utiliser l'error handler pour vérifier le cooldown
             if not self.error_handler.should_restart():
-                logger.info(f"⏳ Attente du cooldown de redémarrage")
+                logger.info(f"[{self.name}] ⏳ Attente du cooldown de redémarrage")
                 return False
 
+            # Vérifier l'utilisation CPU du système
+            try:
+                cpu_system = psutil.cpu_percent(interval=0.5)
+                mem_percent = psutil.virtual_memory().percent
+                logger.info(f"[{self.name}] 🖥️ Ressources système: CPU {cpu_system}%, Mémoire {mem_percent}%")
+                
+                # Avertir si ressources critiques
+                if cpu_system > 85:
+                    logger.warning(f"[{self.name}] ⚠️ Attention: CPU système élevé ({cpu_system}%) pendant le redémarrage")
+            except Exception as e:
+                logger.debug(f"[{self.name}] Impossible de vérifier les ressources système: {e}")
+
             # Arrêter proprement les processus FFmpeg via le ProcessManager
+            logger.info(f"[{self.name}] 🛑 Arrêt du processus FFmpeg en cours...")
             self.process_manager.stop_process()
 
             # Nettoyer le dossier HLS avec le HLSCleaner
+            logger.info(f"[{self.name}] 🧹 Nettoyage des segments HLS...")
+            hls_dir = Path(f"/app/hls/{self.name}")
+            segments_before = len(list(hls_dir.glob("*.ts"))) if hls_dir.exists() else 0
             self.hls_cleaner.cleanup_channel(self.name)
+            segments_after = len(list(hls_dir.glob("*.ts"))) if hls_dir.exists() else 0
+            logger.info(f"[{self.name}] 🧹 Nettoyage des segments: {segments_before} → {segments_after}")
 
             # Vérifier que nous avons des fichiers valides
             ready_dir = Path(self.video_dir) / "ready_to_stream"
@@ -445,11 +543,31 @@ class IPTVChannel:
                 return False
 
             # Lancer un nouveau stream
+            logger.info(f"[{self.name}] 🚀 Démarrage d'un nouveau stream après redémarrage...")
             result = self.start_stream()
             if result:
                 # Réinitialiser les compteurs d'erreurs après un redémarrage réussi
                 self.error_handler.reset()
-                logger.info(f"[{self.name}] ✅ Stream redémarré avec succès")
+                
+                # Noter le temps de redémarrage pour le suivi et les stats
+                self.last_restart_timestamp = time.time()
+                self.last_restart_reason = restart_reason
+                
+                logger.info(f"[{self.name}] ✅ Stream redémarré avec succès - Ancien problème résolu: {restart_reason}")
+                
+                # Collecter des infos après redémarrage pour diagnostic
+                time.sleep(2)  # Court délai pour laisser FFmpeg démarrer
+                if hasattr(self.process_manager, "process") and self.process_manager.process:
+                    pid = self.process_manager.process.pid
+                    try:
+                        ffmpeg_proc = psutil.Process(pid)
+                        cpu_usage = ffmpeg_proc.cpu_percent(interval=0.5)
+                        mem_usage = ffmpeg_proc.memory_info().rss / (1024 * 1024)
+                        logger.info(f"[{self.name}] 📊 Nouveau processus FFmpeg: PID {pid}, CPU {cpu_usage:.1f}%, Mémoire {mem_usage:.1f}MB")
+                    except:
+                        pass
+            else:
+                logger.error(f"[{self.name}] ❌ Échec du redémarrage après problème: {restart_reason}")
             return result
 
         except Exception as e:

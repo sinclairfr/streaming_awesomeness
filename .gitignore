@@ -4,6 +4,7 @@ app/content/
 app/hls/
 app/logs/
 app/rebus/
+app/stats/
 
 # Ignore environment files
 .env
