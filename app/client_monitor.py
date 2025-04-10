@@ -50,6 +50,11 @@ class ClientMonitor(threading.Thread):
         # Événement pour l'arrêt propre du thread de nettoyage
         self.stop_event = threading.Event()
 
+        # Initialisation des attributs de nettoyage
+        self.last_cleanup_log = time.time()
+        self.last_cleanup_time = time.time()
+        self.cleanup_interval = 30  # Nettoyage toutes les 30 secondes
+
         logger.info(f"⏱️ Timeouts configurés - Watcher inactif: {self.WATCHER_INACTIVITY_TIMEOUT}s, Segment: {self.SEGMENT_TIMEOUT}s, Playlist: {self.PLAYLIST_TIMEOUT}s")
 
         # Thread de nettoyage
@@ -848,11 +853,11 @@ class ClientMonitor(threading.Thread):
                             try:
                                 # Journaliser chaque ligne traitée en détail si elle contient un motif intéressant
                                 if ".ts" in line or ".m3u8" in line:
-                                    logger.info(f"🔍 TRAITEMENT_HLS: {line.strip()[:100]}...")
+                                    logger.debug(f"🔍 TRAITEMENT_HLS: {line.strip()[:100]}...")
                                 
                                 ip, channel, request_type, is_valid, user_agent = self._parse_access_log(line)
                                 if channel and ip and is_valid:
-                                    logger.info(f"✅ LIGNE VALIDE: ip={ip}, channel={channel}, type={request_type}")
+                                    logger.debug(f"✅ LIGNE VALIDE: ip={ip}, channel={channel}, type={request_type}")
                                     
                                     if request_type == "segment":
                                         self._handle_segment_request(channel, ip, line, user_agent)

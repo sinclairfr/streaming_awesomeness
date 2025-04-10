@@ -56,7 +56,6 @@ def verify_file_ready(file_path: Path) -> bool:
         logger.error(f"❌ Erreur vérification fichier {file_path}: {e}")
         return False
 
-
 def get_accurate_duration(file_path: Path) -> float:
     """
     Obtient la durée précise d'un fichier vidéo.

@@ -70,7 +70,7 @@ class ReadyContentHandler(BaseFileEventHandler):
 
             # 3. Met à jour la playlist maître
             threading.Thread(
-                target=self.manager._update_master_playlist, daemon=True
+                target=self.manager._manage_master_playlist, daemon=True
             ).start()
 
             # 4. Calcul et mise à jour de la durée totale

@@ -62,26 +62,70 @@ class FFmpegProcessManager:
     def start_process(self, command, hls_dir) -> bool:
         """Démarre un processus FFmpeg avec la commande spécifiée"""
         with self.lock:
-            # Vérifier si un processus est déjà en cours
+            # --- Modified: Stop existing process if running --- 
             if self.is_running():
-                logger.warning(f"[{self.channel_name}] Un processus FFmpeg est déjà en cours")
-                return False
+                logger.warning(f"[{self.channel_name}] Un processus FFmpeg est déjà en cours, tentative d'arrêt...")
+                if not self.stop_process(timeout=5): # Try to stop it gracefully
+                    logger.error(f"[{self.channel_name}] ❌ Impossible d'arrêter le processus existant, abandon du démarrage.")
+                    return False
+                # Short delay to allow resources to release
+                time.sleep(1.0)
+                if self.is_running(): # Double-check if stop actually worked
+                    logger.error(f"[{self.channel_name}] ❌ Le processus existant est toujours en cours après tentative d'arrêt, abandon.")
+                    return False
+                logger.info(f"[{self.channel_name}] ✅ Ancien processus arrêté.")
+            # --- End Modification ---
 
-            # Nettoyer les processus existants
+            # Nettoyer les processus existants (zombies)
             self._clean_zombie_processes()
 
             # Créer le dossier HLS si nécessaire
             os.makedirs(hls_dir, exist_ok=True)
 
             try:
+                # Vérifier que le fichier d'entrée existe
+                input_file = None
+                for i, arg in enumerate(command):
+                    if arg == "-i" and i + 1 < len(command):
+                        input_file = command[i + 1]
+                        break
+                
+                if input_file and not os.path.exists(input_file):
+                    logger.error(f"[{self.channel_name}] ❌ Fichier d'entrée introuvable: {input_file}")
+                    return False
+
                 # Démarrer le processus
                 logger.info(f"[{self.channel_name}] 🚀 Démarrage FFmpeg: {' '.join(command[:5])}...")
+                
+                # Définir le chemin du fichier log FFmpeg
+                ffmpeg_log_path = Path(f"/app/logs/ffmpeg/{self.channel_name}_ffmpeg.log")
+                # S'assurer que le dossier de logs existe
+                ffmpeg_log_path.parent.mkdir(parents=True, exist_ok=True)
+                
+                # Ouvrir le fichier log en mode append ('a') pour stderr
+                stderr_log_file = open(ffmpeg_log_path, 'a')
+                
                 self.process = subprocess.Popen(
                     command,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
+                    stdout=subprocess.PIPE, # Garder stdout en pipe si nécessaire
+                    stderr=stderr_log_file, # Rediriger stderr vers le fichier log
                     text=True
                 )
+                # Enregistrer le temps de démarrage pour la période de grâce
+                self.start_time = time.time()
+                
+                # Le descripteur de fichier peut être fermé par le script Python après le démarrage de Popen,
+                # le sous-processus conserve son propre descripteur ouvert.
+                stderr_log_file.close() 
+                
+                # Attendre un peu pour voir si le processus démarre correctement
+                time.sleep(2)
+                
+                # Vérifier si le processus est toujours en cours
+                if self.process.poll() is not None:
+                    error_output = self.process.stderr.read() if self.process.stderr else "Pas de sortie d'erreur"
+                    logger.error(f"[{self.channel_name}] ❌ FFmpeg a échoué à démarrer: {error_output}")
+                    return False
                 
                 # Réinitialiser les compteurs d'état
                 self.last_segment_time = time.time()
@@ -90,10 +134,22 @@ class FFmpegProcessManager:
                 # Démarrer la surveillance
                 self._start_monitoring(hls_dir)
                 
-                return True
+                # Vérifier la création du premier segment
+                segment_check_start = time.time()
+                while time.time() - segment_check_start < 10:  # Attendre jusqu'à 10 secondes
+                    if any(Path(hls_dir).glob("segment_*.ts")):
+                        logger.info(f"[{self.channel_name}] ✅ Premier segment créé avec succès")
+                        return True
+                    time.sleep(1)
+                
+                logger.warning(f"[{self.channel_name}] ⚠️ Aucun segment créé après 10 secondes")
+                return True  # On retourne True quand même car le processus est en cours
                 
             except Exception as e:
                 logger.error(f"[{self.channel_name}] ❌ Erreur démarrage FFmpeg: {e}")
+                if self.process:
+                    self.process.terminate()
+                    self.process = None
                 return False
 
     def stop_process(self, timeout: int = 5) -> bool:
@@ -107,22 +163,38 @@ class FFmpegProcessManager:
                 if self.monitor_thread and self.monitor_thread.is_alive():
                     self.stop_monitoring.set()
                 
-                pid = self.process.pid if self.process else None
-                logger.info(f"[{self.channel_name}] 🛑 Arrêt du processus FFmpeg PID {pid}")
+                pid_to_stop = self.process.pid if self.process else None
+                logger.info(f"[{self.channel_name}] 🛑 Arrêt du processus FFmpeg PID {pid_to_stop}")
 
-                # Tenter un arrêt propre
-                self.process.terminate()
-                
-                try:
-                    self.process.wait(timeout=timeout)
-                except subprocess.TimeoutExpired:
-                    # Kill forcé si nécessaire
-                    logger.warning(f"[{self.channel_name}] ⚠️ Kill forcé du processus FFmpeg")
-                    self.process.kill()
-                    time.sleep(0.5)
+                if pid_to_stop:
+                    try:
+                        p = psutil.Process(pid_to_stop)
+                        # Tenter un arrêt propre
+                        p.terminate() 
+                        
+                        # Attendre plus longtemps pour l'arrêt normal
+                        try:
+                            p.wait(timeout=timeout + 5) # Increased timeout
+                            logger.info(f"[{self.channel_name}] ✅ Processus {pid_to_stop} arrêté proprement.")
+                        except psutil.TimeoutExpired:
+                            # Kill forcé si nécessaire
+                            logger.warning(f"[{self.channel_name}] ⚠️ Kill forcé du processus FFmpeg PID {pid_to_stop}")
+                            p.kill()
+                            time.sleep(1.0) # Allow time for kill
+                            
+                            # Vérification finale
+                            if p.is_running():
+                                logger.error(f"[{self.channel_name}] ❌ Échec du kill forcé pour PID {pid_to_stop}")
+                            else:
+                                logger.info(f"[{self.channel_name}] ✅ Processus {pid_to_stop} tué avec succès.")
+                                
+                    except psutil.NoSuchProcess:
+                        logger.info(f"[{self.channel_name}] ✅ Processus {pid_to_stop} déjà arrêté.")
+                    except Exception as e:
+                         logger.error(f"[{self.channel_name}] ❌ Erreur lors de l'arrêt du processus {pid_to_stop}: {e}")
 
                 # Nettoyage final
-                self.process = None
+                self.process = None 
                 return True
 
             except Exception as e:
@@ -133,6 +205,7 @@ class FFmpegProcessManager:
         """Nettoie les processus FFmpeg orphelins pour cette chaîne"""
         try:
             pattern = f"/hls/{self.channel_name}/"
+            current_pid = self.get_pid()
             processes_killed = 0
 
             for proc in psutil.process_iter(["pid", "name", "cmdline"]):
@@ -146,14 +219,24 @@ class FFmpegProcessManager:
                     if pattern not in cmdline:
                         continue
 
-                    # Sauter notre propre processus
-                    if self.process and proc.info["pid"] == self.process.pid:
+                    # Sauter notre propre processus géré
+                    if current_pid and proc.info["pid"] == current_pid:
+                        continue
+                        
+                    # Vérifier si le processus existe toujours
+                    if not psutil.pid_exists(proc.info['pid']):
                         continue
 
                     # Tuer le processus orphelin
-                    logger.info(f"[{self.channel_name}] 🧹 Nettoyage processus {proc.info['pid']}")
-                    proc.kill()
-                    processes_killed += 1
+                    logger.warning(f"[{self.channel_name}] 🧹 Nettoyage du processus FFmpeg orphelin PID {proc.info['pid']}")
+                    try:
+                        proc.kill()
+                        processes_killed += 1
+                        # Attente courte pour laisser le système traiter le kill
+                        time.sleep(0.1)
+                    except psutil.NoSuchProcess:
+                        logger.info(f"[{self.channel_name}] 💨 Processus {proc.info['pid']} déjà terminé.")
+                        pass # Process already gone
 
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     continue
@@ -187,9 +270,11 @@ class FFmpegProcessManager:
         """Surveillance du processus FFmpeg"""
         try:
             # Intervalles de vérification
-            health_check_interval = 60  # Vérification de santé toutes les 60 secondes (était 30)
+            health_check_interval = 60  # Vérification de santé toutes les 60 secondes
+            startup_grace_period = 15  # Période de grâce au démarrage
             
             last_health_check = time.time()
+            startup_time = time.time()
             
             while not self.stop_monitoring.is_set():
                 # 1. Vérification de base: processus toujours en vie?
@@ -197,13 +282,15 @@ class FFmpegProcessManager:
                     return_code = self.process.poll() if self.process else -999
                     logger.error(f"[{self.channel_name}] ❌ Processus FFmpeg arrêté (code: {return_code})")
                     if self.on_process_died:
-                        self.on_process_died(return_code)
+                        self.on_process_died(return_code, None)
                     break
 
                 # 2. Vérification périodique de la santé
                 current_time = time.time()
                 if current_time - last_health_check >= health_check_interval:
-                    self.check_stream_health()
+                    # Période de grâce au démarrage
+                    if current_time - startup_time > startup_grace_period:
+                        self.check_stream_health()
                     last_health_check = current_time
                 
                 # Pause courte pour économiser des ressources
@@ -265,7 +352,7 @@ class FFmpegProcessManager:
             elapsed = current_time - latest_segment_time
 
             # Seuil de tolérance pour les segments (en secondes)
-            segment_threshold = 30  # Augmenté de 20 à 30 secondes
+            segment_threshold = 45  # Augmenté de 30 à 45 secondes
 
             # Collecter des métriques système
             cpu_usage = psutil.cpu_percent(interval=1)
@@ -278,16 +365,23 @@ class FFmpegProcessManager:
 
             # Collecter des métriques pour les problèmes
             if elapsed > segment_threshold:
-                # Log détaillé des métriques système
+                # AJOUT: Vérifier si le processus vient de démarrer
+                grace_period = 60 # secondes de grâce après le démarrage
+                process_uptime = current_time - getattr(self, 'start_time', 0)
+                if process_uptime < grace_period:
+                    logger.info(f"[{self.channel_name}] ✅ Health check deferred: process recently started ({process_uptime:.1f}s ago).")
+                    return True # Continuer la surveillance sans avertissement pendant la période de grâce
+
+                # Log détaillé des métriques système (si hors période de grâce)
                 logger.warning(f"[{self.channel_name}] ⚠️ Pas de segment traité depuis {elapsed:.1f}s | CPU: {cpu_usage:.1f}% | RAM: {memory_usage_mb:.1f}MB")
                 
                 # Accumulation d'avertissements plutôt que décision immédiate
                 self.health_warnings += 1
                 
-                # S'assurer que le compteur ne dépasse pas 3 pour la logique de traitement
-                health_warnings_for_display = min(self.health_warnings, 3)
+                # S'assurer que le compteur ne dépasse pas 5 pour la logique de traitement
+                health_warnings_for_display = min(self.health_warnings, 5)
                 
-                logger.warning(f"[{self.channel_name}] 🚨 Avertissement santé {health_warnings_for_display}/3 - Dernier segment il y a {elapsed:.1f}s")
+                logger.warning(f"[{self.channel_name}] 🚨 Avertissement santé {health_warnings_for_display}/5 - Dernier segment il y a {elapsed:.1f}s")
                 
                 # Vérification des logs FFmpeg pour indices supplémentaires
                 try:
@@ -316,8 +410,8 @@ class FFmpegProcessManager:
                 except Exception as e:
                     logger.debug(f"[{self.channel_name}] Impossible de lire les logs FFmpeg: {e}")
                 
-                # Décider d'un problème seulement après 3 avertissements
-                if self.health_warnings >= 3:
+                # Décider d'un problème seulement après 5 avertissements
+                if self.health_warnings >= 5:
                     # Diagnostic détaillé
                     diagnosis = "Aucun segment traité (génération ou téléchargement)"
                     if len(ts_files) > 0 and (current_time - latest_segment_time) < 30:

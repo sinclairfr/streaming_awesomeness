@@ -22,6 +22,7 @@ import datetime
 from error_handler import ErrorHandler
 from time_tracker import TimeTracker
 import psutil
+import traceback
 
 
 class IPTVChannel:
@@ -67,6 +68,8 @@ class IPTVChannel:
         self.lock = threading.Lock()
         self.ready_for_streaming = False
         self.total_duration = 0
+        self.processed_videos = [] # List to hold video file Paths
+        self.current_video_index = 0 # Index for the current video
 
         # Initialiser les composants dans le bon ordre
         self.position_manager = PlaybackPositionManager(name)
@@ -88,7 +91,6 @@ class IPTVChannel:
         self.processor = VideoProcessor(self.video_dir)
 
         # Variables de surveillance
-        self.processed_videos = []
         self.watchers_count = 0
         self.last_watcher_time = time.time()
         self.last_segment_time = time.time()
@@ -97,21 +99,25 @@ class IPTVChannel:
         self.initial_scan_complete = False
         self.scan_lock = threading.Lock()
 
-        # Chargement des vidéos
+        # Initial scan to populate processed_videos
         logger.info(f"[{self.name}] 🔄 Préparation initiale de la chaîne")
-        self._scan_videos()
-        self._create_concat_file()
+        if not self._scan_videos(): # Scan and check if successful
+            logger.error(f"[{self.name}] ❌ Scan initial échoué, impossible d'initialiser")
+            return # Prevent further initialization if scan fails
+        
+        # No longer need concat file creation here
+        # self._create_concat_file() 
 
-        # Calcul de la durée totale
-        total_duration = self._calculate_total_duration()
-        self.position_manager.set_total_duration(total_duration)
-        self.process_manager.set_total_duration(total_duration)
+        # No longer need total duration calculation here, maybe later per-file
+        # total_duration = self._calculate_total_duration()
+        # self.position_manager.set_total_duration(total_duration)
+        # self.process_manager.set_total_duration(total_duration)
 
         self.initial_scan_complete = True
         self.ready_for_streaming = len(self.processed_videos) > 0
 
         logger.info(
-            f"[{self.name}] ✅ Initialisation complète. Chaîne prête: {self.ready_for_streaming}"
+            f"[{self.name}] ✅ Initialisation complète. Chaîne prête: {self.ready_for_streaming} avec {len(self.processed_videos)} vidéos."
         )
 
     def _create_concat_file(self) -> Optional[Path]:
@@ -352,6 +358,39 @@ class IPTVChannel:
     def _handle_process_died(self, exit_code, stderr=None):
         """Gère la mort du processus FFmpeg et décide des actions à prendre"""
         try:
+            # Log the exit code and stderr for debugging
+            logger.info(f"[{self.name}] ℹ️ Processus FFmpeg terminé avec code: {exit_code}")
+            if stderr:
+                logger.info(f"[{self.name}] ℹ️ FFmpeg stderr (premières lignes):\n{stderr[:500]}")
+
+            # --- Handle Successful Completion (Advance to Next Video) ---
+            if exit_code == 0:
+                logger.info(f"[{self.name}] ✅ Fichier vidéo terminé avec succès.")
+                with self.lock:
+                    if not self.processed_videos: # Should not happen if started, but check
+                        logger.warning(f"[{self.name}] ⚠️ Liste de vidéos vide après fin de lecture.")
+                        return
+                        
+                    # Advance index
+                    self.current_video_index += 1
+                    
+                    # Loop back if index goes out of bounds
+                    if self.current_video_index >= len(self.processed_videos):
+                        logger.info(f"[{self.name}] 🔄 Fin de la playlist, retour au début.")
+                        self.current_video_index = 0
+                    
+                    next_video_index = self.current_video_index
+                    num_videos = len(self.processed_videos)
+                    
+                # Schedule the start of the next video slightly delayed
+                logger.info(f"[{self.name}] ⏱️ Planification du démarrage du prochain fichier ({next_video_index + 1}/{num_videos}) dans 1 seconde...")
+                threading.Timer(1.0, self.start_stream).start()
+                return # Don't proceed to error handling
+            # --- End Successful Completion Handling ---
+            
+            # --- Existing Error Handling (for crashes/non-zero exit codes) ---
+            logger.warning(f"[{self.name}] ⚠️ Processus FFmpeg terminé anormalement (code: {exit_code}).")
+            
             # Analyser l'erreur pour détecter le type
             error_type = "unknown_error"
             diagnosis = ""
@@ -444,7 +483,7 @@ class IPTVChannel:
                 else:
                     logger.info(f"[{self.name}] 🔍 Avertissement de santé {min(self._health_warnings, 3)}/3, surveillance continue")
             else:
-                # Pour les autres erreurs, on utilise l'error handler avec sa logique améliorée
+                # Utiliser l'error handler seulement si ce n'est pas une fin normale (exit_code != 0)
                 if self.error_handler.add_error(error_type):
                     logger.warning(f"[{self.name}] ❗ Redémarrage nécessaire après erreur: {error_type}")
                     # Log des erreurs accumulées
@@ -452,6 +491,7 @@ class IPTVChannel:
                     logger.warning(f"[{self.name}] 📊 Erreurs accumulées: {', '.join(error_counts)}")
                     
                     # On ajoute un petit délai aléatoire pour éviter les redémarrages simultanés
+                    # IMPORTANT: _restart_stream will call start_stream, which will use the *current* (failed) video index
                     time.sleep(random.uniform(0.5, 3.0))
                     self._restart_stream(diagnostic=error_type)
                 elif self.error_handler.has_critical_errors():
@@ -465,35 +505,10 @@ class IPTVChannel:
             logger.error(traceback.format_exc())
 
     def _restart_stream(self, diagnostic=None) -> bool:
-        """Redémarre le stream en cas de problème"""
+        """Redémarre le stream pour le fichier VIDÉO ACTUEL en cas de problème"""
         try:
-            # Récupérer la dernière raison du redémarrage depuis l'error handler
-            error_summary = self.error_handler.get_errors_summary() 
-            error_count = sum(e["count"] for e in self.error_handler.errors.values() if e["count"] > 0)
-            error_types = [k for k, v in self.error_handler.errors.items() if v["count"] > 0]
-
-            # Création d'un message détaillé avec les raisons du redémarrage
-            if diagnostic:
-                restart_reason = f"diagnostic: {diagnostic}"
-            elif hasattr(self, "_health_warnings") and getattr(self, "_health_warnings", 0) > 0:
-                restart_reason = f"problèmes de santé du stream ({self._health_warnings}/3 avertissements)"
-            elif error_types:
-                restart_reason = f"erreurs accumulées ({error_count}): {', '.join(error_types)}"
-            else:
-                restart_reason = "raison inconnue"
-
-            # Log verbeux du redémarrage avec raisons détaillées
-            logger.info(f"[{self.name}] 🔄🔄🔄 REDÉMARRAGE DU STREAM - Raison: {restart_reason}")
-            logger.info(f"[{self.name}] 📊 Détails des erreurs: {error_summary}")
-
-            # Ajouter un délai aléatoire pour éviter les redémarrages en cascade
-            jitter = random.uniform(0.5, 2.0)
-            time.sleep(jitter)
-
-            # Utiliser l'error handler pour vérifier le cooldown
-            if not self.error_handler.should_restart():
-                logger.info(f"[{self.name}] ⏳ Attente du cooldown de redémarrage")
-                return False
+            restart_reason = diagnostic or "Raison inconnue"
+            logger.info(f"[{self.name}] 🔄 Tentative de redémarrage du stream - Raison: {restart_reason}")
 
             # Vérifier l'utilisation CPU du système
             try:
@@ -504,14 +519,15 @@ class IPTVChannel:
                 # Avertir si ressources critiques
                 if cpu_system > 85:
                     logger.warning(f"[{self.name}] ⚠️ Attention: CPU système élevé ({cpu_system}%) pendant le redémarrage")
+                    time.sleep(5)  # Attendre un peu pour laisser le système se calmer
             except Exception as e:
                 logger.debug(f"[{self.name}] Impossible de vérifier les ressources système: {e}")
 
-            # Arrêter proprement les processus FFmpeg via le ProcessManager
+            # Arrêter proprement les processus FFmpeg
             logger.info(f"[{self.name}] 🛑 Arrêt du processus FFmpeg en cours...")
             self.process_manager.stop_process()
 
-            # Nettoyer le dossier HLS avec le HLSCleaner
+            # Nettoyer le dossier HLS
             logger.info(f"[{self.name}] 🧹 Nettoyage des segments HLS...")
             hls_dir = Path(f"/app/hls/{self.name}")
             segments_before = len(list(hls_dir.glob("*.ts"))) if hls_dir.exists() else 0
@@ -519,59 +535,37 @@ class IPTVChannel:
             segments_after = len(list(hls_dir.glob("*.ts"))) if hls_dir.exists() else 0
             logger.info(f"[{self.name}] 🧹 Nettoyage des segments: {segments_before} → {segments_after}")
 
-            # Vérifier que nous avons des fichiers valides
-            ready_dir = Path(self.video_dir) / "ready_to_stream"
-            if not ready_dir.exists():
-                logger.error(f"[{self.name}] ❌ Dossier ready_to_stream introuvable")
-                return False
-
-            video_files = list(ready_dir.glob("*.mp4"))
-            if not video_files:
-                logger.error(f"[{self.name}] ❌ Aucun fichier MP4 dans ready_to_stream")
-                return False
-
-            # Vérifier que les fichiers sont valides
-            valid_files = []
-            for video_file in video_files:
-                if verify_file_ready(video_file):
-                    valid_files.append(video_file)
+            # Attendre un peu avant de redémarrer
+            time.sleep(2)
+            
+            # *** ADVANCE TO NEXT VIDEO ON ERROR RESTART ***
+            with self.lock:
+                if self.processed_videos: # Check if list is not empty
+                    logger.info(f"[{self.name}] ⏭️ Passage au fichier suivant après erreur sur l'index {self.current_video_index}")
+                    self.current_video_index += 1
+                    # Loop back if index goes out of bounds
+                    if self.current_video_index >= len(self.processed_videos):
+                        logger.info(f"[{self.name}] 🔄 Fin de la playlist atteinte après erreur, retour au début.")
+                        self.current_video_index = 0
                 else:
-                    logger.warning(f"[{self.name}] ⚠️ Fichier {video_file.name} ignoré car non valide")
+                    logger.warning(f"[{self.name}] ⚠️ Liste de vidéos vide, impossible de passer au suivant.")
+                    return False # Can't restart if no videos
 
-            if not valid_files:
-                logger.error(f"[{self.name}] ❌ Aucun fichier MP4 valide trouvé")
+            # Redémarrer le stream (start_stream will now use the *next* index)
+            success = self.start_stream()
+            if success:
+                # Reset error handler only for the current video failure context
+                # self.error_handler.reset() # Maybe reset specific error type?
+                logger.info(f"[{self.name}] ✅ Stream redémarré avec succès pour le fichier actuel - Ancien problème: {diagnostic}")
+                # ... (existing post-restart logging) ...
+            else:
+                logger.error(f"[{self.name}] ❌ Échec du redémarrage pour le fichier actuel après problème: {diagnostic}")
+                # Consider incrementing index here if restart fails repeatedly?
                 return False
 
-            # Lancer un nouveau stream
-            logger.info(f"[{self.name}] 🚀 Démarrage d'un nouveau stream après redémarrage...")
-            result = self.start_stream()
-            if result:
-                # Réinitialiser les compteurs d'erreurs après un redémarrage réussi
-                self.error_handler.reset()
-                
-                # Noter le temps de redémarrage pour le suivi et les stats
-                self.last_restart_timestamp = time.time()
-                self.last_restart_reason = restart_reason
-                
-                logger.info(f"[{self.name}] ✅ Stream redémarré avec succès - Ancien problème résolu: {restart_reason}")
-                
-                # Collecter des infos après redémarrage pour diagnostic
-                time.sleep(2)  # Court délai pour laisser FFmpeg démarrer
-                if hasattr(self.process_manager, "process") and self.process_manager.process:
-                    pid = self.process_manager.process.pid
-                    try:
-                        ffmpeg_proc = psutil.Process(pid)
-                        cpu_usage = ffmpeg_proc.cpu_percent(interval=0.5)
-                        mem_usage = ffmpeg_proc.memory_info().rss / (1024 * 1024)
-                        logger.info(f"[{self.name}] 📊 Nouveau processus FFmpeg: PID {pid}, CPU {cpu_usage:.1f}%, Mémoire {mem_usage:.1f}MB")
-                    except:
-                        pass
-            else:
-                logger.error(f"[{self.name}] ❌ Échec du redémarrage après problème: {restart_reason}")
-            return result
-
+            return success
         except Exception as e:
-            logger.error(f"Erreur lors du redémarrage de {self.name}: {e}")
+            logger.error(f"[{self.name}] ❌ Erreur lors du redémarrage: {e}")
             import traceback
             logger.error(traceback.format_exc())
             return False
@@ -593,297 +587,138 @@ class IPTVChannel:
             return False
 
     def start_stream(self) -> bool:
-        """
-        Démarre le flux HLS pour cette chaîne en traitant un fichier à la fois.
-        """
+        """Démarre le stream pour le fichier vidéo actuel de cette chaîne"""
         try:
-            # Initialiser le temps de démarrage
-            self._startup_time = time.time()
-            
-            # 1) Vérifier qu'on a des vidéos prêtes
-            if not self.ready_for_streaming:
-                logger.warning(f"[{self.name}] ⚠️ Chaîne non prête (pas de vidéos). Annulation du démarrage.")
-                return False
-
-            # 2) Préparer le dossier HLS
-            hls_dir = Path(f"/app/hls/{self.name}")
-            if not hls_dir.exists():
-                # Créer le dossier HLS s'il n'existe pas
-                try:
-                    hls_dir.mkdir(parents=True, exist_ok=True)
-                    # S'assurer que le dossier est accessible en écriture
-                    os.chmod(hls_dir, 0o777)
-                    logger.info(f"[{self.name}] 📁 Création du dossier HLS: {hls_dir}")
-                except Exception as e:
-                    logger.error(f"[{self.name}] ❌ Erreur création dossier HLS: {e}")
+            with self.lock: # Lock to prevent race conditions with index/list
+                # Vérifier que la chaîne est prête et a des vidéos
+                if not self.ready_for_streaming or not self.processed_videos:
+                    logger.error(f"[{self.name}] ❌ La chaîne n'est pas prête ou n'a pas de vidéos.")
                     return False
-            else:
-                # Nettoyer le dossier existant
+
+                # Vérifier la validité de l'index
+                if not (0 <= self.current_video_index < len(self.processed_videos)):
+                    logger.warning(f"[{self.name}] ⚠️ Index vidéo invalide ({self.current_video_index}), réinitialisation à 0.")
+                    self.current_video_index = 0
+                    if not self.processed_videos: # Double check after reset
+                         logger.error(f"[{self.name}] ❌ Aucune vidéo à lire après réinitialisation de l'index.")
+                         return False
+                         
+                # Sélectionner le fichier vidéo actuel
+                video_file = self.processed_videos[self.current_video_index]
+                logger.info(f"[{self.name}] 🎥 Démarrage du fichier ({self.current_video_index + 1}/{len(self.processed_videos)}): {video_file.name}")
+                
+                # Check if file still exists and is accessible
+                if not video_file.exists() or not os.access(video_file, os.R_OK):
+                    logger.error(f"[{self.name}] ❌ Fichier vidéo inaccessible: {video_file}. Tentative de rescan...")
+                    self._scan_videos() # Try to refresh the list
+                    # Check index validity again after rescan
+                    if not (0 <= self.current_video_index < len(self.processed_videos)):
+                         self.current_video_index = 0 # Reset if still bad
+                    if not self.processed_videos: 
+                        logger.error(f"[{self.name}] ❌ Aucune vidéo valide trouvée après rescan.")
+                        return False
+                    # Try to get the file again
+                    video_file = self.processed_videos[self.current_video_index]
+                    if not video_file.exists() or not os.access(video_file, os.R_OK):
+                        logger.error(f"[{self.name}] ❌ Fichier toujours inaccessible après rescan: {video_file}. Abandon.")
+                        return False # Give up if still inaccessible
+                    logger.info(f"[{self.name}] 🎥 Reprise avec fichier ({self.current_video_index + 1}/{len(self.processed_videos)}): {video_file.name}")
+
+
+                # Créer le dossier HLS
+                hls_dir = Path(f"/app/hls/{self.name}")
+                hls_dir.mkdir(parents=True, exist_ok=True)
+
+                # Nettoyer les anciens segments AVANT de démarrer un nouveau fichier
                 self.hls_cleaner.cleanup_channel(self.name)
 
-            # 3) Sélectionner un fichier aléatoire parmi les fichiers valides
-            if not self.processed_videos:
-                logger.error(f"[{self.name}] ❌ Aucun fichier vidéo disponible")
-                return False
-                
-            video_file = random.choice(self.processed_videos)
-            if not video_file.exists():
-                logger.error(f"[{self.name}] ❌ Fichier sélectionné n'existe pas: {video_file}")
-                return False
-            
-            # Suivre le fichier actuellement utilisé
-            self.current_video_file = video_file
-            
-            # Obtenir la durée du fichier pour la surveillance
-            try:
-                duration = get_accurate_duration(video_file)
-                if duration and duration > 0:
-                    self.current_file_duration = duration
-                    logger.info(f"[{self.name}] ℹ️ Durée du fichier actuel: {duration:.2f}s")
+                # Construire la commande FFmpeg pour le fichier unique
+                command = self.command_builder.build_command(
+                    input_file=str(video_file), # Pass the single video file
+                    output_dir=str(hls_dir),
+                    progress_file=f"/app/logs/ffmpeg/{self.name}_progress.log",
+                    # has_mkv=... # We might need to re-enable this if needed
+                    has_mkv=('.mkv' in video_file.name.lower()) # Simple check based on current file
+                )
+
+                if not command:
+                    logger.error(f"[{self.name}] ❌ Impossible de construire la commande FFmpeg pour {video_file.name}")
+                    return False
+
+                logger.debug(f"[{self.name}] ⚙️ Commande FFmpeg: {' '.join(command)}")
+
+                # Démarrer le processus FFmpeg
+                success = self.process_manager.start_process(command, str(hls_dir))
+
+                if success:
+                    logger.info(f"[{self.name}] ✅ Processus FFmpeg démarré avec succès pour {video_file.name}")
+                    self.error_handler.reset() # Reset errors on successful start
                 else:
-                    logger.warning(f"[{self.name}] ⚠️ Impossible de déterminer la durée du fichier")
-                    self.current_file_duration = 300  # Valeur par défaut
-            except Exception as e:
-                logger.warning(f"[{self.name}] ⚠️ Erreur calcul durée: {e}")
-                self.current_file_duration = 300  # Valeur par défaut
-            
-            logger.info(f"[{self.name}] 🎥 Démarrage avec le fichier: {video_file.name}")
+                    logger.error(f"[{self.name}] ❌ Échec du démarrage du processus FFmpeg pour {video_file.name}")
 
-            # 4) Construire la commande FFmpeg pour un fichier individuel
-            progress_file = f"/app/logs/ffmpeg/{self.name}_progress.log"
-            
-            command = [
-                "ffmpeg",
-                "-hide_banner",
-                "-loglevel", "info",
-                "-y",
-                "-thread_queue_size", "4096",
-                "-analyzeduration", "5M",
-                "-probesize", "5M",
-                "-re",
-                "-fflags", "+genpts+igndts+discardcorrupt",
-                "-threads", "2",
-                "-avoid_negative_ts", "make_zero"
-            ]
-            
-            # Ajouter le fichier de progression
-            if progress_file:
-                command.extend(["-progress", progress_file])
-            
-            # Ajouter l'entrée (fichier individuel)
-            command.extend(["-i", str(video_file)])
-            
-            # Paramètres de sortie
-            command.extend([
-                "-c:v", "copy",
-                "-c:a", "copy",
-                "-sn", "-dn",
-                "-map", "0:v:0",
-                "-map", "0:a:0?",
-                "-max_muxing_queue_size", "2048",
-                "-fps_mode", "passthrough",
-                "-f", "hls",
-                "-hls_time", "2",
-                "-hls_list_size", "6",
-                "-hls_delete_threshold", "1",
-                "-hls_flags", "delete_segments+append_list+independent_segments",
-                "-hls_allow_cache", "1",
-                "-start_number", "0",
-                "-hls_segment_type", "mpegts",
-                "-max_delay", "1000000",
-                "-hls_init_time", "1",
-                "-hls_segment_filename", f"{str(hls_dir)}/segment_%d.ts",
-                f"{str(hls_dir)}/playlist.m3u8"
-            ])
-            
-            # Log de la commande complète
-            logger.info("=" * 80)
-            logger.info(f"[{self.name}] 🚀 Lancement FFmpeg: {' '.join(command)}")
-            logger.info("=" * 80)
-            
-            # 5) Démarrer le processus FFmpeg via le ProcessManager
-            success = self.process_manager.start_process(command, str(hls_dir))
-            if not success:
-                logger.error(f"[{self.name}] ❌ Échec du démarrage du processus FFmpeg")
-                return False
-
-            # 6) Démarrer la boucle de surveillance des segments en arrière-plan
-            if not hasattr(self, "_segment_monitor_thread") or not self._segment_monitor_thread.is_alive():
-                self._segment_monitor_thread = threading.Thread(
-                    target=self._segment_monitor_loop,
-                    daemon=True
-                )
-                self._segment_monitor_thread.start()
-                logger.info(f"[{self.name}] 🔍 Boucle de surveillance des segments démarrée")
-                
-            # 7) Démarrer le gestionnaire de fichiers en arrière-plan 
-            if not hasattr(self, "_file_manager_thread") or not self._file_manager_thread.is_alive():
-                self._file_manager_thread = threading.Thread(
-                    target=self._manage_video_files,
-                    daemon=True
-                )
-                self._file_manager_thread.start()
-                logger.info(f"[{self.name}] 🔄 Gestionnaire de fichiers démarré")
-
-            logger.info(f"[{self.name}] ✅ Stream démarré avec succès")
-            return True
+            return success # Return success status outside the lock
 
         except Exception as e:
             logger.error(f"[{self.name}] ❌ Erreur start_stream: {e}")
+            logger.error(traceback.format_exc())
             return False
-            
-    def _manage_video_files(self):
-        """
-        Gère la rotation des fichiers vidéo (arrêt/démarrage de FFmpeg entre chaque fichier).
-        Surveille la fin de la lecture du fichier actuel et passe au suivant.
-        """
-        try:
-            # Attendre que le stream soit bien démarré
-            time.sleep(10)
-            
-            while True:
-                # Vérifier si le processus est en cours
-                if not self.process_manager.is_running():
-                    logger.info(f"[{self.name}] ℹ️ Processus FFmpeg arrêté, sélection du prochain fichier")
-                    
-                    # Prendre un nouveau fichier au hasard
-                    if not self.processed_videos:
-                        logger.error(f"[{self.name}] ❌ Plus de fichiers disponibles")
-                        break
-                    
-                    # Vérifier que la liste des fichiers est à jour
-                    self._scan_videos_async()
-                    
-                    # Sélectionner un fichier aléatoire
-                    video_file = random.choice(self.processed_videos)
-                    if not video_file.exists():
-                        logger.warning(f"[{self.name}] ⚠️ Fichier sélectionné n'existe pas: {video_file}")
-                        continue
-                    
-                    # Mettre à jour le fichier actuel
-                    self.current_video_file = video_file
-                    
-                    # Obtenir la durée du fichier
-                    try:
-                        duration = get_accurate_duration(video_file)
-                        if duration and duration > 0:
-                            self.current_file_duration = duration
-                            logger.info(f"[{self.name}] ℹ️ Durée du fichier: {duration:.2f}s")
-                        else:
-                            logger.warning(f"[{self.name}] ⚠️ Impossible de déterminer la durée")
-                            self.current_file_duration = 300  # Valeur par défaut
-                    except Exception as e:
-                        logger.warning(f"[{self.name}] ⚠️ Erreur calcul durée: {e}")
-                        self.current_file_duration = 300  # Valeur par défaut
-                    
-                    # Réinitialiser la position
-                    self.last_logged_position = 0
-                    
-                    logger.info(f"[{self.name}] 🎥 Changement de fichier: {video_file.name}")
-                    
-                    # Démarrer un nouveau processus FFmpeg avec ce fichier
-                    hls_dir = Path(f"/app/hls/{self.name}")
-                    progress_file = f"/app/logs/ffmpeg/{self.name}_progress.log"
-                    
-                    command = [
-                        "ffmpeg",
-                        "-hide_banner",
-                        "-loglevel", "info",
-                        "-y",
-                        "-thread_queue_size", "4096",
-                        "-analyzeduration", "5M",
-                        "-probesize", "5M",
-                        "-re",
-                        "-fflags", "+genpts+igndts+discardcorrupt",
-                        "-threads", "2",
-                        "-avoid_negative_ts", "make_zero",
-                        "-progress", progress_file,
-                        "-i", str(video_file),
-                        "-c:v", "copy",
-                        "-c:a", "copy",
-                        "-sn", "-dn",
-                        "-map", "0:v:0",
-                        "-map", "0:a:0?",
-                        "-max_muxing_queue_size", "2048",
-                        "-fps_mode", "passthrough",
-                        "-f", "hls",
-                        "-hls_time", "2",
-                        "-hls_list_size", "6",
-                        "-hls_delete_threshold", "1",
-                        "-hls_flags", "delete_segments+append_list+independent_segments",
-                        "-hls_allow_cache", "1",
-                        "-start_number", "0",
-                        "-hls_segment_type", "mpegts",
-                        "-max_delay", "1000000",
-                        "-hls_init_time", "1",
-                        "-hls_segment_filename", f"{str(hls_dir)}/segment_%d.ts",
-                        f"{str(hls_dir)}/playlist.m3u8"
-                    ]
-                    
-                    success = self.process_manager.start_process(command, str(hls_dir))
-                    if not success:
-                        logger.error(f"[{self.name}] ❌ Échec du changement de fichier")
-                        time.sleep(5)  # Attendre avant de réessayer
-                
-                # Vérifier si on approche de la fin du fichier actuel
-                elif hasattr(self, "last_logged_position") and hasattr(self, "current_file_duration"):
-                    if self.last_logged_position > self.current_file_duration - 10:
-                        logger.info(f"[{self.name}] ⏱️ Fin de fichier imminente, préparation du changement")
-                        # Arrêter le processus pour passer au fichier suivant
-                        self.process_manager.stop_process()
-                        time.sleep(2)  # Petite pause avant de démarrer le suivant
-                
-                # Pause avant la prochaine vérification
-                time.sleep(5)
-                
-        except Exception as e:
-            logger.error(f"[{self.name}] ❌ Erreur dans le gestionnaire de fichiers: {e}")
 
     def _scan_videos(self) -> bool:
-        """Scanne les fichiers vidéos et met à jour processed_videos"""
+        """Scanne le dossier ready_to_stream, valide les fichiers et met à jour self.processed_videos. Renvoie True si réussi et au moins une vidéo trouvée, False sinon."""
         try:
-            source_dir = Path(self.video_dir)
-            ready_to_stream_dir = source_dir / "ready_to_stream"
+            with self.lock: # Use lock as we modify shared state
+                ready_to_stream_dir = Path(self.video_dir) / "ready_to_stream"
+                if not ready_to_stream_dir.exists():
+                    logger.error(f"[{self.name}] ❌ Dossier ready_to_stream introuvable: {ready_to_stream_dir}")
+                    self.processed_videos = []
+                    return False
 
-            # Création du dossier s'il n'existe pas
-            ready_to_stream_dir.mkdir(exist_ok=True)
+                # Scanner le dossier ready_to_stream
+                video_files = sorted(list(ready_to_stream_dir.glob("*.mp4"))) # Sort for predictable order
+                
+                if not video_files:
+                    logger.warning(f"[{self.name}] ⚠️ Aucun fichier MP4 dans {ready_to_stream_dir}")
+                    self.processed_videos = []
+                    return False
+                    
+                logger.info(f"[{self.name}] 🔍 {len(video_files)} fichiers trouvés dans ready_to_stream")
 
-            # On scanne les vidéos dans ready_to_stream
-            mp4_files = list(ready_to_stream_dir.glob("*.mp4"))
+                # Vérifier que tous les fichiers sont valides
+                valid_files = []
+                for video in video_files:
+                    if video.exists() and os.access(video, os.R_OK):
+                        # Optional: Add duration check if needed
+                        # try:
+                        #     duration = get_accurate_duration(video)
+                        #     if duration and duration > 0:
+                        #         valid_files.append(video)
+                        #     else:
+                        #         logger.warning(f"[{self.name}] ⚠️ Fichier ignoré: {video.name} (durée invalide)")
+                        # except Exception as e:
+                        #     logger.warning(f"[{self.name}] ⚠️ Fichier ignoré: {video.name} (erreur validation: {e})")
+                        valid_files.append(video) # Simpler validation for now
+                    else:
+                        logger.warning(f"[{self.name}] ⚠️ Fichier ignoré: {video.name} (non accessible)")
 
-            if not mp4_files:
-                logger.warning(f"[{self.name}] ⚠️ Aucun fichier MP4 dans {ready_to_stream_dir}")
-                self.ready_for_streaming = False
-                return False
+                if not valid_files:
+                    logger.error(f"[{self.name}] ❌ Aucun fichier MP4 valide trouvé après vérification")
+                    self.processed_videos = []
+                    return False
 
-            # Log des fichiers trouvés
-            logger.info(f"[{self.name}] 🔍 {len(mp4_files)} fichiers MP4 trouvés dans ready_to_stream")
-
-            # Vérification que les fichiers sont valides
-            valid_files = []
-            for video_file in mp4_files:
-                if verify_file_ready(video_file):
-                    valid_files.append(video_file)
-                else:
-                    logger.warning(f"[{self.name}] ⚠️ Fichier {video_file.name} ignoré car non valide")
-
-            if valid_files:
-                self.processed_videos = valid_files
-                logger.info(f"[{self.name}] ✅ {len(valid_files)} vidéos valides trouvées dans ready_to_stream")
-
-                # La chaîne est prête si on a des vidéos valides
-                self.ready_for_streaming = True
-                return True
-            else:
-                logger.warning(f"[{self.name}] ⚠️ Aucun fichier MP4 valide trouvé dans ready_to_stream")
-                self.ready_for_streaming = False
-                return False
+                logger.info(f"[{self.name}] ✅ {len(valid_files)} vidéos valides trouvées.")
+                self.processed_videos = valid_files # Update the list
+                # Reset index if it's now out of bounds
+                if not (0 <= self.current_video_index < len(self.processed_videos)):
+                    logger.info(f"[{self.name}] 🔄 Réinitialisation de l'index vidéo après scan.")
+                    self.current_video_index = 0
+                    
+                return True # Success
 
         except Exception as e:
-            logger.error(f"[{self.name}] ❌ Erreur scan des vidéos: {str(e)}")
-            import traceback
-            logger.error(f"[{self.name}] {traceback.format_exc()}")
-            return False
+            logger.error(f"[{self.name}] ❌ Erreur _scan_videos: {e}")
+            logger.error(traceback.format_exc())
+            self.processed_videos = []
+            return False # Failure
 
     def is_running(self) -> bool:
         """Vérifie si la chaîne est actuellement en streaming"""
@@ -937,7 +772,7 @@ class IPTVChannel:
         if not hasattr(self, "watchers_count"):
             return False
             
-        # On ne vérifie pas le timeout si le stream n'est pas actif
+        # On ne vérifie pas le timeout s'il n'est pas actif
         if not self.process_manager.is_running():
             return False
             

@@ -20,7 +20,7 @@ def parse_access_log(line):
             - path_or_user_agent: Le chemin ou l'user agent selon le contexte d'appel
     """
     # Log détaillé pour déboguer le traitement des lignes
-    logger.info(f"PARSE_LOG: {line[:100]}...")
+    logger.debug(f"PARSE_LOG: {line[:100]}...")
     
     # Si pas de /hls/ dans la ligne, on ignore direct
     if "/hls/" not in line:
@@ -106,7 +106,7 @@ def parse_access_log(line):
         logger.debug(f"✅ Requête 304 validée: {channel} par {ip} - {request_type}")
     
     # Log détaillé du résultat du parsing
-    logger.info(f"PARSE_RESULT: ip={ip}, channel={channel}, type={request_type}, valid={is_valid}, code={status_code}")
+    logger.debug(f"PARSE_RESULT: ip={ip}, channel={channel}, type={request_type}, valid={is_valid}, code={status_code}")
 
     # Pour IPTVManager, on retourne le chemin, pour ClientMonitor, on retourne l'user agent
     return_value = path if path else user_agent

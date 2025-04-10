@@ -15,27 +15,55 @@ class ChannelStatusManager:
     for dashboard consumption
     """
     
-    def __init__(self, status_file=CHANNELS_STATUS_FILE):
-        """Initialize the status manager"""
+    def __init__(self, status_file: str):
+        """Initialize the channel status manager"""
         self.status_file = status_file
         self.channels = {}
-        self.last_updated = 0
+        self.last_updated = int(time.time())
         self.active_viewers = 0
         self._lock = threading.Lock()
-        self.update_interval = 2  # Update every 2 seconds
+        self.update_interval = 10
         
-        # Create stats dir if needed
-        os.makedirs(os.path.dirname(self.status_file), exist_ok=True)
+        # Ensure directory exists and has proper permissions
+        stats_dir = os.path.dirname(status_file)
+        os.makedirs(stats_dir, exist_ok=True)
+        os.chmod(stats_dir, 0o777)
         
-        # Load existing data if available
-        self._load_status()
+        # Load existing status if file exists
+        if os.path.exists(status_file):
+            try:
+                with open(status_file, 'r') as f:
+                    data = json.load(f)
+                    self.channels = data.get('channels', {})
+                    self.last_updated = data.get('last_updated', int(time.time()))
+                    self.active_viewers = data.get('active_viewers', 0)
+                logger.info(f"Loaded existing channel status data with {len(self.channels)} channels")
+            except Exception as e:
+                logger.error(f"Error loading channel status: {e}")
+                # Reset to default values
+                self.channels = {}
+                self.last_updated = int(time.time())
+                self.active_viewers = 0
+        else:
+            # Create initial status file
+            try:
+                with open(status_file, 'w') as f:
+                    json.dump({
+                        'channels': {},
+                        'last_updated': int(time.time()),
+                        'active_viewers': 0
+                    }, f, indent=2)
+                os.chmod(status_file, 0o666)
+                logger.info("Created initial channel status file")
+            except Exception as e:
+                logger.error(f"Error creating initial channel status file: {e}")
+        
+        logger.info(f"ChannelStatusManager initialized, status file: {status_file}")
         
         # Start update thread
         self.stop_thread = threading.Event()
         self.update_thread = threading.Thread(target=self._update_loop, daemon=True)
         self.update_thread.start()
-        
-        logger.info(f"ChannelStatusManager initialized, status file: {self.status_file}")
     
     def _load_status(self):
         """Load channel status from file if it exists"""
@@ -60,13 +88,27 @@ class ChannelStatusManager:
             # Create a temporary file in the same directory
             temp_file = f"{self.status_file}.tmp"
             
+            # Ensure directory exists and has proper permissions
+            stats_dir = os.path.dirname(self.status_file)
+            os.makedirs(stats_dir, exist_ok=True)
+            os.chmod(stats_dir, 0o777)
+            
+            # Préparation du contenu complet en mémoire
+            content_to_save = {
+                'channels': self.channels,
+                'last_updated': self.last_updated,
+                'active_viewers': self.active_viewers
+            }
+            
+            # Générer le JSON complet en mémoire
+            json_content = json.dumps(content_to_save, indent=2)
+            
             # Write to temporary file with proper permissions
             with open(temp_file, 'w') as f:
-                json.dump({
-                    'channels': self.channels,
-                    'last_updated': self.last_updated,
-                    'active_viewers': self.active_viewers
-                }, f, indent=2)
+                f.write(json_content)
+                # S'assurer que tout est écrit sur le disque
+                f.flush()
+                os.fsync(f.fileno())
             
             # Set permissions before atomic rename
             os.chmod(temp_file, 0o666)
@@ -173,6 +215,11 @@ class ChannelStatusManager:
                 self.active_viewers = total_viewers
                 self.last_updated = current_time
                 
+                # Ensure directory exists and has proper permissions
+                stats_dir = os.path.dirname(self.status_file)
+                os.makedirs(stats_dir, exist_ok=True)
+                os.chmod(stats_dir, 0o777)
+                
                 # Force save immediately
                 success = self._save_status()
                 if success:
@@ -187,14 +234,20 @@ class ChannelStatusManager:
             import traceback
             logger.error(traceback.format_exc())
             return False
-
     
     def _update_loop(self):
         """Background thread to periodically update status file"""
         while not self.stop_thread.is_set():
             try:
+                # Ensure directory exists and has proper permissions
+                stats_dir = os.path.dirname(self.status_file)
+                os.makedirs(stats_dir, exist_ok=True)
+                os.chmod(stats_dir, 0o777)
+                
                 # Save current status
-                self._save_status()
+                success = self._save_status()
+                if not success:
+                    logger.warning("⚠️ Failed to save status in update loop")
                 
                 # Calculate total active viewers
                 total_viewers = sum(
