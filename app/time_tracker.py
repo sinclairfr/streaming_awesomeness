@@ -9,11 +9,11 @@ class TimeTracker:
     # Timeouts standardisés (en secondes)
     # REMOVED: SEGMENT_TIMEOUT = 300  # Augmenté à 5 minutes (300 secondes) - Seems unused now?
     # REMOVED: PLAYLIST_TIMEOUT = 300  # Augmenté à 5 minutes (300 secondes) - Seems unused now?
-    WATCHER_INACTIVITY_TIMEOUT = 120  # 2 minutes d'inactivité (réduit de 900) - Default fallback timeout
+    WATCHER_INACTIVITY_TIMEOUT = 5  # Changed from 120s to 5s for near-instant updates
     DEBOUNCE_INTERVAL = 1.0  # Réduit à 1 seconde pour être plus réactif
     SEGMENT_DURATION = 4.0  # Durée standard d'un segment (Used by StatsCollector?)
     # Timeout pour la période tampon avant suppression réelle
-    _removal_buffer_timeout = 60 # 1 minute (réduit de 300)
+    _removal_buffer_timeout = 2 # Changed from 60s to 2s for near-instant updates
     
     def __init__(self, stats_collector):
         self.stats_collector = stats_collector
@@ -95,7 +95,8 @@ class TimeTracker:
         with self._lock:
             current_time = time.time()
             
-            if current_time - self._last_cleanup_time < 60:
+            # Changed from 60 seconds to 2 seconds to run cleanup much more frequently
+            if current_time - self._last_cleanup_time < 2:
                 return
                 
             self._last_cleanup_time = current_time

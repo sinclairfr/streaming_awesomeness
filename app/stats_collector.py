@@ -34,7 +34,7 @@ class StatsCollector:
         self.daily_stats = {}  # {date: {channel: {total_watch_time, unique_viewers}}}
         self.last_save_time = time.time()
         self.lock = threading.Lock()
-        self.save_interval = 300  # 5 minutes
+        self.save_interval = 60  # Changed from 300 (5 minutes) to 60 (1 minute)
 
         # Chargement des stats existantes
         self.stats, self.global_stats = self._load_stats()
@@ -58,7 +58,7 @@ class StatsCollector:
         self.latency_issues = {}  # Dictionnaire pour stocker les problèmes de latence par chaîne
         self.performance_metrics = {}  # Dictionnaire pour stocker les métriques de performance par chaîne
 
-    def add_watch_time(self, channel, ip, duration):
+    def add_watch_time(self, channel, ip, duration, user_agent=None):
         """Ajoute du temps de visionnage pour un watcher avec limitation de fréquence"""
         with self.lock:
             try:
@@ -131,7 +131,12 @@ class StatsCollector:
                 
                 user = self.user_stats[ip]
                 user["total_watch_time"] = user.get("total_watch_time", 0.0) + duration
+                user["last_seen"] = time.time()
                 
+                # Update user_agent if provided
+                if user_agent:
+                    user["user_agent"] = user_agent
+                    
                 # Vérifier si channels_watched existe et l'initialiser si nécessaire
                 if "channels_watched" in user:
                     # Convert list to set if needed
@@ -141,8 +146,6 @@ class StatsCollector:
                     user["channels_watched"] = set()
                 user["channels_watched"].add(channel)
                 
-                user["last_seen"] = time.time()
-
                 # S'assurer que channels existe
                 if "channels" not in user:
                     user["channels"] = {}
@@ -195,62 +198,65 @@ class StatsCollector:
                 logger.error(f"❌ Erreur sauvegarde périodique des stats: {e}")
 
     def _load_user_stats(self):
-        """Charge les stats utilisateurs ou crée un nouveau fichier"""
+        """Charge les stats utilisateurs ou crée une structure vide."""
+        empty_stats = {"users": {}, "last_updated": int(time.time())}
+
         if self.user_stats_file.exists():
             try:
                 with open(self.user_stats_file, "r") as f:
                     loaded_data = json.load(f)
-                    
-                    # Création d'une structure vide
-                    clean_stats = {
-                        "last_updated": int(time.time()),
-                    }
-                    
-                    # Extraction des données utilisateurs depuis n'importe quel niveau d'imbrication
-                    def extract_users(data_obj):
-                        if not isinstance(data_obj, dict):
-                            return {}
-                        
-                        extracted = {}
-                        
-                        # Si l'objet contient une clé "users" qui est un dictionnaire
-                        if "users" in data_obj and isinstance(data_obj["users"], dict):
-                            # Parcourir les utilisateurs de premier niveau
-                            for ip, user_data in data_obj["users"].items():
-                                if ip != "users" and isinstance(user_data, dict):
-                                    # C'est un vrai utilisateur
-                                    extracted[ip] = user_data
-                            
-                            # Récursion pour extraire les utilisateurs des niveaux imbriqués
-                            nested_users = extract_users(data_obj["users"])
-                            # Fusionner avec les utilisateurs déjà extraits
-                            for ip, user_data in nested_users.items():
-                                extracted[ip] = user_data
-                                
-                        return extracted
-                    
-                    # Extraire tous les utilisateurs et les ajouter à clean_stats
-                    users = extract_users(loaded_data)
-                    for ip, user_data in users.items():
-                        clean_stats[ip] = user_data
-                    
-                    return clean_stats
-                    
-            except json.JSONDecodeError:
-                logger.warning(f"⚠️ Fichier stats utilisateurs corrompu, création d'un nouveau")
 
-        # Structure initiale
-        return {
-            "last_updated": int(time.time()),
-        }
+                    # Basic structure validation
+                    if isinstance(loaded_data, dict) and "users" in loaded_data and isinstance(loaded_data["users"], dict):
+                        # Ensure all user entries are dictionaries
+                        users_valid = all(isinstance(ud, dict) for ud in loaded_data["users"].values())
+                        if users_valid:
+                            # Convert sets back if necessary (though save should handle this)
+                            for ip, udata in loaded_data["users"].items():
+                                if "channels_watched" in udata and isinstance(udata["channels_watched"], list):
+                                    udata["channels_watched"] = set(udata["channels_watched"])
+                            
+                            logger.info(f"📊 Stats utilisateurs chargées depuis {self.user_stats_file}")
+                            # Ensure last_updated is present
+                            loaded_data.setdefault("last_updated", int(time.time()))
+                            return loaded_data
+                        else:
+                            logger.warning(f"⚠️ Fichier stats utilisateurs ({self.user_stats_file}) contient des données utilisateur non valides. Création d\'une nouvelle structure.")
+                            return empty_stats
+                    else:
+                        logger.warning(f"⚠️ Fichier stats utilisateurs ({self.user_stats_file}) a une structure invalide. Création d\'une nouvelle structure.")
+                        return empty_stats
+
+            except json.JSONDecodeError:
+                logger.warning(f"⚠️ Fichier stats utilisateurs ({self.user_stats_file}) corrompu (JSON invalide). Création d\'une nouvelle structure.")
+                return empty_stats
+            except Exception as e:
+                logger.error(f"❌ Erreur inattendue lors du chargement de {self.user_stats_file}: {e}. Création d\'une nouvelle structure.")
+                return empty_stats
+        else:
+            # File does not exist, return the empty structure
+            logger.info(f"ℹ️ Fichier stats utilisateurs ({self.user_stats_file}) non trouvé. Création d\'une nouvelle structure.")
+            return empty_stats
     
+    def _make_json_serializable(self, data):
+        """Recursively converts sets to lists within a data structure."""
+        if isinstance(data, dict):
+            return {k: self._make_json_serializable(v) for k, v in data.items()}
+        elif isinstance(data, list):
+            return [self._make_json_serializable(elem) for elem in data]
+        elif isinstance(data, set):
+            # Convert set to list, ensuring elements within the set are also processed
+            return [self._make_json_serializable(elem) for elem in sorted(list(data))] # Sort for consistent output
+        else:
+            return data
+
     def save_user_stats(self):
         """Sauvegarde les statistiques par utilisateur"""
         with self.lock:
             try:
                 # Vérifications de base
                 if not hasattr(self, "user_stats") or not self.user_stats:
-                    self.user_stats = {"users": {}, "last_updated": int(time.time())}
+                    self.user_stats = {"last_updated": int(time.time())}
 
                 # S'assurer que le dossier existe
                 os.makedirs(os.path.dirname(self.user_stats_file), exist_ok=True)
@@ -267,14 +273,8 @@ class StatsCollector:
                     if ip == "last_updated":
                         continue
                         
-                    # Convertir les données utilisateur en format sérialisable
-                    serializable_user = {}
-                    for key, val in user_data.items():
-                        # Convertir les sets en listes
-                        if isinstance(val, set):
-                            serializable_user[key] = list(val)
-                        else:
-                            serializable_user[key] = val
+                    # Convertir les données utilisateur en format sérialisable RECURSIVEMENT
+                    serializable_user = self._make_json_serializable(user_data)
                     
                     # Ajouter cet utilisateur au dictionnaire principal
                     serializable_stats["users"][ip] = serializable_user
@@ -300,14 +300,11 @@ class StatsCollector:
             # S'assurer que user_stats et users existent
             if not hasattr(self, "user_stats"):
                 logger.warning("⚠️ Initialisation de user_stats")
-                self.user_stats = {"users": {}, "last_updated": int(time.time())}
-
-            if "users" not in self.user_stats:
-                self.user_stats["users"] = {}
+                self.user_stats = {"last_updated": int(time.time())}
 
             # Init pour cet utilisateur si nécessaire
-            if ip not in self.user_stats["users"]:
-                self.user_stats["users"][ip] = {
+            if ip not in self.user_stats:
+                self.user_stats[ip] = {
                     "first_seen": int(time.time()),
                     "last_seen": int(time.time()),
                     "total_watch_time": 0,
@@ -316,8 +313,8 @@ class StatsCollector:
                 }
                 logger.info(f"👤 Nouvel utilisateur détecté: {ip}")
 
-            user = self.user_stats["users"][ip]
-            old_total_time = user["total_watch_time"]
+            user = self.user_stats[ip]
+            old_total_time = user.get("total_watch_time", 0)
             user["last_seen"] = int(time.time())
             user["total_watch_time"] += duration
 
@@ -724,14 +721,10 @@ class StatsCollector:
                 segment_match = re.search(r"segment_(\d+)\.ts", line)
                 segment_id = segment_match.group(1) if segment_match else "unknown"
 
-                # Ajouter du temps de visionnage
+                # Ajouter du temps de visionnage ET mettre à jour user stats (incl. user_agent)
                 segment_duration = 4.0  # secondes par segment
-                self.add_watch_time(channel, ip, segment_duration)
+                self.add_watch_time(channel, ip, segment_duration, user_agent)
                 
-                # Mettre à jour les stats utilisateur
-                if user_agent:
-                    self.update_user_stats(ip, channel, segment_duration, user_agent)
-
                 # Mettre à jour les stats de segments
                 self.update_segment_stats(channel, segment_id, 0)  # Taille inconnue pour l'instant
 
@@ -744,13 +737,9 @@ class StatsCollector:
         """Gère une requête de playlist et met à jour les statistiques"""
         with self.lock:
             try:
-                # Ajouter du temps de visionnage
-                self.add_watch_time(channel, ip, elapsed)
+                # Ajouter du temps de visionnage ET mettre à jour user stats (incl. user_agent)
+                self.add_watch_time(channel, ip, elapsed, user_agent)
                 
-                # Mettre à jour les stats utilisateur
-                if user_agent:
-                    self.update_user_stats(ip, channel, elapsed, user_agent)
-
                 logger.debug(f"[{channel}] 📊 Playlist traitée pour {ip} ({elapsed:.1f}s)")
 
             except Exception as e:

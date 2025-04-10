@@ -8,6 +8,8 @@ import threading
 import shutil
 from pathlib import Path
 from config import logger, CHANNELS_STATUS_FILE
+from datetime import datetime
+from typing import List, Dict, Any
 
 class ChannelStatusManager:
     """
@@ -22,6 +24,7 @@ class ChannelStatusManager:
         self.last_updated = int(time.time())
         self.active_viewers = 0
         self._lock = threading.Lock()
+        self._save_lock = threading.Lock()
         self.update_interval = 10
         
         # Ensure directory exists and has proper permissions
@@ -83,154 +86,175 @@ class ChannelStatusManager:
             logger.error(f"Error loading status file: {e}")
     
     def _save_status(self):
-        """Save current status to file"""
-        try:
-            # Create a temporary file in the same directory
-            temp_file = f"{self.status_file}.tmp"
-            
-            # Ensure directory exists and has proper permissions
-            stats_dir = os.path.dirname(self.status_file)
-            os.makedirs(stats_dir, exist_ok=True)
-            os.chmod(stats_dir, 0o777)
-            
-            # Préparation du contenu complet en mémoire
-            content_to_save = {
-                'channels': self.channels,
-                'last_updated': self.last_updated,
-                'active_viewers': self.active_viewers
-            }
-            
-            # Générer le JSON complet en mémoire
-            json_content = json.dumps(content_to_save, indent=2)
-            
-            # Write to temporary file with proper permissions
-            with open(temp_file, 'w') as f:
-                f.write(json_content)
-                # S'assurer que tout est écrit sur le disque
-                f.flush()
-                os.fsync(f.fileno())
-            
-            # Set permissions before atomic rename
-            os.chmod(temp_file, 0o666)
-            
-            # Atomic rename to ensure file integrity
-            os.replace(temp_file, self.status_file)
-            
-            # Ensure final file has correct permissions
-            os.chmod(self.status_file, 0o666)
-            
-            return True
-        except Exception as e:
-            logger.error(f"Error saving status file: {e}")
-            # Try to clean up temp file if it exists
+        """Save current status to file using atomic write"""
+        with self._save_lock:
             try:
-                if os.path.exists(temp_file):
-                    os.remove(temp_file)
-            except:
-                pass
-            return False
-    
-    def update_channel(self, channel_name: str, is_active: bool = False, viewers: int = 0, streaming: bool = False, watchers: list = None):
-        """
-        Update status for a single channel
-        
-        Args:
-            channel_name: Name of the channel
-            is_active: Whether the channel has content available
-            viewers: Number of current viewers
-            streaming: Whether the channel is currently streaming
-            watchers: List of current watchers
-        """
-        with self._lock:
-            # Check if we need to update at all
-            current_channel = self.channels.get(channel_name, {})
-            current_viewers = current_channel.get('viewers', 0)
-            current_active = current_channel.get('active', False)
-            current_streaming = current_channel.get('streaming', False)
-            current_watchers = current_channel.get('watchers', [])
-            
-            # Only update if there are actual changes
-            if (viewers != current_viewers or 
-                is_active != current_active or 
-                streaming != current_streaming or 
-                (watchers is not None and set(watchers) != set(current_watchers))):
-                
-                if channel_name not in self.channels:
-                    self.channels[channel_name] = {}
-                
-                self.channels[channel_name].update({
-                    'active': is_active,
-                    'streaming': streaming,
-                    'viewers': viewers,
-                    'watchers': watchers or []
-                })
-                
-                self.last_updated = int(time.time())
-                
-                # Update total active viewers
-                self.active_viewers = sum(ch.get('viewers', 0) for ch in self.channels.values())
-                
-                # Save immediately only if there were changes
-                self._save_status()
-                
-                return True
-            
-            return False
-    
-    def update_all_channels(self, channels_dict):
-        """
-        Update all channels at once
-        
-        Args:
-            channels_dict: Dictionary mapping channel names to status dicts
-                           with 'active', 'viewers', 'streaming' keys
-        """
-        try:
-            with self._lock:
-                current_time = int(time.time())
-                total_viewers = 0
-                
-                logger.debug(f"📊 Mise à jour des statuts pour {len(channels_dict)} chaînes")
-                
-                # Clear existing channels data
-                self.channels = {}
-                
-                for channel_name, status in channels_dict.items():
-                    viewers = status.get("viewers", 0)
-                    total_viewers += viewers
-                    
-                    logger.debug(f"📡 Mise à jour de {channel_name}: viewers={viewers}, active={status.get('active')}, streaming={status.get('streaming')}")
-                    
-                    # Add to dictionary
-                    self.channels[channel_name] = {
-                        "active": status.get("active", True),
-                        "viewers": viewers,
-                        "streaming": status.get("streaming", False),
-                        "watchers": status.get("watchers", []),
-                        "last_update": current_time,
-                        "peak_viewers": viewers
-                    }
-                
-                # Update total active viewers and timestamp
-                self.active_viewers = total_viewers
-                self.last_updated = current_time
+                logger.info(f"🔄 Saving status to {self.status_file}")
                 
                 # Ensure directory exists and has proper permissions
                 stats_dir = os.path.dirname(self.status_file)
                 os.makedirs(stats_dir, exist_ok=True)
-                os.chmod(stats_dir, 0o777)
+                try:
+                    os.chmod(stats_dir, 0o777)
+                except Exception as chmod_err:
+                    logger.warning(f"Could not chmod stats dir {stats_dir}: {chmod_err}")
                 
-                # Force save immediately
-                success = self._save_status()
-                if success:
-                    logger.debug(f"✅ Statuts sauvegardés avec succès: {total_viewers} viewers au total")
+                # Format the data to ensure consistency
+                formatted_channels = {}
+                for channel_id, channel_data in self.channels.items():
+                    # Convert old format to new format if needed
+                    is_live = channel_data.get('is_live', channel_data.get('active', False))
+                    viewers = channel_data.get('viewers', 0)
+                    watchers = channel_data.get('watchers', [])
+                    
+                    formatted_channels[channel_id] = {
+                        'is_live': is_live,
+                        'viewers': viewers,
+                        'watchers': watchers,
+                        'last_updated': channel_data.get('last_updated', datetime.now().isoformat())
+                    }
+                
+                # Calculate total active viewers
+                total_viewers = sum(ch.get('viewers', 0) for ch in formatted_channels.values())
+                
+                # Prepare the complete content
+                content_to_save = {
+                    'channels': formatted_channels,
+                    'last_updated': int(time.time()),
+                    'active_viewers': total_viewers
+                }
+                
+                # Log active channels
+                active_channels = [ch_id for ch_id, ch_data in formatted_channels.items() if ch_data.get('viewers', 0) > 0]
+                if active_channels:
+                    logger.info(f"🔄 Status update with {len(active_channels)} active channels: {', '.join(active_channels)}")
+                    
+                # Use a temporary file for atomic write
+                temp_file = f"{self.status_file}.tmp"
+                try:
+                    with open(temp_file, 'w') as f:
+                        json.dump(content_to_save, f, indent=2)
+                        f.flush()
+                        os.fsync(f.fileno())
+                    
+                    # Check if temp file was written correctly
+                    if not os.path.exists(temp_file):
+                        logger.error("❌ Temp file not created during save")
+                        return False
+                        
+                    if os.path.getsize(temp_file) == 0:
+                        logger.error("❌ Temp file is empty after write")
+                        return False
+                    
+                    # Atomic rename (more reliable than direct write)
+                    os.replace(temp_file, self.status_file)
+                    
+                    # Set file permissions
+                    try:
+                        os.chmod(self.status_file, 0o666)
+                    except Exception as chmod_err:
+                        logger.warning(f"Could not chmod status file {self.status_file}: {chmod_err}")
+                    
+                    logger.info(f"✅ Status saved successfully to {self.status_file}")
+                    return True
+                    
+                except Exception as write_err:
+                    logger.error(f"❌ Error writing to temp file {temp_file}: {write_err}")
+                    # Try direct write as fallback
+                    try:
+                        with open(self.status_file, 'w') as f:
+                            json.dump(content_to_save, f, indent=2)
+                        logger.info("✅ Status saved directly (fallback method)")
+                        return True
+                    except Exception as direct_err:
+                        logger.error(f"❌ Error in fallback direct write: {direct_err}")
+                        return False
+                    
+            except Exception as e:
+                logger.error(f"❌ Error saving status: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                return False
+    
+    def update_channel(self, channel_id: str, data: Dict[str, Any]) -> bool:
+        """Update a single channel's status"""
+        try:
+            with self._lock:
+                # Get current data
+                current_data = self.channels.get(channel_id, {})
+                
+                # Log current and new watchers
+                current_watchers = current_data.get('watchers', [])
+                new_watchers = data.get('watchers', [])
+                logger.debug(f"Channel {channel_id} - Current watchers: {current_watchers}, New watchers: {new_watchers}")
+                
+                # Check if we need to update
+                needs_update = False
+                for key, value in data.items():
+                    if current_data.get(key) != value:
+                        needs_update = True
+                        logger.debug(f"Channel {channel_id} - Field {key} changed from {current_data.get(key)} to {value}")
+                        break
+                
+                if needs_update:
+                    # Update the data explicitly, prioritizing keys from 'data'
+                    # Get the existing data or an empty dict
+                    updated_channel_data = self.channels.get(channel_id, {}).copy()
+                    
+                    # Update with keys from the new 'data' dict
+                    for key, value in data.items():
+                        updated_channel_data[key] = value
+                        
+                    # Always update the timestamp
+                    updated_channel_data['last_updated'] = datetime.now().isoformat()
+                    
+                    # Assign the updated dictionary back
+                    self.channels[channel_id] = updated_channel_data
+                    
+                    # Call save status
+                    return self._save_status()
                 else:
-                    logger.error("❌ Échec de la sauvegarde des statuts")
-                
-                return success
-                
+                    logger.debug(f"No changes needed for channel {channel_id}")
+                    return True
+                    
         except Exception as e:
-            logger.error(f"❌ Erreur lors de la mise à jour des statuts: {e}")
+            logger.error(f"Error updating channel {channel_id}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return False
+    
+    def update_all_channels(self, channels_dict):
+        """Update status for all channels at once"""
+        try:
+            with self._lock:
+                logger.debug("🔄 Mise à jour du statut de toutes les chaînes")
+                # Clear existing data
+                self.channels.clear()
+                
+                # Update with new data
+                for channel_id, channel_data in channels_dict.items():
+                    # Convert old format to new format if needed
+                    is_live = channel_data.get('is_live', channel_data.get('active', False))
+                    viewers = channel_data.get('viewers', 0)
+                    watchers = channel_data.get('watchers', [])
+                    
+                    self.channels[channel_id] = {
+                        'is_live': is_live,
+                        'viewers': viewers,
+                        'watchers': watchers,
+                        'last_updated': datetime.now().isoformat()
+                    }
+                
+                # Save the updated status
+                if self._save_status():
+                    logger.debug("✅ Statut de toutes les chaînes mis à jour avec succès")
+                    return True
+                else:
+                    logger.error("❌ Échec de la sauvegarde du statut des chaînes")
+                    return False
+                    
+        except Exception as e:
+            logger.error(f"❌ Erreur lors de la mise à jour de toutes les chaînes: {e}")
             import traceback
             logger.error(traceback.format_exc())
             return False
@@ -240,23 +264,33 @@ class ChannelStatusManager:
         while not self.stop_thread.is_set():
             try:
                 # Ensure directory exists and has proper permissions
-                stats_dir = os.path.dirname(self.status_file)
-                os.makedirs(stats_dir, exist_ok=True)
-                os.chmod(stats_dir, 0o777)
-                
+                # stats_dir = os.path.dirname(self.status_file) # Keep directory check? Maybe not needed if only saving on push
+                # os.makedirs(stats_dir, exist_ok=True)
+                # os.chmod(stats_dir, 0o777)
+
+                # COMMENTED OUT: Periodic save based on internal state is redundant
                 # Calculate total active viewers
-                total_viewers = sum(
-                    ch.get("viewers", 0) 
-                    for ch in self.channels.values()
-                )
-                self.active_viewers = total_viewers
-                
-                # Sleep until next update
-                time.sleep(self.update_interval)
-                
+                # total_viewers = sum(
+                #     ch.get("viewers", 0)
+                #     for ch in self.channels.values()
+                # )
+                # self.active_viewers = total_viewers
+
+                # Save the updated status periodically (NO LONGER NEEDED)
+                # if self._save_status():
+                #    logger.debug("Periodic status save successful")
+                # else:
+                #    logger.warning("Periodic status save failed")
+                # END COMMENTED OUT
+
+                # Sleep until next update cycle or stop event
+                # Keep the sleep to prevent a busy loop if other periodic tasks are added later
+                self.stop_thread.wait(self.update_interval) # Use wait for cleaner interruption
+
             except Exception as e:
                 logger.error(f"Error in status update loop: {e}")
-                time.sleep(5)  # Shorter sleep on error
+                # Still wait after an error
+                self.stop_thread.wait(min(self.update_interval, 30)) # Wait shorter interval after error
     
     def stop(self):
         """Stop the update thread and save final status"""
