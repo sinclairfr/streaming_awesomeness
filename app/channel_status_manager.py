@@ -186,17 +186,33 @@ class ChannelStatusManager:
                 # Log current and new watchers
                 current_watchers = current_data.get('watchers', [])
                 new_watchers = data.get('watchers', [])
+                
+                # Identifier les viewers retirés
+                removed_viewers = set(current_watchers) - set(new_watchers)
+                if removed_viewers:
+                    logger.info(f"🧹 Viewers retirés du fichier status pour {channel_id}: {list(removed_viewers)}")
+                
+                # Identifier les viewers ajoutés (pour le debug)
+                added_viewers = set(new_watchers) - set(current_watchers)
+                if added_viewers:
+                    logger.debug(f"➕ Nouveaux viewers pour {channel_id}: {list(added_viewers)}")
+                
                 logger.debug(f"Channel {channel_id} - Current watchers: {current_watchers}, New watchers: {new_watchers}")
                 
-                # Check if we need to update
-                needs_update = False
-                for key, value in data.items():
-                    if current_data.get(key) != value:
-                        needs_update = True
-                        logger.debug(f"Channel {channel_id} - Field {key} changed from {current_data.get(key)} to {value}")
-                        break
+                # Forcer une mise à jour si viewers ont changé, même si d'autres champs sont identiques
+                viewers_changed = len(removed_viewers) > 0 or len(added_viewers) > 0
                 
-                if needs_update:
+                # Check if we need to update
+                needs_update = viewers_changed
+                if not needs_update:
+                    for key, value in data.items():
+                        if current_data.get(key) != value:
+                            needs_update = True
+                            logger.debug(f"Channel {channel_id} - Field {key} changed from {current_data.get(key)} to {value}")
+                            break
+                
+                if needs_update or viewers_changed:
+                    logger.debug(f"Channel {channel_id} - Updating status (viewers changed: {viewers_changed})")
                     # Update the data explicitly, prioritizing keys from 'data'
                     # Get the existing data or an empty dict
                     updated_channel_data = self.channels.get(channel_id, {}).copy()
@@ -260,37 +276,20 @@ class ChannelStatusManager:
             return False
     
     def _update_loop(self):
-        """Background thread to periodically update status file"""
+        """Background thread to periodically check status file integrity"""
         while not self.stop_thread.is_set():
             try:
-                # Ensure directory exists and has proper permissions
-                # stats_dir = os.path.dirname(self.status_file) # Keep directory check? Maybe not needed if only saving on push
-                # os.makedirs(stats_dir, exist_ok=True)
-                # os.chmod(stats_dir, 0o777)
-
-                # COMMENTED OUT: Periodic save based on internal state is redundant
-                # Calculate total active viewers
-                # total_viewers = sum(
-                #     ch.get("viewers", 0)
-                #     for ch in self.channels.values()
-                # )
-                # self.active_viewers = total_viewers
-
-                # Save the updated status periodically (NO LONGER NEEDED)
-                # if self._save_status():
-                #    logger.debug("Periodic status save successful")
-                # else:
-                #    logger.warning("Periodic status save failed")
-                # END COMMENTED OUT
-
-                # Sleep until next update cycle or stop event
-                # Keep the sleep to prevent a busy loop if other periodic tasks are added later
-                self.stop_thread.wait(self.update_interval) # Use wait for cleaner interruption
-
+                # Vérifier que le fichier de statut existe toujours
+                if not os.path.exists(self.status_file):
+                    logger.warning(f"⚠️ Fichier de statut disparu: {self.status_file}, recréation...")
+                    self._save_status()
+                
+                # Pause pour éviter une boucle occupée
+                self.stop_thread.wait(self.update_interval)
             except Exception as e:
                 logger.error(f"Error in status update loop: {e}")
-                # Still wait after an error
-                self.stop_thread.wait(min(self.update_interval, 30)) # Wait shorter interval after error
+                # Pause plus courte en cas d'erreur
+                self.stop_thread.wait(min(self.update_interval, 30))
     
     def stop(self):
         """Stop the update thread and save final status"""
@@ -301,3 +300,46 @@ class ChannelStatusManager:
         # Final save
         self._save_status()
         logger.info("Channel status manager stopped")
+
+    def flush_all_viewers(self) -> bool:
+        """Vide tous les viewers de tous les canaux"""
+        with self._lock:
+            try:
+                logger.info("🧹 Vidage de tous les viewers pour arrêt du script...")
+                
+                # Garder une trace des canaux modifiés pour le log
+                modified_channels = []
+                viewer_counts = {}
+                
+                # Mettre à jour chaque canal
+                for channel_id, channel_data in self.channels.items():
+                    current_watchers = channel_data.get('watchers', [])
+                    if current_watchers:
+                        viewer_counts[channel_id] = len(current_watchers)
+                        # Copier les données actuelles et modifier les watchers
+                        updated_data = channel_data.copy()
+                        updated_data['watchers'] = []
+                        updated_data['viewers'] = 0
+                        updated_data['last_updated'] = datetime.now().isoformat()
+                        
+                        # Mettre à jour les données
+                        self.channels[channel_id] = updated_data
+                        modified_channels.append(channel_id)
+                
+                # Si des canaux ont été modifiés, sauvegarder
+                if modified_channels:
+                    logger.info(f"🧹 Vidage des viewers pour {len(modified_channels)} canaux: {', '.join(modified_channels)}")
+                    for channel, count in viewer_counts.items():
+                        logger.info(f"[{channel}] 🧹 {count} viewers supprimés")
+                    
+                    # Sauvegarder les changements
+                    return self._save_status()
+                else:
+                    logger.info("✅ Aucun canal n'avait de viewers à vider")
+                    return True
+                    
+            except Exception as e:
+                logger.error(f"❌ Erreur lors du vidage de tous les viewers: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                return False

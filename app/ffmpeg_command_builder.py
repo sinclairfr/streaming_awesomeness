@@ -2,7 +2,7 @@ import os
 import json
 import subprocess
 from pathlib import Path
-from config import FFMPEG_LOG_LEVEL, logger
+from config import FFMPEG_LOG_LEVEL, logger, HLS_SEGMENT_DURATION
 from typing import Optional
 
 
@@ -16,7 +16,7 @@ class FFmpegCommandBuilder:
         self.use_gpu = use_gpu
 
         # Default parameters - adjusted for stability
-        self.hls_time = 5
+        self.hls_time = HLS_SEGMENT_DURATION
         self.hls_list_size = 20
         self.hls_delete_threshold = 7
         self.gop_size = 48

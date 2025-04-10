@@ -4,7 +4,7 @@ import threading
 from watchdog.events import FileSystemEventHandler
 from pathlib import Path
 import os
-from config import logger
+from config import logger, HLS_SEGMENT_DURATION
 import subprocess
 import traceback
 import shutil
@@ -548,7 +548,7 @@ class FileEventHandler(BaseFileEventHandler):
                 "-i", playlist_file,
                 "-c", "copy",
                 "-f", "hls",
-                "-hls_time", "2",
+                "-hls_time", str(HLS_SEGMENT_DURATION),
                 "-hls_list_size", "5",
                 "-hls_flags", "delete_segments+append_list",
                 "-hls_segment_filename", f"/app/hls/{channel_name}/segment_%d.ts",

@@ -1,7 +1,7 @@
 import time
 import threading
 from typing import Dict, Optional, Set
-from config import logger
+from config import logger, HLS_SEGMENT_DURATION, VIEWER_INACTIVITY_TIMEOUT
 
 class TimeTracker:
     """Classe centralisée pour gérer le suivi du temps de visionnage"""
@@ -9,11 +9,11 @@ class TimeTracker:
     # Timeouts standardisés (en secondes)
     # REMOVED: SEGMENT_TIMEOUT = 300  # Augmenté à 5 minutes (300 secondes) - Seems unused now?
     # REMOVED: PLAYLIST_TIMEOUT = 300  # Augmenté à 5 minutes (300 secondes) - Seems unused now?
-    WATCHER_INACTIVITY_TIMEOUT = 5  # Changed from 120s to 5s for near-instant updates
+    WATCHER_INACTIVITY_TIMEOUT = VIEWER_INACTIVITY_TIMEOUT  # Timeout basé sur la variable d'environnement
     DEBOUNCE_INTERVAL = 1.0  # Réduit à 1 seconde pour être plus réactif
-    SEGMENT_DURATION = 4.0  # Durée standard d'un segment (Used by StatsCollector?)
+    SEGMENT_DURATION = HLS_SEGMENT_DURATION  # Utilise la variable globale de config.py
     # Timeout pour la période tampon avant suppression réelle
-    _removal_buffer_timeout = 2 # Changed from 60s to 2s for near-instant updates
+    _removal_buffer_timeout = 2  # Changed from 60s to 2s for near-instant updates
     
     def __init__(self, stats_collector):
         self.stats_collector = stats_collector
@@ -24,7 +24,7 @@ class TimeTracker:
         self._last_cleanup_time = time.time()
         self._watcher_removal_buffer = {}  # {ip: {"time": float, "channel": str}} - Tampons pour éviter les suppressions prématurées
         
-        logger.info(f"⏱️ TimeTracker initialisé avec les timeouts : Default Inactivity={self.WATCHER_INACTIVITY_TIMEOUT}s, Buffer={self._removal_buffer_timeout}s")
+        logger.info(f"⏱️ TimeTracker initialisé avec HLS_SEGMENT_DURATION={self.SEGMENT_DURATION}s, timeout={self.WATCHER_INACTIVITY_TIMEOUT}s")
         
     # MODIFIED: Accept expiry_duration
     def record_activity(self, ip: str, channel: str, expiry_duration: Optional[float] = None):
@@ -39,6 +39,27 @@ class TimeTracker:
             else:
                 absolute_expiry_time = current_time + self.WATCHER_INACTIVITY_TIMEOUT
                 log_reason = f"default timeout {self.WATCHER_INACTIVITY_TIMEOUT}s"
+
+            # Check if this IP was on a different channel before
+            previous_channel = None
+            channel_changed = False
+            if ip in self._watchers:
+                previous_channel = self._watchers[ip].get("channel")
+                if previous_channel and previous_channel != channel:
+                    channel_changed = True
+                    # The user changed channels - immediately clean up the previous channel
+                    logger.debug(f"🔄 User {ip} changed channel: {previous_channel} -> {channel}. Removing from previous.")
+                    # Remove from active set of previous channel
+                    if previous_channel in self._active_segments and ip in self._active_segments[previous_channel]:
+                        self._active_segments[previous_channel].remove(ip)
+                        # If the set is now empty, remove the channel
+                        if not self._active_segments[previous_channel]:
+                            del self._active_segments[previous_channel]
+                    
+                    # Explicitly notify stats collector about the channel change if available
+                    if hasattr(self, 'stats_collector') and self.stats_collector:
+                        # Notify stats collector about channel change
+                        self.stats_collector.handle_channel_change(ip, previous_channel, channel)
 
             # Mettre à jour ou ajouter l'entrée dans _watchers
             if ip in self._watchers:
@@ -67,36 +88,41 @@ class TimeTracker:
                 
             logger.debug(f"[{channel}] ✅ Activité pour {ip}: Expiry calculé à {absolute_expiry_time:.1f} (raison: {log_reason})")
         
-    # NOTE: These handlers might be redundant if ClientMonitor.record_activity is the only entry point
-    # Keeping them for now in case StatsCollector or other components use them.
-    # They will use the default timeout logic.
+        # Force a cleanup if the channel changed to immediately update counts
+        if channel_changed and previous_channel:
+            # Signal that the previous channel needs immediate update due to channel change
+            self._last_cleanup_time = 0  # Forcer un nettoyage immédiat
+            self.cleanup_inactive_watchers()
+            # Forcer la mise à jour explicite de l'ancien canal pour s'assurer qu'il est nettoyé
+            self.force_channel_status_update(previous_channel)
+    
     def handle_segment_request(self, channel: str, ip: str) -> None:
-        """Gère une requête de segment (probablement via StatsCollector)"""
-        # Call record_activity with no specific duration -> uses default timeout
+        """
+        DÉPRÉCIÉ - Méthode de compatibilité avec l'ancien système.
+        
+        Utilisez plutôt `record_activity` directement avec les paramètres appropriés.
+        Cette méthode est conservée uniquement pour la compatibilité avec le StatsCollector.
+        """
+        # Simple délégation à record_activity
         self.record_activity(ip, channel)
-        # Potentially add stats collection logic back here if needed and not redundant
-        # current_time = time.time()
-        # watcher = self._watchers.get(ip) # Get updated watcher data
-        # if watcher and current_time - watcher.get("last_processed", 0) >= self.DEBOUNCE_INTERVAL:
-        #     watcher["last_processed"] = current_time
-        #     if self.stats_collector:
-        #         self.stats_collector.add_watch_time(channel, ip, self.SEGMENT_DURATION)
-        #     logger.debug(f"⏱️ Segment traité (stats) pour {ip} sur {channel}")
     
     def handle_playlist_request(self, channel: str, ip: str) -> None:
-        """Gère une requête de playlist (probablement via StatsCollector)"""
-        # Call record_activity with no specific duration -> uses default timeout
+        """
+        DÉPRÉCIÉ - Méthode de compatibilité avec l'ancien système.
+        
+        Utilisez plutôt `record_activity` directement avec les paramètres appropriés.
+        Cette méthode est conservée uniquement pour la compatibilité avec le StatsCollector.
+        """
+        # Simple délégation à record_activity
         self.record_activity(ip, channel)
-        # Potentially add stats collection logic back here if needed and not redundant
-        # ... (similar logic as in handle_segment_request for stats if required)
     
     def cleanup_inactive_watchers(self) -> None:
         """Nettoie les watchers inactifs en se basant sur leur expiry_time calculé."""
         with self._lock:
             current_time = time.time()
             
-            # Changed from 60 seconds to 2 seconds to run cleanup much more frequently
-            if current_time - self._last_cleanup_time < 2:
+            # Executez le nettoyage au maximum toutes les secondes pour éviter trop de charges
+            if current_time - self._last_cleanup_time < 1.0:
                 return
                 
             self._last_cleanup_time = current_time
@@ -118,6 +144,8 @@ class TimeTracker:
                 channel_to_remove_from = self._watcher_removal_buffer.pop(ip, {}).get("channel")
                 if channel_to_remove_from and channel_to_remove_from in self._active_segments:
                     self._active_segments[channel_to_remove_from].discard(ip)
+                    # Log explicite pour la suppression définitive du viewer
+                    logger.info(f"🗑️ Viewer {ip} supprimé DÉFINITIVEMENT de la chaîne {channel_to_remove_from}")
                     if not self._active_segments[channel_to_remove_from]: # Nettoyer clé vide
                         del self._active_segments[channel_to_remove_from]
                     logger.debug(f"🧹 IP {ip} retirée de l'ensemble actif {channel_to_remove_from} après expiration buffer")
@@ -163,7 +191,15 @@ class TimeTracker:
                 }
                 # Remove from the main watcher list *only when adding to buffer*
                 del self._watchers[ip]
-                logger.info(f"⏱️ Watcher {ip} mis en buffer sur {channel} (raison: {reason})")
+                logger.debug(f"⏱️ Watcher {ip} mis en buffer sur {channel} (raison: {reason})")
+                
+                # S'assurer que l'IP est retirée immédiatement des segments actifs
+                if channel in self._active_segments and ip in self._active_segments[channel]:
+                    self._active_segments[channel].remove(ip)
+                    # Log explicite pour indiquer la suppression du viewer de la chaîne
+                    logger.debug(f"🚫 Viewer {ip} supprimé de la chaîne {channel} pour cause d'inactivité")
+                    if not self._active_segments[channel]:
+                        del self._active_segments[channel]
                 
             # Log final du nettoyage
             total_watchers_after = len(self._watchers)
@@ -171,11 +207,9 @@ class TimeTracker:
             moved_to_buffer_count = len(buffer_ips)
             removed_definitively_count = len(expired_buffer_ips)
 
-            log_summary = f"🧹 Nettoyage terminé: {removed_definitively_count} supprimés définitivement, {moved_to_buffer_count} déplacés vers buffer. État final: {total_watchers_after} directs, {buffer_count_after} en buffer."
             if removed_definitively_count > 0 or moved_to_buffer_count > 0:
-                 logger.info(log_summary)
-            else:
-                 logger.debug(log_summary) # Log as debug if no changes
+                 log_summary = f"🧹 Nettoyage terminé: {removed_definitively_count} supprimés définitivement, {moved_to_buffer_count} déplacés vers buffer. État final: {total_watchers_after} directs, {buffer_count_after} en buffer."
+                 logger.debug(log_summary)
                 
             # Nettoyage des entrées vides dans _active_segments (peut arriver si une chaîne n'a plus de watchers)
             empty_channels = [ch for ch, ips in self._active_segments.items() if not ips]
@@ -198,12 +232,95 @@ class TimeTracker:
            Si include_buffer est True, inclut aussi les IPs dans le buffer de suppression.
         """
         with self._lock:
+            # Si on demande les watchers pour un canal spécifique
             if channel:
-                active_set = self._active_segments.get(channel, set())
+                # On récupère uniquement les watchers actifs (non en buffer) pour ce canal
+                active_set = self._active_segments.get(channel, set()).copy()
+                
+                # Si on veut inclure le buffer, on ajoute les IPs du buffer QUI SONT POUR CE CANAL SPECIFIQUE
+                if include_buffer:
+                    buffer_ips_for_channel = {
+                        ip for ip, data in self._watcher_removal_buffer.items() 
+                        if data.get("channel") == channel
+                    }
+                    active_set.update(buffer_ips_for_channel)
             else:
-                active_set = set().union(*self._active_segments.values())
-            
-            if include_buffer:
-                active_set.update(self._watcher_removal_buffer.keys())
+                # Pour tous les canaux, on récupère tous les watchers actifs
+                active_set = set().union(*self._active_segments.values()) if self._active_segments else set()
+                
+                # Si on veut inclure le buffer, on ajoute toutes les IPs du buffer
+                if include_buffer:
+                    active_set.update(self._watcher_removal_buffer.keys())
             
             return active_set
+    
+    def force_flush_inactive(self):
+        """Force un nettoyage immédiat de tous les viewers inactifs"""
+        logger.info("🧹 Forçage du nettoyage des viewers inactifs")
+        
+        # Remettre à zéro le timestamp du dernier nettoyage
+        self._last_cleanup_time = 0
+        
+        # Lancer un nettoyage immédiat
+        self.cleanup_inactive_watchers()
+        
+        # Nettoyer définitivement tous les viewers en buffer
+        current_time = time.time()
+        with self._lock:
+            # Récupérer tous les viewers en buffer
+            buffered_viewers = list(self._watcher_removal_buffer.items())
+            
+            for ip, data in buffered_viewers:
+                channel = data.get("channel", "unknown")
+                logger.info(f"🗑️ Flush forcé: Viewer {ip} supprimé DÉFINITIVEMENT de la chaîne {channel}")
+                
+                # Supprimer du buffer
+                if ip in self._watcher_removal_buffer:
+                    del self._watcher_removal_buffer[ip]
+                
+                # Supprimer également des segments actifs (par précaution)
+                if channel in self._active_segments and ip in self._active_segments[channel]:
+                    self._active_segments[channel].remove(ip)
+                    if not self._active_segments[channel]:
+                        del self._active_segments[channel]
+            
+            if buffered_viewers:
+                logger.info(f"🧹 Flush terminé: {len(buffered_viewers)} viewers supprimés définitivement")
+            else:
+                logger.info("✓ Aucun viewer à nettoyer dans le buffer")
+
+    def force_channel_status_update(self, channel: str):
+        """Force la mise à jour explicite de l'état d'un canal"""
+        with self._lock:
+            logger.info(f"🔄 Forçage de la mise à jour du statut pour le canal: {channel}")
+            
+            # Vérifier si le canal existe dans nos données
+            active_watchers = self._active_segments.get(channel, set()).copy()
+            
+            if not active_watchers:
+                logger.info(f"ℹ️ Canal {channel} n'a aucun watcher actif, notification aux gestionnaires")
+                # Notifier le gestionnaire de stats que ce canal n'a plus de watchers
+                if hasattr(self, 'stats_collector') and self.stats_collector:
+                    self.stats_collector.update_channel_watchers(channel, 0)
+            else:
+                logger.info(f"ℹ️ Canal {channel} a {len(active_watchers)} watchers actifs: {list(active_watchers)}")
+                # Notifier le gestionnaire de stats de l'état actuel
+                if hasattr(self, 'stats_collector') and self.stats_collector:
+                    self.stats_collector.update_channel_watchers(channel, len(active_watchers))
+                
+                # Forcer la mise à jour des temps d'activité pour tous les watchers de ce canal
+                for ip in active_watchers:
+                    current_channel = self.get_watcher_channel(ip)
+                    if current_channel == channel:
+                        logger.debug(f"🔄 Mise à jour du timestamp pour watcher {ip} sur {channel}")
+                    elif current_channel and current_channel != channel:
+                        logger.warning(f"⚠️ Watcher {ip} apparaît dans {channel} mais est actif sur {current_channel}")
+                        # Le retirer de ce canal puisqu'il est actif ailleurs
+                        if channel in self._active_segments and ip in self._active_segments[channel]:
+                            self._active_segments[channel].remove(ip)
+                            if not self._active_segments[channel]:
+                                del self._active_segments[channel]
+                            logger.info(f"🗑️ Watcher {ip} retiré de {channel} car actif sur {current_channel}")
+                            # Notifier de la mise à jour
+                            if hasattr(self, 'stats_collector') and self.stats_collector:
+                                self.stats_collector.update_channel_watchers(channel, len(self._active_segments.get(channel, set())))

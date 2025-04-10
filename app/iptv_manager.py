@@ -307,18 +307,13 @@ class IPTVManager:
             logger.error(traceback.format_exc())
 
     def stop(self):
-        """Arrête proprement le gestionnaire"""
+        """Arrête proprement le gestionnaire IPTV"""
         logger.info("🛑 Arrêt du gestionnaire IPTV...")
-        self.stop_scan_thread.set()
-        self.stop_init_thread.set()
         
-        if hasattr(self, 'scan_thread'):
-            self.scan_thread.join(timeout=5)
-            
-        if hasattr(self, 'channel_init_thread'):
-            self.channel_init_thread.join(timeout=5)
-
-        # Arrêt des autres composants...
+        # Utiliser la méthode complète de nettoyage pour aussi vider les viewers
+        self.cleanup_manager()
+        
+        logger.info("🛑 Gestionnaire IPTV arrêté avec succès")
 
     def _get_active_watcher_ips(self, channel_name):
         """Récupère la liste des IPs actives pour une chaîne"""
@@ -361,7 +356,37 @@ class IPTVManager:
                 logger.warning(f"[UPDATE_WATCHERS] ⚠️ Chaîne '{channel_name}' non connue du manager. Update ignoré.")
                 return
                 
-            # REMOVED Interaction with self._active_watchers
+            # Vérifier si certains watchers ont changé de canal et les supprimer des autres canaux
+            if hasattr(self, "channel_status") and self.channel_status:
+                # Vérifier si certains de ces IPs étaient actifs sur d'autres canaux
+                current_channels = {}
+                # Créer une copie des canaux pour éviter des modifications pendant l'itération
+                all_channels = self.channel_status.channels.copy()
+                
+                # Pour chaque IP active sur ce canal
+                for ip in active_ips_list:
+                    # Rechercher dans tous les autres canaux si cette IP y était active
+                    for other_channel, channel_data in all_channels.items():
+                        # Ne pas vérifier le canal actuel
+                        if other_channel == channel_name:
+                            continue
+                            
+                        # Vérifier si l'IP est dans la liste des watchers de l'autre canal
+                        other_watchers = channel_data.get('watchers', [])
+                        if ip in other_watchers:
+                            logger.info(f"🔄 IP {ip} détectée sur {channel_name} mais était aussi sur {other_channel}, notification de changement")
+                            
+                            # CORRECTION: Ne retirer que l'IP qui a changé de canal, pas tous les viewers
+                            new_watchers = [w for w in other_watchers if w != ip]
+                            
+                            # Mettre à jour l'autre canal sans cette IP
+                            other_data = channel_data.copy()
+                            other_data['watchers'] = new_watchers
+                            other_data['viewers'] = len(new_watchers)
+                            
+                            # Appliquer la mise à jour à l'autre canal
+                            self.channel_status.update_channel(other_channel, other_data)
+                            logger.info(f"🧹 IP {ip} retirée de {other_channel} après changement vers {channel_name}")
 
             # Mise à jour du statut via ChannelStatusManager
             if hasattr(self, "channel_status") and self.channel_status is not None:
@@ -375,26 +400,35 @@ class IPTVManager:
                 else: 
                      logger.warning(f"[{channel_name}] Channel object not found in update_watchers for is_live check.")
 
-                # REMOVED PREP DATA log
-                # logger.info(f"!!!!!! [IPTVM -> CSM] PREP DATA: ...")
-
-                channel_data = {
-                    'is_live': is_active,
-                    'viewers': viewers_count_from_arg,
-                    'watchers': watchers_list_for_json,
-                }
-
-                update_successful = self.channel_status.update_channel(
-                    channel_name,
-                    channel_data
-                )
-                if not update_successful:
-                    logger.warning(f"[{channel_name}] ⚠️ Échec de la mise à jour du statut via ChannelStatusManager")
+                # NE PAS ÉCRASER LES VIEWERS EXISTANTS, MAIS FUSIONNER
+                current_data = self.channel_status.channels.get(channel_name, {})
+                current_watchers = current_data.get('watchers', [])
+                
+                # Ne mettre à jour que si les listes diffèrent pour éviter des écritures inutiles
+                existing_set = set(current_watchers)
+                new_set = set(watchers_list_for_json)
+                
+                if existing_set != new_set:
+                    # Ajouter tous les viewers actuels ET nouveaux (sans doublons)
+                    merged_watchers = list(existing_set.union(new_set))
+                    
+                    channel_data = {
+                        'is_live': is_active,
+                        'viewers': len(merged_watchers),
+                        'watchers': merged_watchers,
+                    }
+                    
+                    update_successful = self.channel_status.update_channel(
+                        channel_name,
+                        channel_data
+                    )
+                    
+                    if not update_successful:
+                        logger.warning(f"[{channel_name}] ⚠️ Échec de la mise à jour du statut via ChannelStatusManager")
+                    else:
+                        logger.debug(f"[{channel_name}] ✅ Statut CSM mis à jour: viewers={len(merged_watchers)}, watchers={merged_watchers}")
                 else:
-                    # Keep this debug log
-                    logger.debug(f"[{channel_name}] ✅ Statut CSM mis à jour: viewers={viewers_count_from_arg}, watchers={watchers_list_for_json}")
-
-            # REMOVED Auto-restart logic
+                    logger.debug(f"[{channel_name}] ℹ️ Pas de changement dans la liste de viewers, mise à jour ignorée")
 
         except Exception as e:
             logger.error(f"❌ Erreur mise à jour watchers pour {channel_name}: {e}")
@@ -597,13 +631,13 @@ class IPTVManager:
                     return
 
                 # Debugging: log the directory and its existence
-                logger.info(f"🔍 Scanning content directory: {content_path} (exists: {content_path.exists()})")
+                logger.debug(f"🔍 Scanning content directory: {content_path} (exists: {content_path.exists()})")
                 
                 # Get all subdirectories 
                 channel_dirs = [d for d in content_path.iterdir() if d.is_dir()]
                 
                 # Debug the found directories
-                logger.info(f"📂 Found {len(channel_dirs)} potential channel directories: {[d.name for d in channel_dirs]}")
+                logger.debug(f"📂 Found {len(channel_dirs)} potential channel directories: {[d.name for d in channel_dirs]}")
 
                 logger.info(f"📡 Scan des chaînes disponibles...")
                 for channel_dir in channel_dirs:
@@ -705,7 +739,7 @@ class IPTVManager:
     def _update_master_playlist(self):
         """Effectue la mise à jour de la playlist principale"""
         playlist_path = os.path.abspath("/app/hls/playlist.m3u")
-        logger.info(f"🔄 Master playlist maj.: {playlist_path}")
+        logger.debug(f"🔄 Master playlist maj.: {playlist_path}")
         
         # *** ADDED: Acquire lock to prevent concurrent updates ***
         with self.lock:
@@ -717,7 +751,7 @@ class IPTVManager:
                     try:
                         with open(playlist_path, "r", encoding="utf-8") as f:
                             existing_content = f.read()
-                        logger.info(f"✅ Contenu actuel sauvegardé: {len(existing_content)} octets")
+                        logger.debug(f"✅ Contenu actuel sauvegardé: {len(existing_content)} octets")
                     except Exception as e:
                         logger.error(f"❌ Erreur lecture playlist existante: {e}")
                 
@@ -734,7 +768,7 @@ class IPTVManager:
                         # Trust the ready_for_streaming status if start_stream succeeded
                         # No need to check for hls_playlist_path.exists() here, as it might not be created instantly
                         ready_channels.append((name, channel))
-                        logger.info(f"[{name}] ✅ Chaîne prête pour la playlist maître (status: ready_for_streaming=True)")
+                        logger.debug(f"[{name}] ✅ Chaîne prête pour la playlist maître (status: ready_for_streaming=True)")
                     elif channel:
                         logger.debug(f"[{name}] ⏳ Chaîne non prête pour la playlist maître (ready_for_streaming={getattr(channel, 'ready_for_streaming', 'N/A')})")
                     else:
@@ -751,8 +785,8 @@ class IPTVManager:
                     content += "# Aucune chaîne active pour le moment\n"
                     logger.warning("⚠️ Aucune chaîne active détectée pour la playlist")
                 
-                # Log du contenu qui sera écrit
-                logger.info(f"📝 Contenu de la playlist à écrire:\n{content}")
+                # Loguer le contenu à écrire pour vérification
+                logger.debug(f"📝 Contenu de la playlist à écrire:\n{content}")
                 
                 # Écrire dans un fichier temporaire d'abord
                 temp_path = f"{playlist_path}.tmp"
@@ -770,7 +804,7 @@ class IPTVManager:
                 if os.path.exists(temp_path) and os.path.getsize(temp_path) > 0:
                     # Remplacer l'ancien fichier
                     os.replace(temp_path, playlist_path)
-                    logger.info(f"✅ Playlist remplacée avec succès")
+                    logger.debug(f"✅ Playlist remplacée avec succès")
                 else:
                     logger.error(f"❌ Fichier temporaire vide ou non créé: {temp_path}")
                     # Ne pas remplacer l'ancien fichier si le temporaire est vide
@@ -782,13 +816,13 @@ class IPTVManager:
                 # Vérification que le fichier a été correctement écrit
                 if os.path.exists(playlist_path):
                     size = os.path.getsize(playlist_path)
-                    logger.info(f"✅ Playlist écrite: {playlist_path}, taille: {size} octets")
+                    logger.debug(f"✅ Playlist écrite: {playlist_path}, taille: {size} octets")
                     
                     # Lire le contenu pour vérification
                     with open(playlist_path, "r", encoding="utf-8") as f:
                         read_content = f.read()
                         if read_content == content:
-                            logger.info("✅ Contenu vérifié, identique à ce qui devait être écrit")
+                            logger.debug("✅ Contenu vérifié, identique à ce qui devait être écrit")
                         else:
                             logger.error("❌ Contenu lu différent du contenu qui devait être écrit")
                             logger.error(f"📄 Contenu lu:\n{read_content}")
@@ -848,27 +882,39 @@ class IPTVManager:
         self.stop_watchers.set()
         self.stop_status_update.set()
 
+        # Vider tous les viewers du fichier de statut avant arrêt
+        try:
+            if self.channel_status is not None:
+                logger.info("🧹 Vidage de tous les viewers du fichier channel_status.json avant arrêt...")
+                flush_success = self.channel_status.flush_all_viewers()
+                if flush_success:
+                    logger.info("✅ Tous les viewers ont été vidés avec succès du fichier de statut")
+                else:
+                    logger.warning("⚠️ Échec du vidage des viewers avant arrêt")
+        except Exception as e:
+            logger.error(f"❌ Erreur lors du vidage des viewers: {e}")
+
         # Stop components that might be None
         try:
             if self.channel_status is not None:
                 self.channel_status.stop()
                 logger.info("✅ Channel status manager stopped")
-        except:
-            pass
+        except Exception as e:
+            logger.error(f"❌ Erreur lors de l'arrêt du channel status manager: {e}")
 
         try:
             if self.stats_collector is not None:
                 self.stats_collector.stop()
                 logger.info("📊 StatsCollector arrêté")
-        except:
-            pass
+        except Exception as e:
+            logger.error(f"❌ Erreur lors de l'arrêt du StatsCollector: {e}")
 
         try:
             if self.hls_cleaner is not None:
                 self.hls_cleaner.stop_cleaner()
                 logger.info("🧹 HLS Cleaner arrêté")
-        except:
-            pass
+        except Exception as e:
+            logger.error(f"❌ Erreur lors de l'arrêt du HLS Cleaner: {e}")
 
         # Join threads with timeout
         threads_to_join = [
@@ -884,8 +930,8 @@ class IPTVManager:
                 if thread and thread.is_alive():
                     thread.join(timeout=5)
                     logger.info(f"✅ {name} stopped")
-            except:
-                pass
+            except Exception as e:
+                logger.error(f"❌ Erreur lors de l'arrêt du thread {name}: {e}")
 
         # Stop observers
         try:
@@ -893,24 +939,25 @@ class IPTVManager:
                 self.observer.stop()
                 self.observer.join(timeout=5)
                 logger.info("✅ Main observer stopped")
-        except:
-            pass
+        except Exception as e:
+            logger.error(f"❌ Erreur lors de l'arrêt de l'observer principal: {e}")
 
         try:
             if hasattr(self, "ready_observer"):
                 self.ready_observer.stop()
                 self.ready_observer.join(timeout=5)
                 logger.info("✅ Ready observer stopped")
-        except:
-            pass
-
+        except Exception as e:
+            logger.error(f"❌ Erreur lors de l'arrêt du ready observer: {e}")
+            
         # Clean up channels
         for name, channel in self.channels.items():
             try:
-                channel._clean_processes()
-                logger.info(f"✅ Channel {name} cleaned up")
-            except:
-                pass
+                if channel is not None:
+                    channel._clean_processes()
+                    logger.info(f"✅ Channel {name} cleaned up")
+            except Exception as e:
+                logger.error(f"❌ Erreur lors du nettoyage du canal {name}: {e}")
 
         logger.info("✅ Nettoyage terminé")
 
@@ -1016,7 +1063,8 @@ class IPTVManager:
                             f"[{channel}] 👁️ MAJ watchers: {count} actifs - {list(ips)}"
                         )
                         self.last_watcher_counts[channel] = count
-                        self.update_watchers(channel, count, "/hls/")
+                        # Ajouter le paramètre source='tracker' pour passer la vérification de sécurité
+                        self.update_watchers(channel, count, list(ips), "/hls/", source='tracker')
 
                 self.last_log_time = current_time
                 return True
@@ -1522,14 +1570,16 @@ class IPTVManager:
                             args=(channel_name, channel),
                             daemon=True
                         ).start()
-                        
                         resync_count += 1
-            
+                        logger.info(f"🔄 [{channel_name}] {resync_count} playlists resynchronisées")
+                else:
+                    logger.debug(f"[{channel_name}] ℹ️ Pas de méthode de création de playlist, aucune resynchronisation nécessaire")
+                    
             if resync_count > 0:
                 logger.info(f"✅ Resynchronisation et redémarrage de {resync_count} chaînes effectués")
                 
         except Exception as e:
-            logger.error(f"❌ Erreur resynchronisation playlists: {e}")
+            logger.error(f"❌ Erreur resynchronisation des playlists: {e}")
             import traceback
             logger.error(traceback.format_exc())
 
@@ -1537,13 +1587,13 @@ class IPTVManager:
         """Arrête proprement le gestionnaire IPTV"""
         logger.info("🛑 Arrêt du gestionnaire IPTV...")
         
-        # Arrêt du scan périodique
-        self.stop_periodic_scan.set()
-        if hasattr(self, 'periodic_scan_thread'):
-            self.periodic_scan_thread.join(timeout=5)
+        # Utiliser la méthode complète de nettoyage pour aussi vider les viewers
+        self.cleanup_manager()
+        
+        logger.info("🛑 Gestionnaire IPTV arrêté avec succès")
 
     def _process_channel_init_queue(self):
-        """Thread qui traite la queue d'initialisation des chaînes en parallèle"""
+        """Process the queue of channels to initialize"""
         logger.info("🔄 Démarrage du thread de traitement de la queue d'initialisation des chaînes")
         while not self.stop_init_thread.is_set():
             try:

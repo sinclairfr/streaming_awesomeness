@@ -28,6 +28,12 @@ WATCHERS_LOG_CYCLE = int(os.getenv("WATCHERS_LOG_CYCLE", "300"))  # 5 minutes pa
 SUMMARY_CYCLE = int(os.getenv("SUMMARY_CYCLE", "300"))  # 5 minutes par défaut
 CRASH_THRESHOLD = int(os.getenv("CRASH_THRESHOLD", "30"))  # Seuil en secondes pour considérer un crash de stream (augmenté à 30s)
 
+# Durée du segment HLS en secondes - utilisée à la fois par FFmpegCommandBuilder et TimeTracker
+HLS_SEGMENT_DURATION = float(os.getenv("HLS_SEGMENT_DURATION", "5.0"))
+
+# Timeout pour les viewers inactifs (basé sur la durée du segment HLS)
+VIEWER_INACTIVITY_TIMEOUT = float(os.getenv("VIEWER_INACTIVITY_TIMEOUT", str(HLS_SEGMENT_DURATION * 1.2)))
+
 def get_log_level(level_str: str) -> int:
     """Convertit un niveau de log en string vers sa valeur numérique"""
     valid_levels = {

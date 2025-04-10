@@ -5,7 +5,7 @@ import time
 import threading
 import re
 from pathlib import Path
-from config import logger
+from config import logger, HLS_SEGMENT_DURATION
 
 class StatsCollector:
     """
@@ -722,7 +722,7 @@ class StatsCollector:
                 segment_id = segment_match.group(1) if segment_match else "unknown"
 
                 # Ajouter du temps de visionnage ET mettre à jour user stats (incl. user_agent)
-                segment_duration = 4.0  # secondes par segment
+                segment_duration = HLS_SEGMENT_DURATION  # Utiliser la variable globale au lieu de la valeur codée en dur
                 self.add_watch_time(channel, ip, segment_duration, user_agent)
                 
                 # Mettre à jour les stats de segments
