@@ -645,7 +645,7 @@ class ClientMonitor(threading.Thread):
                     logger.warning(f"[{channel}] ⚠️ Échec de la mise à jour du statut via le manager")
                     
             except Exception as e:
-                logger.error(f"[{channel}] ❌ Error updating watchers: {e}")
+                    logger.error(f"[{channel}] ❌ Error updating watchers: {e}")
 
     def _push_tracker_status_to_manager(self, channel: str):
         """Pousse le statut du tracker vers le manager pour un canal spécifique"""
@@ -654,7 +654,7 @@ class ClientMonitor(threading.Thread):
             if not hasattr(self, 'time_tracker') or not self.time_tracker:
                 logger.warning(f"[{channel}] ⚠️ TimeTracker non disponible, impossible de mettre à jour le statut")
                 return False
-                
+
             # Récupérer les watchers actifs pour ce canal avec les timeouts configurés
             active_watchers = self.time_tracker.get_active_watchers(channel)
             watchers_count = len(active_watchers)
@@ -708,7 +708,7 @@ class ClientMonitor(threading.Thread):
                 else:
                     logger.debug(f"[{channel}] ℹ️ No viewers and no previous activity, skipping update")
                     return True
-                
+
         except Exception as e:
             logger.error(f"[{channel}] ❌ Error in _push_tracker_status_to_manager: {e}")
             import traceback

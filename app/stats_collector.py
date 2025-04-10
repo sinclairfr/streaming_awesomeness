@@ -206,36 +206,65 @@ class StatsCollector:
                 with open(self.user_stats_file, "r") as f:
                     loaded_data = json.load(f)
 
-                    # Basic structure validation
-                    if isinstance(loaded_data, dict) and "users" in loaded_data and isinstance(loaded_data["users"], dict):
-                        # Ensure all user entries are dictionaries
-                        users_valid = all(isinstance(ud, dict) for ud in loaded_data["users"].values())
-                        if users_valid:
-                            # Convert sets back if necessary (though save should handle this)
-                            for ip, udata in loaded_data["users"].items():
-                                if "channels_watched" in udata and isinstance(udata["channels_watched"], list):
-                                    udata["channels_watched"] = set(udata["channels_watched"])
+                    # Fix for deeply nested "users" structure - flatten it
+                    if isinstance(loaded_data, dict):
+                        # Check if we have a deeply nested users structure
+                        current = loaded_data
+                        depth = 0
+                        while "users" in current and isinstance(current["users"], dict) and not any(isinstance(v, dict) and "total_watch_time" in v for k, v in current["users"].items()):
+                            current = current["users"]
+                            depth += 1
+                            if depth > 50:  # Safety limit
+                                logger.warning(f"⚠️ Structure trop profondément imbriquée détectée dans {self.user_stats_file}. Création d'une nouvelle structure.")
+                                return empty_stats
+                        
+                        # If we found actual user data at some depth
+                        if depth > 1:
+                            logger.warning(f"⚠️ Structure imbriquée détectée dans {self.user_stats_file} (profondeur: {depth}). Correction en cours...")
+                            # Rebuild proper structure
+                            corrected_data = {"users": {}, "last_updated": loaded_data.get("last_updated", int(time.time()))}
                             
-                            logger.info(f"📊 Stats utilisateurs chargées depuis {self.user_stats_file}")
-                            # Ensure last_updated is present
-                            loaded_data.setdefault("last_updated", int(time.time()))
-                            return loaded_data
-                        else:
-                            logger.warning(f"⚠️ Fichier stats utilisateurs ({self.user_stats_file}) contient des données utilisateur non valides. Création d\'une nouvelle structure.")
-                            return empty_stats
+                            # If we found actual users at the deepest level, extract them
+                            if isinstance(current, dict) and "users" in current and isinstance(current["users"], dict):
+                                for ip, user_data in current["users"].items():
+                                    if isinstance(user_data, dict) and "total_watch_time" in user_data:
+                                        corrected_data["users"][ip] = user_data
+                            
+                            logger.info(f"📊 Structure corrigée: {len(corrected_data['users'])} utilisateurs extraits")
+                            return corrected_data
+                    
+                    # Basic structure validation for normal cases
+                    if isinstance(loaded_data, dict) and "users" in loaded_data and isinstance(loaded_data["users"], dict):
+                        # Find all actual user entries
+                        valid_users = {}
+                        for ip, user_data in loaded_data["users"].items():
+                            if isinstance(user_data, dict) and "total_watch_time" in user_data:
+                                # Convert channels_watched to set if it's a list
+                                if "channels_watched" in user_data and isinstance(user_data["channels_watched"], list):
+                                    user_data["channels_watched"] = set(user_data["channels_watched"])
+                                valid_users[ip] = user_data
+                        
+                        # Create proper structure
+                        valid_data = {
+                            "users": valid_users,
+                            "last_updated": loaded_data.get("last_updated", int(time.time()))
+                        }
+                        
+                        logger.info(f"📊 Stats utilisateurs chargées: {len(valid_users)} utilisateurs trouvés")
+                        return valid_data
                     else:
-                        logger.warning(f"⚠️ Fichier stats utilisateurs ({self.user_stats_file}) a une structure invalide. Création d\'une nouvelle structure.")
+                        logger.warning(f"⚠️ Structure invalide dans {self.user_stats_file}. Création d'une nouvelle structure.")
                         return empty_stats
 
             except json.JSONDecodeError:
-                logger.warning(f"⚠️ Fichier stats utilisateurs ({self.user_stats_file}) corrompu (JSON invalide). Création d\'une nouvelle structure.")
+                logger.warning(f"⚠️ Fichier stats utilisateurs ({self.user_stats_file}) corrompu (JSON invalide). Création d'une nouvelle structure.")
                 return empty_stats
             except Exception as e:
-                logger.error(f"❌ Erreur inattendue lors du chargement de {self.user_stats_file}: {e}. Création d\'une nouvelle structure.")
+                logger.error(f"❌ Erreur inattendue lors du chargement de {self.user_stats_file}: {e}. Création d'une nouvelle structure.")
                 return empty_stats
         else:
             # File does not exist, return the empty structure
-            logger.info(f"ℹ️ Fichier stats utilisateurs ({self.user_stats_file}) non trouvé. Création d\'une nouvelle structure.")
+            logger.info(f"ℹ️ Fichier stats utilisateurs ({self.user_stats_file}) non trouvé. Création d'une nouvelle structure.")
             return empty_stats
     
     def _make_json_serializable(self, data):
@@ -256,7 +285,7 @@ class StatsCollector:
             try:
                 # Vérifications de base
                 if not hasattr(self, "user_stats") or not self.user_stats:
-                    self.user_stats = {"last_updated": int(time.time())}
+                    self.user_stats = {"users": {}, "last_updated": int(time.time())}
 
                 # S'assurer que le dossier existe
                 os.makedirs(os.path.dirname(self.user_stats_file), exist_ok=True)
