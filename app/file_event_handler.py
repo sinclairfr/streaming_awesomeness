@@ -323,7 +323,7 @@ class FileEventHandler(BaseFileEventHandler):
         if channel_name in self.manager.channels:
             channel = self.manager.channels[channel_name]
             if hasattr(channel, "_restart_stream"):
-                logger.info(f"[{channel_name}] 🔄 Forçage du redémarrage du stream")
+                logger.info(f"[{channel_name}] 🔄 Forçage du redémarrage du stream après détection de stabilité des fichiers")
                 channel._restart_stream()
                 # Attendre que le stream démarre
                 time.sleep(2)
@@ -331,21 +331,28 @@ class FileEventHandler(BaseFileEventHandler):
                 if hasattr(channel, "process_manager") and channel.process_manager.is_running():
                     logger.info(f"[{channel_name}] ✅ Stream redémarré avec succès")
                     # Réinitialiser le flag de stabilité après un redémarrage réussi
-                    delattr(self, stability_check_key)
+                    if hasattr(self, stability_check_key):
+                         delattr(self, stability_check_key)
                 else:
-                    # Si le redémarrage a échoué, essayer le démarrage direct
-                    logger.warning(f"[{channel_name}] ⚠️ Échec du redémarrage, tentative de démarrage direct")
-                    self._force_ffmpeg_start(channel_name)
-        else:
-            # La chaîne n'existe pas, la créer et démarrer directement
-            logger.info(f"[{channel_name}] 🔄 Création et démarrage forcé de la chaîne")
-            if not self._force_channel_creation(channel_name):
-                # Si la création échoue, tenter le démarrage direct FFmpeg
-                logger.warning(f"[{channel_name}] ⚠️ Échec de la création, tentative de démarrage direct FFmpeg")
-                self._force_ffmpeg_start(channel_name)
+                    # Si le redémarrage a échoué, tenter le démarrage direct
+                    logger.warning(f"[{channel_name}] ⚠️ Échec du redémarrage, tentative de démarrage direct FFmpeg")
+                    # On ne force pas le démarrage ffmpeg ici, cela pourrait causer des problèmes si la chaîne n'est pas prête
+                    # self._force_ffmpeg_start(channel_name)
+            else:
+                logger.warning(f"[{channel_name}] ⚠️ La chaîne existe mais n'a pas de méthode _restart_stream.")
+        # REMOVED ELSE BLOCK - Do not force creation from file events
+        # else:
+        #     # La chaîne n'existe pas, la créer et démarrer directement
+        #     logger.info(f"[{channel_name}] 🔄 Création et démarrage forcé de la chaîne")
+        #     if not self._force_channel_creation(channel_name):
+        #         # Si la création échoue, tenter le démarrage direct FFmpeg
+        #         logger.warning(f"[{channel_name}] ⚠️ Échec de la création, tentative de démarrage direct FFmpeg")
+        #         self._force_ffmpeg_start(channel_name)
 
-        # Mise à jour de la playlist principale
-        self._force_master_playlist_update()
+        # Mise à jour de la playlist principale - Only if channel exists and restarted?
+        # Let's move this inside the if block to avoid updating if channel didn't exist
+        if channel_name in self.manager.channels:
+            self._force_master_playlist_update()
 
         # Nettoyer les compteurs pour cette chaîne
         with self.lock:

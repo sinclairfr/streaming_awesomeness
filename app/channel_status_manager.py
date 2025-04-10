@@ -244,11 +244,6 @@ class ChannelStatusManager:
                 os.makedirs(stats_dir, exist_ok=True)
                 os.chmod(stats_dir, 0o777)
                 
-                # Save current status
-                success = self._save_status()
-                if not success:
-                    logger.warning("⚠️ Failed to save status in update loop")
-                
                 # Calculate total active viewers
                 total_viewers = sum(
                     ch.get("viewers", 0) 

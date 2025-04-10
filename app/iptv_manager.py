@@ -241,76 +241,55 @@ class IPTVManager:
             channel_dirs = [d for d in content_path.iterdir() if d.is_dir()]
             logger.info(f"📂 {len(channel_dirs)} dossiers de chaînes trouvés: {[d.name for d in channel_dirs]}")
             
-            # Pour suivre les nouvelles chaînes détectées
-            new_channels = []
+            # Pour suivre les nouvelles chaînes détectées cette fois-ci
+            found_in_this_scan = set()
 
             for channel_dir in channel_dirs:
                 channel_name = channel_dir.name
+                found_in_this_scan.add(channel_name)
                 
-                if channel_name in self.channels:
-                    # Mise à jour des chaînes existantes
-                    if force:
-                        logger.info(f"🔄 Rafraîchissement de la chaîne {channel_name}")
-                        channel = self.channels[channel_name]
-                        if hasattr(channel, "_scan_videos"):
-                            channel._scan_videos()
-                    continue
+                # Check if channel is already known or being initialized
+                with self.scan_lock:
+                    if channel_name in self.channels:
+                        # Existing channel - maybe log refresh if forced?
+                        if force:
+                             logger.info(f"🔄 Scan forcé : Chaîne existante {channel_name} - rafraîchissement éventuel géré par la chaîne elle-même.")
+                        continue # Skip adding to init queue if already known
+                    else:
+                         # Add placeholder ONLY if not already present
+                         self.channels[channel_name] = None
+                         logger.debug(f"[{channel_name}] Added placeholder to self.channels.")
 
-                # Nouvelle chaîne détectée
-                logger.info(f"✅ Nouvelle chaîne trouvée: {channel_name}")
-                # --- Add Placeholder ---
-                with self.scan_lock: # Use the same lock as _init_channel_async
-                    if channel_name not in self.channels: # Double check inside lock
-                         self.channels[channel_name] = None # Add placeholder
-                # --- End Add Placeholder ---
-                new_channels.append(channel_name)
+                # Nouvelle chaîne détectée (ou placeholder ajouté)
+                logger.info(f"✅ Nouvelle chaîne détectée (ou placeholder ajouté): {channel_name}")
                 
-                # Si c'est un scan forcé, on initialise immédiatement
-                if force:
-                    logger.info(f"🚀 Initialisation forcée de la chaîne {channel_name}")
-                    self._init_channel_async({
-                        "name": channel_name,
-                        "dir": channel_dir,
-                        "from_queue": False  # Indique que ce n'est pas de la queue
-                    })
-                else:
-                    # Sinon on met dans la queue pour initialisation différée
-                    logger.info(f"⏳ Mise en file d'attente pour initialisation de la chaîne {channel_name}")
-                    self.channel_init_queue.put({
-                        "name": channel_name,
-                        "dir": channel_dir,
-                        "from_queue": True  # Indique que c'est de la queue
-                    })
+                # ALWAYS use the queue to respect parallel limits
+                logger.info(f"⏳ Mise en file d'attente pour initialisation de la chaîne {channel_name}")
+                self.channel_init_queue.put({
+                    "name": channel_name,
+                    "dir": channel_dir,
+                    "from_queue": True  # Marquer comme venant de la queue
+                })
 
-            # Mise à jour de la playlist maître
+            # --- Remove channels that exist in self.channels but were not found in this scan --- 
+            # Careful with race conditions if init is slow
+            # with self.scan_lock:
+            #     current_known_channels = set(self.channels.keys())
+            #     removed_channels = current_known_channels - found_in_this_scan
+            #     for removed_name in removed_channels:
+            #         logger.info(f"🗑️ Chaîne {removed_name} non trouvée dans le scan, suppression...")
+            #         channel_obj = self.channels.pop(removed_name, None)
+            #         if channel_obj and hasattr(channel_obj, 'stop_stream_if_needed'):
+            #             channel_obj.stop_stream_if_needed() # Try to stop if object exists
+            #         # Also remove from channel_status?
+            #         if self.channel_status:
+            #             self.channel_status.remove_channel(removed_name)
+            # ----------------------------------------------------------------------------------
+
+            # Mise à jour de la playlist maître (peut être appelée trop tôt, mais OK)
             self._update_master_playlist()
             
-            # NOUVEAU: Démarrer les streams des nouvelles chaînes après un délai pour laisser le temps à l'initialisation
-            if new_channels:
-                logger.info(f"🚀 Planification du démarrage différé pour les nouvelles chaînes: {new_channels}")
-                def delayed_start_streams():
-                    # Attendre 10 secondes pour laisser le temps aux chaînes de s'initialiser
-                    time.sleep(10)
-                    for channel_name in new_channels:
-                        if channel_name in self.channels:
-                            channel = self.channels[channel_name]
-                            if hasattr(channel, "ready_for_streaming") and channel.ready_for_streaming:
-                                logger.info(f"[{channel_name}] 🚀 Démarrage différé du stream après scan")
-                                if hasattr(channel, "start_stream"):
-                                    success = channel.start_stream()
-                                    if success:
-                                        logger.info(f"[{channel_name}] ✅ Stream démarré avec succès après scan différé")
-                                    else:
-                                        logger.error(f"[{channel_name}] ❌ Échec du démarrage différé du stream")
-                                else:
-                                    logger.warning(f"[{channel_name}] ⚠️ Channel does not have start_stream method")
-                            else:
-                                logger.warning(f"[{channel_name}] ⚠️ La chaîne n'est pas prête pour le streaming ou ready_for_streaming n'est pas défini")
-                        else:
-                            logger.warning(f"[{channel_name}] ⚠️ Chaîne non trouvée dans le dictionnaire des chaînes pour le démarrage différé")
-                
-                # Démarrer dans un thread séparé pour ne pas bloquer
-                threading.Thread(target=delayed_start_streams, daemon=True).start()
+            # Remove the delayed_start_streams logic as _init_channel_async handles starting
                 
         except Exception as e:
             logger.error(f"❌ Erreur scan des chaînes: {e}")
@@ -357,19 +336,26 @@ class IPTVManager:
                 logger.debug(f"⏭️ Ignoré mise à jour watchers pour IP: {channel_name}")
                 return
 
-            # --- Modified Check ---
+            # --- Refined Check ---
+            # Check 1: Does the manager know this channel name at all?
             if channel_name not in self.channels:
-                logger.warning(f"⚠️ Tentative de mise à jour des watchers pour une chaîne vraiment inexistante (pas scannée): {channel_name}")
+                logger.warning(f"[UPDATE_WATCHERS] ⚠️ Chaîne '{channel_name}' non connue du manager (pas scannée ou supprimée). Update ignoré.")
                 return
-                
+            
+            # Check 2: Is the channel object actually loaded (not None)?
             channel = self.channels.get(channel_name)
             if channel is None:
-                logger.debug(f"⏳ Chaîne {channel_name} en cours d'initialisation, mise à jour des watchers différée")
+                logger.debug(f"[UPDATE_WATCHERS] ⏳ Chaîne '{channel_name}' en cours d'initialisation ou temporairement indisponible. Update différé.")
                 return
-            # --- End Modified Check ---
+                
+            # Check 3: Is the channel ready for streaming?
+            # Optional: We might still want to track watchers even if not fully ready?
+            # if not getattr(channel, 'ready_for_streaming', False):
+            #     logger.debug(f"[UPDATE_WATCHERS] ⏳ Chaîne '{channel_name}' connue mais pas encore prête. Update différé.")
+            #     return
+            # --- End Refined Check ---
 
             # Mise à jour du compteur de watchers
-            # channel = self.channels[channel_name] # No longer needed, already fetched
             old_count = getattr(channel, 'watchers_count', 0)
             
             # Toujours mettre à jour le timestamp de dernier watcher
@@ -463,18 +449,6 @@ class IPTVManager:
                         logger.warning(f"[{channel_name}] ⚠️ Chaîne non prête pour le streaming")
                 else:
                     logger.debug(f"[{channel_name}] ⏳ Délai min. entre redémarrages pas écoulé ({current_time - last_restart_time:.1f}s < {restart_delay}s)")
-
-            # Mise à jour des statistiques seulement en cas de watchers actifs
-            if hasattr(self, 'stats_collector') and self.stats_collector and watcher_count > 0:
-                # Mise à jour du temps de visionnage pour chaque IP active
-                if active_watchers := self._active_watchers.get(channel_name, set()):
-                    for ip in active_watchers:
-                        self.stats_collector.add_watch_time(channel_name, ip, 5.0)
-                    
-                    # Ne pas sauvegarder les stats à chaque mise à jour pour éviter la surcharge d'I/O
-                    if count_changed:
-                        self.stats_collector.save_stats()
-                        self.stats_collector.save_user_stats()
 
         except Exception as e:
             logger.error(f"❌ Erreur mise à jour watchers pour {channel_name}: {e}")
@@ -732,154 +706,136 @@ class IPTVManager:
         playlist_path = os.path.abspath("/app/hls/playlist.m3u")
         logger.info(f"🔄 Master playlist maj.: {playlist_path}")
         
-        try:
-            # On sauvegarde d'abord le contenu actuel au cas où
-            existing_content = "#EXTM3U\n"
-            if os.path.exists(playlist_path) and os.path.getsize(playlist_path) > 0:
-                try:
-                    with open(playlist_path, "r", encoding="utf-8") as f:
-                        existing_content = f.read()
-                    logger.info(f"✅ Contenu actuel sauvegardé: {len(existing_content)} octets")
-                except Exception as e:
-                    logger.error(f"❌ Erreur lecture playlist existante: {e}")
-            
-            # Préparation du nouveau contenu
-            content = "#EXTM3U\n"
-
-            # Re-vérifie chaque chaîne pour confirmer qu'elle est prête
-            with self.scan_lock:
-                ready_channels = []
-                
-                # Méthode 1: Vérification directe des fichiers dans le dossier HLS
-                hls_dir = Path("/app/hls")
-                for channel_dir in hls_dir.iterdir():
-                    if channel_dir.is_dir() and channel_dir.name != "stats" and (channel_dir / "playlist.m3u8").exists():
-                        channel_name = channel_dir.name
-                        # Vérifier qu'il y a au moins un segment
-                        segments = list(channel_dir.glob("segment_*.ts"))
-                        if segments:
-                            ready_channels.append((channel_name, None))
-                            logger.info(f"[{channel_name}] ✅ Chaîne prête (vérification directe HLS)")
-                
-                # Méthode 2: Vérification basée sur les fichiers dans ready_to_stream
-                if not ready_channels:
-                    for name, channel in sorted(self.channels.items()):
-                        # Vérification directe des fichiers
-                        ready_dir = Path(channel.video_dir) / "ready_to_stream"
-                        has_videos = (
-                            list(ready_dir.glob("*.mp4")) if ready_dir.exists() else []
-                        )
-
-                        # Mise à jour du statut si nécessaire
-                        if has_videos:
-                            logger.info(f"[{name}] ✅ Chaîne prête avec {len(has_videos)} vidéos")
-                            self.channel_ready_status[name] = True
-                            channel.ready_for_streaming = True
-                            ready_channels.append((name, channel))
-                        else:
-                            logger.warning(f"[{name}] ⚠️ Chaîne non prête (aucune vidéo)")
-                            self.channel_ready_status[name] = False
-                            channel.ready_for_streaming = False
-
-            # Écriture des chaînes prêtes
-            server_url = os.getenv("SERVER_URL", "192.168.10.183")
-            if ready_channels:
-                for name, _ in ready_channels:
-                    content += f'#EXTINF:-1 tvg-id="{name}" tvg-name="{name}",{name}\n'
-                    content += f"http://{server_url}/hls/{name}/playlist.m3u8\n"
-            else:
-                # Si aucune chaîne n'est prête, ajouter un commentaire
-                content += "# Aucune chaîne active pour le moment\n"
-                logger.warning("⚠️ Aucune chaîne active détectée pour la playlist")
-            
-            # Log du contenu qui sera écrit
-            logger.info(f"📝 Contenu de la playlist à écrire:\n{content}")
-            
-            # Écrire dans un fichier temporaire d'abord
-            temp_path = f"{playlist_path}.tmp"
-            with open(temp_path, "w", encoding="utf-8") as f:
-                f.write(content)
-            
-            # Vérifier que le fichier temporaire a été créé correctement
-            if os.path.exists(temp_path) and os.path.getsize(temp_path) > 0:
-                # Remplacer l'ancien fichier
-                os.replace(temp_path, playlist_path)
-                logger.info(f"✅ Playlist remplacée avec succès")
-            else:
-                logger.error(f"❌ Fichier temporaire vide ou non créé: {temp_path}")
-                # Ne pas remplacer l'ancien fichier si le temporaire est vide
-                raise Exception("Fichier temporaire vide ou non créé")
-            
-            # Vérifier permissions et que le fichier a bien été écrit
-            os.chmod(playlist_path, 0o777)  # Permissions larges pour le debug
-            
-            # Vérification que le fichier a été correctement écrit
-            if os.path.exists(playlist_path):
-                size = os.path.getsize(playlist_path)
-                logger.info(f"✅ Playlist écrite: {playlist_path}, taille: {size} octets")
-                
-                # Lire le contenu pour vérification
-                with open(playlist_path, "r", encoding="utf-8") as f:
-                    read_content = f.read()
-                    if read_content == content:
-                        logger.info("✅ Contenu vérifié, identique à ce qui devait être écrit")
-                    else:
-                        logger.error("❌ Contenu lu différent du contenu qui devait être écrit")
-                        logger.error(f"📄 Contenu lu:\n{read_content}")
-                        # Essayer d'écrire directement
-                        with open(playlist_path, "w", encoding="utf-8") as f:
-                            f.write(content)
-                        logger.info("🔄 Tentative d'écriture directe effectuée")
-            else:
-                logger.error(f"❌ Fichier non trouvé après écriture: {playlist_path}")
-                # Recréer avec le contenu existant
-                with open(playlist_path, "w", encoding="utf-8") as f:
-                    f.write(existing_content)
-                logger.warning("🔄 Restauration du contenu précédent")
-
-            logger.info(
-                f"✅ Playlist mise à jour avec {len(ready_channels)} chaînes prêtes sur {len(self.channels)} totales"
-            )
-        except Exception as e:
-            logger.error(f"❌ Erreur mise à jour playlist: {e}")
-            logger.error(traceback.format_exc())
-            
-            # En cas d'erreur, vérifier si le fichier existe toujours
-            if not os.path.exists(playlist_path) or os.path.getsize(playlist_path) == 0:
-                # Restaurer le contenu précédent s'il existe
-                if existing_content and len(existing_content) > 8:  # Plus que juste "#EXTM3U\n"
+        # *** ADDED: Acquire lock to prevent concurrent updates ***
+        with self.lock:
+            # *** END ADDED ***
+            try:
+                # On sauvegarde d'abord le contenu actuel au cas où
+                existing_content = "#EXTM3U\n"
+                if os.path.exists(playlist_path) and os.path.getsize(playlist_path) > 0:
                     try:
-                        with open(playlist_path, "w", encoding="utf-8") as f:
-                            f.write(existing_content)
-                        os.chmod(playlist_path, 0o777)
-                        logger.info("✅ Contenu précédent restauré")
-                    except Exception as restore_e:
-                        logger.error(f"❌ Erreur restauration contenu: {restore_e}")
-                
-                # Si pas de contenu précédent ou erreur, créer une playlist minimale
-                if not os.path.exists(playlist_path) or os.path.getsize(playlist_path) == 0:
-                    try:
-                        with open(playlist_path, "w", encoding="utf-8") as f:
-                            f.write("#EXTM3U\n# Playlist de secours\n")
-                        os.chmod(playlist_path, 0o777)
-                        logger.info("✅ Playlist minimale créée en fallback")
-                    except Exception as inner_e:
-                        logger.error(f"❌ Échec création playlist minimale: {inner_e}")
-        
-        # Vérifier et démarrer les streams des chaînes prêtes qui ne sont pas encore en cours d'exécution
-        for name, channel in ready_channels:
-            if channel and hasattr(channel, "process_manager") and not channel.process_manager.is_running():
-                logger.info(f"[{name}] 🚀 Démarrage automatique du stream après mise à jour de la playlist")
-                if hasattr(channel, "start_stream"):
-                    try:
-                        # Démarrer directement sans thread pour s'assurer que ça fonctionne
-                        success = channel.start_stream()
-                        if success:
-                            logger.info(f"[{name}] ✅ Stream démarré avec succès")
-                        else:
-                            logger.error(f"[{name}] ❌ Échec du démarrage du stream")
+                        with open(playlist_path, "r", encoding="utf-8") as f:
+                            existing_content = f.read()
+                        logger.info(f"✅ Contenu actuel sauvegardé: {len(existing_content)} octets")
                     except Exception as e:
-                        logger.error(f"[{name}] ❌ Erreur lors du démarrage du stream: {e}")
+                        logger.error(f"❌ Erreur lecture playlist existante: {e}")
+                
+                # Préparation du nouveau contenu
+                content = "#EXTM3U\n"
+
+                # Build ready_channels based on channel objects status
+                ready_channels = []
+                # *** REMOVED redundant scan_lock, using self.lock now ***
+                # with self.scan_lock: 
+                for name, channel in sorted(self.channels.items()):
+                    # Ensure channel object exists and check its ready status
+                    if channel and hasattr(channel, 'ready_for_streaming') and channel.ready_for_streaming:
+                        # Trust the ready_for_streaming status if start_stream succeeded
+                        # No need to check for hls_playlist_path.exists() here, as it might not be created instantly
+                        ready_channels.append((name, channel))
+                        logger.info(f"[{name}] ✅ Chaîne prête pour la playlist maître (status: ready_for_streaming=True)")
+                    elif channel:
+                        logger.debug(f"[{name}] ⏳ Chaîne non prête pour la playlist maître (ready_for_streaming={getattr(channel, 'ready_for_streaming', 'N/A')})")
+                    else:
+                         logger.debug(f"[{name}] ⏳ Chaîne non initialisée (objet None), non ajoutée à la playlist maître.")
+
+                # Écriture des chaînes prêtes
+                server_url = os.getenv("SERVER_URL", "192.168.10.183")
+                if ready_channels:
+                    for name, _ in ready_channels:
+                        content += f'#EXTINF:-1 tvg-id="{name}" tvg-name="{name}",{name}\n'
+                        content += f"http://{server_url}/hls/{name}/playlist.m3u8\n"
+                else:
+                    # Si aucune chaîne n'est prête, ajouter un commentaire
+                    content += "# Aucune chaîne active pour le moment\n"
+                    logger.warning("⚠️ Aucune chaîne active détectée pour la playlist")
+                
+                # Log du contenu qui sera écrit
+                logger.info(f"📝 Contenu de la playlist à écrire:\n{content}")
+                
+                # Écrire dans un fichier temporaire d'abord
+                temp_path = f"{playlist_path}.tmp"
+                with open(temp_path, "w", encoding="utf-8") as f:
+                    f.write(content)
+                    # *** ADDED: Ensure file is written to disk before checking size ***
+                    f.flush()
+                    os.fsync(f.fileno())
+                    # *** END ADDED ***
+                
+                # Vérifier que le fichier temporaire a été créé correctement
+                # *** ADDED: Short delay to allow filesystem sync ***
+                time.sleep(0.1) 
+                # *** END ADDED ***
+                if os.path.exists(temp_path) and os.path.getsize(temp_path) > 0:
+                    # Remplacer l'ancien fichier
+                    os.replace(temp_path, playlist_path)
+                    logger.info(f"✅ Playlist remplacée avec succès")
+                else:
+                    logger.error(f"❌ Fichier temporaire vide ou non créé: {temp_path}")
+                    # Ne pas remplacer l'ancien fichier si le temporaire est vide
+                    raise Exception("Fichier temporaire vide ou non créé")
+                
+                # Vérifier permissions et que le fichier a bien été écrit
+                os.chmod(playlist_path, 0o777)  # Permissions larges pour le debug
+                
+                # Vérification que le fichier a été correctement écrit
+                if os.path.exists(playlist_path):
+                    size = os.path.getsize(playlist_path)
+                    logger.info(f"✅ Playlist écrite: {playlist_path}, taille: {size} octets")
+                    
+                    # Lire le contenu pour vérification
+                    with open(playlist_path, "r", encoding="utf-8") as f:
+                        read_content = f.read()
+                        if read_content == content:
+                            logger.info("✅ Contenu vérifié, identique à ce qui devait être écrit")
+                        else:
+                            logger.error("❌ Contenu lu différent du contenu qui devait être écrit")
+                            logger.error(f"📄 Contenu lu:\n{read_content}")
+                            # Essayer d'écrire directement
+                            with open(playlist_path, "w", encoding="utf-8") as f:
+                                f.write(content)
+                            logger.info("🔄 Tentative d'écriture directe effectuée")
+                else:
+                    logger.error(f"❌ Fichier non trouvé après écriture: {playlist_path}")
+                    # Recréer avec le contenu existant
+                    with open(playlist_path, "w", encoding="utf-8") as f:
+                        f.write(existing_content)
+                    logger.warning("🔄 Restauration du contenu précédent")
+
+                # Use len(self.channels) which includes all potentially initializing channels (placeholders)
+                total_channels_known_by_manager = len(self.channels)
+                # Count non-None channels for a more accurate 'loaded' count
+                loaded_channels_count = sum(1 for ch in self.channels.values() if ch is not None)
+                logger.info(
+                    f"✅ Playlist mise à jour avec {len(ready_channels)} chaînes prêtes sur {loaded_channels_count} chargées ({total_channels_known_by_manager} total connu par manager)"
+                )
+            except Exception as e:
+                logger.error(f"❌ Erreur mise à jour playlist: {e}")
+                logger.error(traceback.format_exc())
+                
+                # En cas d'erreur, vérifier si le fichier existe toujours
+                if not os.path.exists(playlist_path) or os.path.getsize(playlist_path) == 0:
+                    # Restaurer le contenu précédent s'il existe
+                    if existing_content and len(existing_content) > 8:  # Plus que juste "#EXTM3U\n"
+                        try:
+                            with open(playlist_path, "w", encoding="utf-8") as f:
+                                f.write(existing_content)
+                            os.chmod(playlist_path, 0o777)
+                            logger.info("✅ Contenu précédent restauré")
+                        except Exception as restore_e:
+                            logger.error(f"❌ Erreur restauration contenu: {restore_e}")
+                    
+                    # Si pas de contenu précédent ou erreur, créer une playlist minimale
+                    if not os.path.exists(playlist_path) or os.path.getsize(playlist_path) == 0:
+                        try:
+                            with open(playlist_path, "w", encoding="utf-8") as f:
+                                f.write("#EXTM3U\n# Playlist de secours\n")
+                            os.chmod(playlist_path, 0o777)
+                            logger.info("✅ Playlist minimale créée en fallback")
+                        except Exception as inner_e:
+                            logger.error(f"❌ Échec création playlist minimale: {inner_e}")
+            
+            # Removed the redundant stream start logic from here
 
     def cleanup_manager(self):
         """Cleanup everything before shutdown"""
@@ -1215,6 +1171,11 @@ class IPTVManager:
                         "watchers": [w.client_id for w in channel.watchers] if hasattr(channel, 'watchers') else []
                     }
             
+            # If no channels are ready or available, don't wipe the status
+            if not channels_dict:
+                logger.debug("🤷 No channels ready, skipping status update to avoid clearing.")
+                return True # Indicate success as no update was needed
+
             # Update status with retry logic
             max_retries = 3
             retry_delay = 1
@@ -1516,35 +1477,49 @@ class IPTVManager:
             try:
                 # Limite le nombre d'initialisations parallèles
                 with self.init_threads_lock:
-                    if self.active_init_threads >= self.max_parallel_inits:
-                        logger.debug(f"⏳ Limite d'initialisations parallèles atteinte ({self.active_init_threads}/{self.max_parallel_inits}), attente...")
+                    active_threads = self.active_init_threads
+                    if active_threads >= self.max_parallel_inits:
+                        logger.debug(f"[INIT_QUEUE] ⏳ Limite d'initialisations parallèles atteinte ({active_threads}/{self.max_parallel_inits}), attente...")
                         time.sleep(0.5)
                         continue
 
                 # Essaie de récupérer une chaîne de la queue
+                channel_data = None
                 try:
+                    logger.debug("[INIT_QUEUE] ⏱️ Attente d'un élément dans la queue...")
                     channel_data = self.channel_init_queue.get(timeout=5)
-                    logger.info(f"📥 Récupération de {channel_data.get('name', 'unknown')} depuis la queue d'initialisation")
+                    channel_name = channel_data.get('name', 'unknown')
+                    logger.info(f"[INIT_QUEUE] 📥 Récupération de {channel_name} depuis la queue")
                 except Empty:
+                    logger.debug("[INIT_QUEUE] 📪 Queue vide, attente...")
                     time.sleep(0.5)
+                    continue # Continue to next iteration to check stop_event
+                except Exception as q_err:
+                    logger.error(f"[INIT_QUEUE] ❌ Erreur get() sur la queue: {q_err}")
+                    time.sleep(1) # Wait a bit before retrying
                     continue
 
-                # Incrémente le compteur de threads actifs
-                with self.init_threads_lock:
-                    self.active_init_threads += 1
-                    logger.debug(f"➕ Incrémentation du compteur de threads actifs: {self.active_init_threads}/{self.max_parallel_inits}")
+                # If we got an item from the queue
+                if channel_data:
+                    channel_name = channel_data.get('name', 'unknown')
+                    # Incrémente le compteur de threads actifs
+                    with self.init_threads_lock:
+                        self.active_init_threads += 1
+                        logger.debug(f"[INIT_QUEUE] ➕ [{channel_name}] Incrémentation du compteur de threads actifs: {self.active_init_threads}/{self.max_parallel_inits}")
 
-                # Lance un thread pour initialiser cette chaîne
-                logger.info(f"🧵 Démarrage d'un thread pour initialiser {channel_data.get('name', 'unknown')}")
-                threading.Thread(
-                    target=self._init_channel_async,
-                    args=(channel_data,),
-                    daemon=True
-                ).start()
+                    # Lance un thread pour initialiser cette chaîne
+                    logger.info(f"[INIT_QUEUE] 🧵 [{channel_name}] Démarrage d'un thread d'initialisation")
+                    threading.Thread(
+                        target=self._init_channel_async,
+                        args=(channel_data,),
+                        daemon=True,
+                        name=f"Init-{channel_name}" # Add thread name
+                    ).start()
 
             except Exception as e:
-                logger.error(f"❌ Erreur dans le thread d'initialisation: {e}")
-                time.sleep(1)
+                logger.error(f"[INIT_QUEUE] ❌ Erreur majeure dans la boucle _process_channel_init_queue: {e}")
+                logger.error(traceback.format_exc()) # Log full traceback
+                time.sleep(5) # Wait longer after a major loop error
 
     def _init_channel_async(self, channel_data):
         """Initialise une chaîne de manière asynchrone"""
@@ -1567,25 +1542,16 @@ class IPTVManager:
             # Ajoute la référence au manager
             channel.manager = self
 
-            # Ajoute la chaîne au dictionnaire
-            with self.scan_lock:
-                self.channels[channel_name] = channel
-                self.channel_ready_status[channel_name] = False  # Pas encore prête
-
-            # Attente que la chaîne soit prête (max 10 secondes)
-            ready = False
-            for _ in range(10):
-                if hasattr(channel, "ready_for_streaming") and channel.ready_for_streaming:
-                    with self.scan_lock:
-                        self.channel_ready_status[channel_name] = True
-                    logger.info(f"✅ Chaîne {channel_name} prête pour le streaming")
-                    ready = True
-                    break
-                time.sleep(1)
-
-            if not ready:
-                logger.warning(f"⚠️ Timeout d'initialisation pour la chaîne {channel_name}")
-            else:
+            # Vérifie si la chaîne est prête immédiatement après l'initialisation
+            is_ready_after_init = hasattr(channel, "ready_for_streaming") and channel.ready_for_streaming
+            
+            if is_ready_after_init:
+                logger.info(f"✅ Chaîne {channel_name} prête immédiatement après initialisation.")
+                # Ajoute la chaîne au dictionnaire sous verrou
+                with self.scan_lock:
+                    self.channels[channel_name] = channel
+                    # Remove reliance on self.channel_ready_status dictionary
+                
                 # Démarrer immédiatement le stream si la chaîne est prête
                 logger.info(f"[{channel_name}] 🚀 Démarrage immédiat du stream")
                 if hasattr(channel, "start_stream"):
@@ -1593,18 +1559,31 @@ class IPTVManager:
                     if success:
                         logger.info(f"[{channel_name}] ✅ Stream démarré avec succès")
                         # Trigger master playlist update AFTER successful start
-                        if hasattr(self, "_manage_master_playlist"):
+                        if hasattr(self, "_update_master_playlist"):
                             logger.info(f"[{channel_name}] 🔄 Mise à jour de la playlist maître après démarrage")
-                            threading.Thread(target=self._manage_master_playlist, daemon=True).start()
+                            # Call the update function directly
+                            self._update_master_playlist()
                     else:
                         logger.error(f"[{channel_name}] ❌ Échec du démarrage du stream")
                 else:
                     logger.warning(f"[{channel_name}] ⚠️ Channel does not have start_stream method")
+            else:
+                 # La chaîne n'est pas prête (e.g., _scan_videos a échoué dans __init__)
+                 logger.warning(f"⚠️ Chaîne {channel_name} non prête après initialisation (ready_for_streaming={is_ready_after_init}). Ne sera pas ajoutée ni démarrée.")
+                 # Optionnel: Ajouter quand même au dictionnaire avec un statut non prêt?
+                 # with self.scan_lock:
+                 #    self.channels[channel_name] = channel # ou None?
 
-            logger.info(f"[{channel_name}] ✅ Initialisation terminée")
+            logger.info(f"[{channel_name}] ✅ Traitement d'initialisation terminé (État Prêt: {is_ready_after_init})")
 
         except Exception as e:
             logger.error(f"❌ Erreur initialisation de la chaîne {channel_data.get('name')}: {e}")
+            # Make sure to add placeholder if exception happens before adding the channel object
+            channel_name_for_exc = channel_data.get('name')
+            if channel_name_for_exc:
+                with self.scan_lock:
+                    if channel_name_for_exc not in self.channels:
+                        self.channels[channel_name_for_exc] = None # Placeholder on error
         finally:
             # Décrémente le compteur de threads actifs
             with self.init_threads_lock:
@@ -1759,3 +1738,22 @@ class IPTVManager:
             logger.error(f"[{channel_name}] ❌ Erreur lors du démarrage automatique: {e}")
             import traceback
             logger.error(traceback.format_exc())
+
+    def get_current_channel_status(self):
+        """Retrieves the live status from the ChannelStatusManager."""
+        if self.channel_status:
+            # Return the data managed by ChannelStatusManager
+            # Adjust the structure if needed based on what the API should return
+            return {
+                'channels': self.channel_status.channels,
+                'last_updated': self.channel_status.last_updated,
+                'active_viewers': self.channel_status.active_viewers
+            }
+        else:
+            logger.warning("ChannelStatusManager not initialized when calling get_current_channel_status.")
+            # Return a default empty structure
+            return {
+                'channels': {},
+                'last_updated': int(time.time()),
+                'active_viewers': 0
+            }

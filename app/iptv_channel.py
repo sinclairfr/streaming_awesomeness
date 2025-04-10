@@ -178,12 +178,12 @@ class IPTVChannel:
 
             logger.info(f"[{self.name}] 🛠️ Créer le fichier de concaténation avec {len(valid_files)} fichiers uniques")
 
-            # Créer le fichier de concaténation
+            # Créer le fichier de "playlist" (liste de fichiers valides)
             with open(concat_file, "w", encoding="utf-8") as f:
-                for video in valid_files:
-                    escaped_path = str(video.absolute()).replace("'", "'\\''")
-                    f.write(f"file '{escaped_path}'\n")
-                    logger.debug(f"[{self.name}] ✅ Ajout de {video.name}")
+                for i, video in enumerate(valid_files):
+                    escaped_path = str(video.absolute()).replace("\'", "\'\\\\\'\'")
+                    f.write(f"file \'{escaped_path}\'\\n")
+                    logger.debug(f"[{self.name}] ✅ Ajout de {video.name} à la liste {concat_file.name}")
 
             # Vérifier que le fichier a été créé correctement
             if not concat_file.exists() or concat_file.stat().st_size == 0:
@@ -605,7 +605,7 @@ class IPTVChannel:
                          
                 # Sélectionner le fichier vidéo actuel
                 video_file = self.processed_videos[self.current_video_index]
-                logger.info(f"[{self.name}] 🎥 Démarrage du fichier ({self.current_video_index + 1}/{len(self.processed_videos)}): {video_file.name}")
+                logger.info(f"[{self.name}] 🎥 Processing file ({self.current_video_index + 1}/{len(self.processed_videos)}): {video_file.name}")
                 
                 # Check if file still exists and is accessible
                 if not video_file.exists() or not os.access(video_file, os.R_OK):
@@ -632,13 +632,20 @@ class IPTVChannel:
                 # Nettoyer les anciens segments AVANT de démarrer un nouveau fichier
                 self.hls_cleaner.cleanup_channel(self.name)
 
+                # *** Select the single video file for this run ***
+                video_file = self.processed_videos[self.current_video_index]
+                logger.info(f"[{self.name}] 🎥 Processing file ({self.current_video_index + 1}/{len(self.processed_videos)}): {video_file.name}")
+                
+                # Check if it's an MKV file
+                has_mkv = ('.mkv' in video_file.name.lower())
+
                 # Construire la commande FFmpeg pour le fichier unique
                 command = self.command_builder.build_command(
-                    input_file=str(video_file), # Pass the single video file
+                    input_file=str(video_file), # Pass the single video file path
                     output_dir=str(hls_dir),
                     progress_file=f"/app/logs/ffmpeg/{self.name}_progress.log",
-                    # has_mkv=... # We might need to re-enable this if needed
-                    has_mkv=('.mkv' in video_file.name.lower()) # Simple check based on current file
+                    has_mkv=has_mkv, # Pass the MKV check result for this specific file
+                    # is_playlist=False # Default or remove parameter
                 )
 
                 if not command:
