@@ -39,6 +39,7 @@ from channel_status_manager import ChannelStatusManager
 import json
 import re
 from log_utils import parse_access_log
+from typing import Optional
 
 
 class IPTVManager:
@@ -328,125 +329,112 @@ class IPTVManager:
             # Aucune information trouvée
             return set()
 
-    def update_watchers(self, channel_name: str, watcher_count: int, path: str = "/hls/"):
-        """Met à jour le nombre de watchers pour une chaîne"""
+    def update_watchers(self, channel_name: str, watcher_count: int, active_ips_list: list, path: str = "/hls/"):
+        """Met à jour le nombre et la liste des watchers pour une chaîne"""
         try:
             # Ignorer les mises à jour si le channel_name ressemble à une IP
-            if channel_name and any(c.isdigit() for c in channel_name.split('.')):
-                logger.debug(f"⏭️ Ignoré mise à jour watchers pour IP: {channel_name}")
+            # Check if channel_name is likely an IP address to avoid log spam if IPs leak in
+            is_likely_ip = False
+            if channel_name and '.' in channel_name:
+                parts = channel_name.split('.')
+                if len(parts) == 4 and all(p.isdigit() for p in parts):
+                    is_likely_ip = True
+            
+            if is_likely_ip:
+                logger.debug(f"⏭️ Ignoré mise à jour watchers pour IP-like name: {channel_name}")
                 return
 
-            # --- Refined Check ---
-            # Check 1: Does the manager know this channel name at all?
+            # --- Refined Check --- Check 1: Does the manager know this channel name?
             if channel_name not in self.channels:
-                logger.warning(f"[UPDATE_WATCHERS] ⚠️ Chaîne '{channel_name}' non connue du manager (pas scannée ou supprimée). Update ignoré.")
+                logger.warning(f"[UPDATE_WATCHERS] ⚠️ Chaîne '{channel_name}' non connue du manager. Update ignoré.")
                 return
             
             # Check 2: Is the channel object actually loaded (not None)?
             channel = self.channels.get(channel_name)
             if channel is None:
-                logger.debug(f"[UPDATE_WATCHERS] ⏳ Chaîne '{channel_name}' en cours d'initialisation ou temporairement indisponible. Update différé.")
+                logger.debug(f"[UPDATE_WATCHERS] ⏳ Chaîne '{channel_name}' en cours d'initialisation. Update différé.")
                 return
-                
-            # Check 3: Is the channel ready for streaming?
-            # Optional: We might still want to track watchers even if not fully ready?
-            # if not getattr(channel, 'ready_for_streaming', False):
-            #     logger.debug(f"[UPDATE_WATCHERS] ⏳ Chaîne '{channel_name}' connue mais pas encore prête. Update différé.")
-            #     return
             # --- End Refined Check ---
+            
+            # *** ADDED: Update the internal _active_watchers dictionary ***
+            with self.lock: # Use the main lock for _active_watchers
+                 self._active_watchers[channel_name] = set(active_ips_list)
+                 logger.debug(f"[{channel_name}] Internal _active_watchers updated: {self._active_watchers[channel_name]}")
+            # *** END ADDED ***
 
-            # Mise à jour du compteur de watchers
+            # Mise à jour du compteur de watchers dans l'objet Channel
             old_count = getattr(channel, 'watchers_count', 0)
-            
-            # Toujours mettre à jour le timestamp de dernier watcher
-            channel.last_watcher_time = time.time()
-            
-            # Le nombre a-t-il réellement changé?
             count_changed = old_count != watcher_count
+            channel.watchers_count = watcher_count # Update the count attribute
+            channel.last_watcher_time = time.time() # Always update timestamp
             
-            # Mettre à jour le compteur seulement si nécessaire
             if count_changed:
-                # Stocker l'heure du dernier changement de watchers
-                if not hasattr(channel, 'last_watcher_change_time'):
-                    channel.last_watcher_change_time = time.time()
-                else:
-                    channel.last_watcher_change_time = time.time()
-                    
-                # Mettre à jour le compteur
-                channel.watchers_count = watcher_count
-                
-                # Log pour les changements significatifs
+                # Optionally update last change time if needed
+                # channel.last_watcher_change_time = time.time() 
                 logger.info(f"[{channel_name}] 👁️ Changement watchers: {old_count} → {watcher_count}")
-                
-                # Log plus détaillé pour diagnostic
-                logger.debug(f"[{channel_name}] 🔍 État des watchers actuels: {self._active_watchers.get(channel_name, set())}")
-            else:
-                # Mettre à jour sans log si pas de changement
-                channel.watchers_count = watcher_count
+                logger.debug(f"[{channel_name}] 👥 IPs actives reçues: {active_ips_list}")
+            # else: # Optional: Log even if count hasn't changed but list might have?
+                 # logger.debug(f"[{channel_name}] Watcher count unchanged ({watcher_count}), IPs: {active_ips_list}")
 
-            # Forcer une mise à jour immédiate du statut
+
+            # Mise à jour du statut via ChannelStatusManager
             if hasattr(self, "channel_status") and self.channel_status is not None:
                 is_active = bool(getattr(channel, "ready_for_streaming", False))
                 is_streaming = bool(channel.process_manager.is_running() if hasattr(channel, "process_manager") else False)
                 
-                # Récupérer la liste des watchers actifs
-                active_watchers_set = self._active_watchers.get(channel_name, set())
-                active_watchers_list = list(active_watchers_set)
-                
-                # Récupérer l'état précédent pour comparaison
-                previous_status = self.channel_status.channels.get(channel_name, {})
-                previous_watchers_set = set(previous_status.get('watchers', []))
-                previous_viewer_count = previous_status.get('viewers', 0)
-                
-                # Vérifier si la liste des watchers ou le compteur a changé
-                watchers_changed = active_watchers_set != previous_watchers_set
-                count_changed_now = watcher_count != previous_viewer_count # Re-check count against stored status
+                # Utiliser les données reçues (count et list)
+                # Ensure active_ips_list is actually a list for JSON serialization
+                watchers_list_for_json = list(active_ips_list) if isinstance(active_ips_list, (list, set)) else []
 
-                # Mettre à jour le statut seulement si nécessaire
-                if watchers_changed or count_changed_now:
-                    logger.debug(f"[{channel_name}] 🔄 Mise à jour du statut: Watchers changé={watchers_changed}, Compteur changé={count_changed_now}")
-                    update_successful = self.channel_status.update_channel(
-                        channel_name, 
-                        is_active=is_active,
-                        viewers=watcher_count,  
-                        streaming=is_streaming,
-                        watchers=active_watchers_list
-                    )
-                    if not update_successful:
-                        logger.warning(f"[{channel_name}] ⚠️ Échec de la mise à jour du statut via ChannelStatusManager")
+                update_successful = self.channel_status.update_channel(
+                    channel_name, 
+                    is_active=is_active,
+                    viewers=watcher_count, # Use the count passed from ClientMonitor
+                    streaming=is_streaming,
+                    watchers=watchers_list_for_json # Use the list passed from ClientMonitor
+                )
+                if not update_successful:
+                    logger.warning(f"[{channel_name}] ⚠️ Échec de la mise à jour du statut via ChannelStatusManager")
                 else:
-                     logger.debug(f"[{channel_name}] ⏭️ Statut inchangé, mise à jour ignorée")
+                    logger.debug(f"[{channel_name}] ✅ Statut mis à jour: viewers={watcher_count}, watchers={watchers_list_for_json}")
+            # else: # Log if status manager isn't ready
+                # logger.warning(f"[{channel_name}] ChannelStatusManager non disponible, mise à jour du statut ignorée.")
 
             # Vérifier si la chaîne est arrêtée mais devrait être active
-            if watcher_count > 0 and not channel.process_manager.is_running():
+            # (Ensure channel object is checked again here as it might have changed during status update)
+            current_channel_obj = self.channels.get(channel_name)
+            if current_channel_obj and watcher_count > 0 and not current_channel_obj.process_manager.is_running():
                 # Vérifier quand était le dernier redémarrage pour éviter les redémarrages trop fréquents
-                last_restart_time = getattr(channel, 'last_restart_time', 0)
+                last_restart_time = getattr(current_channel_obj, 'last_restart_time', 0)
                 current_time = time.time()
                 restart_delay = 30  # 30 secondes minimum entre tentatives de redémarrage
                 
                 if current_time - last_restart_time > restart_delay:
                     logger.warning(f"[{channel_name}] ⚠️ Chaîne arrêtée avec {watcher_count} watchers actifs")
                     
-                    if channel.ready_for_streaming:
+                    if current_channel_obj.ready_for_streaming:
                         logger.info(f"[{channel_name}] 🔄 Redémarrage automatique de la chaîne")
                         
                         # Marquer l'heure du redémarrage
-                        channel.last_restart_time = current_time
+                        current_channel_obj.last_restart_time = current_time
                         
                         # Tenter le redémarrage avec un retardateur pour éviter les redémarrages en cascade
-                        def delayed_restart():
+                        def delayed_restart(ch_obj):
                             time.sleep(1.5)  # Petit délai pour éviter les démarrages simultanés
-                            result = channel.start_stream()
-                            if result:
-                                logger.info(f"[{channel_name}] ✅ Chaîne redémarrée avec succès")
-                            else:
-                                logger.error(f"[{channel_name}] ❌ Échec du redémarrage de la chaîne")
+                            try:
+                                result = ch_obj.start_stream()
+                                if result:
+                                    logger.info(f"[{ch_obj.name}] ✅ Chaîne redémarrée avec succès")
+                                else:
+                                    logger.error(f"[{ch_obj.name}] ❌ Échec du redémarrage de la chaîne")
+                            except Exception as restart_err:
+                                logger.error(f"[{ch_obj.name}] ❌ Exception during delayed restart: {restart_err}")
                         
-                        restart_thread = threading.Thread(target=delayed_restart)
+                        restart_thread = threading.Thread(target=delayed_restart, args=(current_channel_obj,))
                         restart_thread.daemon = True
                         restart_thread.start()
                     else:
-                        logger.warning(f"[{channel_name}] ⚠️ Chaîne non prête pour le streaming")
+                        logger.warning(f"[{channel_name}] ⚠️ Chaîne non prête pour le streaming, redémarrage ignoré")
                 else:
                     logger.debug(f"[{channel_name}] ⏳ Délai min. entre redémarrages pas écoulé ({current_time - last_restart_time:.1f}s < {restart_delay}s)")
 
@@ -1206,8 +1194,8 @@ class IPTVManager:
 
     def _status_update_loop(self):
         """Background thread to periodically update channel status"""
-        update_interval = 1  # Update every second
-        logger.info("🔄 Démarrage de la boucle de mise à jour des statuts")
+        update_interval = 60  # Update every 60 seconds (Reduced frequency as push updates are primary)
+        logger.info("🔄 Démarrage de la boucle de mise à jour des statuts (périodicité: {update_interval}s)")
         
         while not self.stop_status_update.is_set():
             try:
@@ -1215,41 +1203,44 @@ class IPTVManager:
                 if self.channel_status is None:
                     logger.warning("⚠️ Channel status manager non initialisé, tentative de réinitialisation")
                     self.init_channel_status_manager()
-                    time.sleep(1)
+                    time.sleep(update_interval) # Wait before next check
                     continue
 
                 # Ensure stats directory exists and has proper permissions
-                stats_dir = Path(os.path.dirname(CHANNELS_STATUS_FILE))
-                stats_dir.mkdir(parents=True, exist_ok=True)
-                os.chmod(stats_dir, 0o777)
+                # This might be redundant if init always ensures it
+                # stats_dir = Path(os.path.dirname(CHANNELS_STATUS_FILE))
+                # stats_dir.mkdir(parents=True, exist_ok=True)
+                # os.chmod(stats_dir, 0o777)
                 
-                # Update channel status with retry logic
-                max_retries = 3
-                retry_delay = 1
+                # Update channel status with retry logic - COMMENTED OUT as primary updates are pushed
+                logger.debug("Status update loop: Skipping active status update (handled by push). Loop remains for potential future periodic tasks.")
+                # max_retries = 3
+                # retry_delay = 1
+                # 
+                # for attempt in range(max_retries):
+                #     try:
+                #         # success = self._update_channel_status() # COMMENTED OUT
+                #         success = True # Assume success if we are not calling it
+                #         if success:
+                #             # logger.debug("✅ Channel status updated successfully") # No longer accurate here
+                #             break
+                #         else:
+                #             # logger.warning(f"⚠️ Failed to update channel status (attempt {attempt + 1}/{max_retries})")
+                #             # if attempt < max_retries - 1:
+                #             #     time.sleep(retry_delay)
+                #     except Exception as e:
+                #         # logger.error(f"❌ Error updating channel status (attempt {attempt + 1}/{max_retries}): {e}")
+                #         # if attempt < max_retries - 1:
+                #         #     time.sleep(retry_delay)
                 
-                for attempt in range(max_retries):
-                    try:
-                        success = self._update_channel_status()
-                        if success:
-                            logger.debug("✅ Channel status updated successfully")
-                            break
-                        else:
-                            logger.warning(f"⚠️ Failed to update channel status (attempt {attempt + 1}/{max_retries})")
-                            if attempt < max_retries - 1:
-                                time.sleep(retry_delay)
-                    except Exception as e:
-                        logger.error(f"❌ Error updating channel status (attempt {attempt + 1}/{max_retries}): {e}")
-                        if attempt < max_retries - 1:
-                            time.sleep(retry_delay)
-                
-                # Sleep until next update
-                time.sleep(update_interval)
+                # Sleep until next cycle
+                self.stop_status_update.wait(update_interval) # Use wait for cleaner interruption
                 
             except Exception as e:
                 logger.error(f"❌ Error in status update loop: {e}")
                 import traceback
                 logger.error(traceback.format_exc())
-                time.sleep(1)  # Reduced from 10s to 1s on error
+                self.stop_status_update.wait(30) # Wait 30s after error
 
     def init_channel_status_manager(self):
         """Initialize the channel status manager for dashboard"""
@@ -1757,3 +1748,24 @@ class IPTVManager:
                 'last_updated': int(time.time()),
                 'active_viewers': 0
             }
+
+    def get_channel_segment_duration(self, channel_name: str) -> Optional[float]:
+        """Retrieves the configured HLS segment duration (hls_time) for a specific channel."""
+        # Use scan_lock as channel dictionary might be modified during scans/inits
+        with self.scan_lock:
+            channel = self.channels.get(channel_name)
+            if channel and hasattr(channel, 'command_builder') and hasattr(channel.command_builder, 'hls_time'):
+                duration = getattr(channel.command_builder, 'hls_time', None)
+                if isinstance(duration, (int, float)) and duration > 0:
+                    logger.debug(f"[{channel_name}] Found segment duration: {duration}")
+                    return float(duration)
+                else:
+                    logger.warning(f"[{channel_name}] Found invalid segment duration type/value: {duration} in command_builder")
+                    return None
+            elif channel:
+                logger.warning(f"[{channel_name}] Channel object found but missing 'command_builder' or 'hls_time' attribute.")
+                return None
+            else:
+                # Channel not found or is a placeholder (None)
+                logger.warning(f"[{channel_name}] Channel not found or not fully initialized in IPTVManager.channels.")
+                return None
