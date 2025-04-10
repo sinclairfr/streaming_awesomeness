@@ -29,7 +29,7 @@ class IPTVChannel:
     """Gère une chaîne IPTV, son streaming et sa surveillance"""
     
     # Initialisation des variables de classe (statiques)
-    _playlist_creation_timestamps = {}
+    # _playlist_creation_timestamps = {} # Removed - No longer needed for single file playback
 
     def __init__(
         self,
@@ -106,7 +106,7 @@ class IPTVChannel:
             return # Prevent further initialization if scan fails
         
         # No longer need concat file creation here
-        # self._create_concat_file() 
+        # self._create_concat_file()
 
         # No longer need total duration calculation here, maybe later per-file
         # total_duration = self._calculate_total_duration()
@@ -119,86 +119,6 @@ class IPTVChannel:
         logger.info(
             f"[{self.name}] ✅ Initialisation complète. Chaîne prête: {self.ready_for_streaming} avec {len(self.processed_videos)} vidéos."
         )
-
-    def _create_concat_file(self) -> Optional[Path]:
-        """Crée le fichier de concaténation avec les bons chemins et sans doublons"""
-        # Vérifier si on a créé une playlist récemment pour éviter les doublons
-        current_time = time.time()
-        
-        last_creation = IPTVChannel._playlist_creation_timestamps.get(self.name, 0)
-        concat_file = Path(self.video_dir) / "_playlist.txt"
-
-        # Si on a créé une playlist dans les 10 dernières secondes, ne pas recréer
-        if current_time - last_creation < 10:
-            logger.debug(
-                f"[{self.name}] ℹ️ Création de playlist ignorée (dernière: il y a {current_time - last_creation:.1f}s)"
-            )
-            return concat_file if concat_file.exists() else None
-
-        # Mettre à jour le timestamp AVANT de créer le fichier
-        IPTVChannel._playlist_creation_timestamps[self.name] = current_time
-        
-        try:
-            # Utiliser ready_to_stream
-            ready_to_stream_dir = Path(self.video_dir) / "ready_to_stream"
-            if not ready_to_stream_dir.exists():
-                logger.error(f"[{self.name}] ❌ Dossier ready_to_stream introuvable")
-                return None
-
-            # Scanner le dossier ready_to_stream
-            ready_files = list(ready_to_stream_dir.glob("*.mp4"))
-            
-            if not ready_files:
-                logger.error(f"[{self.name}] ❌ Aucun fichier MP4 dans {ready_to_stream_dir}")
-                return None
-                
-            logger.info(f"[{self.name}] 🔍 {len(ready_files)} fichiers trouvés dans ready_to_stream")
-
-            # Mélanger les fichiers pour plus de variété
-            random.shuffle(ready_files)
-
-            # Vérifier que tous les fichiers sont valides
-            valid_files = []
-            for video in ready_files:
-                if video.exists() and os.access(video, os.R_OK):
-                    try:
-                        duration = get_accurate_duration(video)
-                        if duration and duration > 0:
-                            valid_files.append(video)
-                        else:
-                            logger.warning(f"[{self.name}] ⚠️ Fichier ignoré: {video.name} (durée invalide)")
-                    except Exception as e:
-                        logger.warning(f"[{self.name}] ⚠️ Fichier ignoré: {video.name} (erreur validation: {e})")
-                else:
-                    logger.warning(f"[{self.name}] ⚠️ Fichier ignoré: {video.name} (non accessible)")
-
-            if not valid_files:
-                logger.error(f"[{self.name}] ❌ Aucun fichier valide pour la playlist")
-                return None
-
-            logger.info(f"[{self.name}] 🛠️ Créer le fichier de concaténation avec {len(valid_files)} fichiers uniques")
-
-            # Créer le fichier de "playlist" (liste de fichiers valides)
-            with open(concat_file, "w", encoding="utf-8") as f:
-                for i, video in enumerate(valid_files):
-                    escaped_path = str(video.absolute()).replace("\'", "\'\\\\\'\'")
-                    f.write(f"file \'{escaped_path}\'\\n")
-                    logger.debug(f"[{self.name}] ✅ Ajout de {video.name} à la liste {concat_file.name}")
-
-            # Vérifier que le fichier a été créé correctement
-            if not concat_file.exists() or concat_file.stat().st_size == 0:
-                logger.error(f"[{self.name}] ❌ Erreur: playlist vide ou non créée")
-                return None
-
-            # Mettre à jour self.processed_videos
-            self.processed_videos = valid_files.copy()
-
-            logger.info(f"[{self.name}] 🎥 Playlist créée avec {len(valid_files)} fichiers uniques en mode aléatoire")
-            return concat_file
-
-        except Exception as e:
-            logger.error(f"[{self.name}] ❌ Erreur _playlist.txt: {e}")
-            return None
 
     def _handle_position_update(self, position):
         """Reçoit les mises à jour de position du ProcessManager"""
@@ -263,13 +183,13 @@ class IPTVChannel:
                     logger.debug(f"[{self.name}] ℹ️ Aucun changement détecté dans les vidéos")
                     return
 
-                # Mise à jour de la durée totale
-                total_duration = self._calculate_total_duration()
-                self.position_manager.set_total_duration(total_duration)
-                self.process_manager.set_total_duration(total_duration)
+                # Mise à jour de la durée totale - Removed as total duration isn't used for single file playback
+                # total_duration = self._calculate_total_duration()
+                # self.position_manager.set_total_duration(total_duration) # Removed
+                # self.process_manager.set_total_duration(total_duration) # Removed
 
-                # Mise à jour de la playlist
-                self._create_concat_file()
+                # Mise à jour de la playlist - Removed as concat file isn't used
+                # self._create_concat_file()
 
                 logger.info(f"[{self.name}] ✅ Scan de mise à jour terminé. Chaîne prête: {self.ready_for_streaming}")
                 self._last_scan_time = current_time
@@ -278,39 +198,6 @@ class IPTVChannel:
             logger.error(f"[{self.name}] ❌ Erreur scan de mise à jour: {e}")
         finally:
             self._scan_in_progress = False
-
-    def _calculate_total_duration(self) -> float:
-        """Calcule la durée totale de la playlist en utilisant le PlaybackPositionManager"""
-        try:
-            # Vérification que la liste processed_videos n'est pas vide
-            if not self.processed_videos:
-                logger.warning(f"[{self.name}] ⚠️ Aucune vidéo à analyser pour le calcul de durée")
-                # On conserve la durée existante si possible, sinon valeur par défaut
-                if hasattr(self, "total_duration") and self.total_duration > 0:
-                    return self.total_duration
-                return 3600.0
-
-            # Déléguer le calcul au PlaybackPositionManager
-            total_duration = self.position_manager.calculate_durations(self.processed_videos)
-
-            if total_duration <= 0:
-                logger.warning(f"[{self.name}] ⚠️ Durée totale invalide, fallback à la valeur existante ou 3600s")
-                if hasattr(self, "total_duration") and self.total_duration > 0:
-                    return self.total_duration
-                return 3600.0
-
-            # Mettre à jour notre durée totale
-            self.total_duration = total_duration
-
-            logger.info(f"[{self.name}] ✅ Durée totale calculée: {total_duration:.2f}s ({len(self.processed_videos)} vidéos)")
-            return total_duration
-
-        except Exception as e:
-            logger.error(f"[{self.name}] ❌ Erreur calcul durée: {e}")
-            # Fallback à la valeur existante ou valeur par défaut
-            if hasattr(self, "total_duration") and self.total_duration > 0:
-                return self.total_duration
-            return 3600.0
 
     def _segment_monitor_loop(self):
         """Boucle de surveillance des segments pour vérifier la santé du stream"""
@@ -363,27 +250,40 @@ class IPTVChannel:
             if stderr:
                 logger.info(f"[{self.name}] ℹ️ FFmpeg stderr (premières lignes):\n{stderr[:500]}")
 
-            # --- Handle Successful Completion (Advance to Next Video) ---
+            # --- Handle Successful Completion (Advance to Random Next Video) ---
             if exit_code == 0:
                 logger.info(f"[{self.name}] ✅ Fichier vidéo terminé avec succès.")
+                next_video_index = 0 # Default index
+                num_videos = 0
+
                 with self.lock:
                     if not self.processed_videos: # Should not happen if started, but check
                         logger.warning(f"[{self.name}] ⚠️ Liste de vidéos vide après fin de lecture.")
-                        return
-                        
-                    # Advance index
-                    self.current_video_index += 1
-                    
-                    # Loop back if index goes out of bounds
-                    if self.current_video_index >= len(self.processed_videos):
-                        logger.info(f"[{self.name}] 🔄 Fin de la playlist, retour au début.")
-                        self.current_video_index = 0
-                    
-                    next_video_index = self.current_video_index
+                        return # Cannot proceed
+
                     num_videos = len(self.processed_videos)
-                    
+                    old_index = self.current_video_index
+
+                    if num_videos > 1:
+                        # Pick a new random index, different from the old one
+                        next_video_index = random.randrange(num_videos)
+                        while next_video_index == old_index:
+                            logger.debug(f"[{self.name}] 🔀 Vidéo suivante identique ({next_video_index}), re-tirage...")
+                            next_video_index = random.randrange(num_videos)
+                        logger.info(f"[{self.name}] 🔀 Sélection aléatoire de la prochaine vidéo: Index {next_video_index}")
+                    elif num_videos == 1:
+                        # Only one video, index must be 0
+                        next_video_index = 0
+                        logger.info(f"[{self.name}] ℹ️ Une seule vidéo disponible, lecture en boucle.")
+                    else: # Should be caught above, but safety check
+                         logger.error(f"[{self.name}] ❌ Incohérence: 0 vidéo mais blocage non déclenché plus tôt.")
+                         return
+
+                    self.current_video_index = next_video_index
+
                 # Schedule the start of the next video slightly delayed
-                logger.info(f"[{self.name}] ⏱️ Planification du démarrage du prochain fichier ({next_video_index + 1}/{num_videos}) dans 1 seconde...")
+                # Use the updated index for logging
+                logger.info(f"[{self.name}] ⏱️ Planification du démarrage du prochain fichier ({self.current_video_index + 1}/{num_videos}) dans 1 seconde...")
                 threading.Timer(1.0, self.start_stream).start()
                 return # Don't proceed to error handling
             # --- End Successful Completion Handling ---
@@ -505,7 +405,7 @@ class IPTVChannel:
             logger.error(traceback.format_exc())
 
     def _restart_stream(self, diagnostic=None) -> bool:
-        """Redémarre le stream pour le fichier VIDÉO ACTUEL en cas de problème"""
+        """Redémarre le stream en choisissant un NOUVEAU fichier VIDÉO aléatoire en cas de problème"""
         try:
             restart_reason = diagnostic or "Raison inconnue"
             logger.info(f"[{self.name}] 🔄 Tentative de redémarrage du stream - Raison: {restart_reason}")
@@ -538,29 +438,45 @@ class IPTVChannel:
             # Attendre un peu avant de redémarrer
             time.sleep(2)
             
-            # *** ADVANCE TO NEXT VIDEO ON ERROR RESTART ***
+            # *** SELECT RANDOM NEXT VIDEO ON ERROR RESTART ***
             with self.lock:
-                if self.processed_videos: # Check if list is not empty
-                    logger.info(f"[{self.name}] ⏭️ Passage au fichier suivant après erreur sur l'index {self.current_video_index}")
-                    self.current_video_index += 1
-                    # Loop back if index goes out of bounds
-                    if self.current_video_index >= len(self.processed_videos):
-                        logger.info(f"[{self.name}] 🔄 Fin de la playlist atteinte après erreur, retour au début.")
-                        self.current_video_index = 0
-                else:
-                    logger.warning(f"[{self.name}] ⚠️ Liste de vidéos vide, impossible de passer au suivant.")
+                if not self.processed_videos:
+                    logger.warning(f"[{self.name}] ⚠️ Liste de vidéos vide, impossible de choisir un fichier pour le redémarrage.")
                     return False # Can't restart if no videos
 
-            # Redémarrer le stream (start_stream will now use the *next* index)
+                num_videos = len(self.processed_videos)
+                old_index = self.current_video_index # Index of the video that failed
+                next_video_index = 0
+
+                logger.info(f"[{self.name}] ⏭️ Sélection d'un nouveau fichier aléatoire après erreur sur l'index {old_index}")
+
+                if num_videos > 1:
+                    # Pick a new random index, different from the one that failed
+                    next_video_index = random.randrange(num_videos)
+                    while next_video_index == old_index:
+                        logger.debug(f"[{self.name}] 🔀 Vidéo suivante aléatoire identique à celle échouée ({next_video_index}), re-tirage...")
+                        next_video_index = random.randrange(num_videos)
+                    logger.info(f"[{self.name}] 🔀 Sélection aléatoire pour le redémarrage: Index {next_video_index}")
+                elif num_videos == 1:
+                     next_video_index = 0
+                     logger.info(f"[{self.name}] ℹ️ Une seule vidéo disponible, tentative de relance sur celle-ci.")
+                else: # Should be caught above
+                    logger.error(f"[{self.name}] ❌ Incohérence lors de la sélection aléatoire pour redémarrage.")
+                    return False
+
+                self.current_video_index = next_video_index
+
+
+            # Redémarrer le stream (start_stream will now use the new random index)
             success = self.start_stream()
             if success:
-                # Reset error handler only for the current video failure context
-                # self.error_handler.reset() # Maybe reset specific error type?
-                logger.info(f"[{self.name}] ✅ Stream redémarré avec succès pour le fichier actuel - Ancien problème: {diagnostic}")
-                # ... (existing post-restart logging) ...
+                # Reset error handler counts maybe? Or only for the specific error type?
+                # self.error_handler.reset() # Consider implications
+                # Use the updated index for logging
+                logger.info(f"[{self.name}] ✅ Stream redémarré avec succès sur un nouveau fichier ({self.current_video_index+1}/{len(self.processed_videos)}) - Ancien problème: {diagnostic}")
             else:
-                logger.error(f"[{self.name}] ❌ Échec du redémarrage pour le fichier actuel après problème: {diagnostic}")
-                # Consider incrementing index here if restart fails repeatedly?
+                logger.error(f"[{self.name}] ❌ Échec du redémarrage sur un nouveau fichier après problème: {diagnostic}")
+                # Maybe try another random video? Or stop? For now, just return False.
                 return False
 
             return success
@@ -671,7 +587,7 @@ class IPTVChannel:
             return False
 
     def _scan_videos(self) -> bool:
-        """Scanne le dossier ready_to_stream, valide les fichiers et met à jour self.processed_videos. Renvoie True si réussi et au moins une vidéo trouvée, False sinon."""
+        """Scanne le dossier ready_to_stream, valide les fichiers, les mélange et met à jour self.processed_videos. Renvoie True si réussi et au moins une vidéo trouvée, False sinon."""
         try:
             with self.lock: # Use lock as we modify shared state
                 ready_to_stream_dir = Path(self.video_dir) / "ready_to_stream"
@@ -680,9 +596,9 @@ class IPTVChannel:
                     self.processed_videos = []
                     return False
 
-                # Scanner le dossier ready_to_stream
-                video_files = sorted(list(ready_to_stream_dir.glob("*.mp4"))) # Sort for predictable order
-                
+                # Scanner le dossier ready_to_stream (removed sorted())
+                video_files = list(ready_to_stream_dir.glob("*.mp4"))
+
                 if not video_files:
                     logger.warning(f"[{self.name}] ⚠️ Aucun fichier MP4 dans {ready_to_stream_dir}")
                     self.processed_videos = []
@@ -712,13 +628,23 @@ class IPTVChannel:
                     self.processed_videos = []
                     return False
 
+                # *** Shuffle the valid files ***
+                random.shuffle(valid_files)
+                logger.info(f"[{self.name}] 🔀 Liste de vidéos mélangée.")
+
                 logger.info(f"[{self.name}] ✅ {len(valid_files)} vidéos valides trouvées.")
                 self.processed_videos = valid_files # Update the list
-                # Reset index if it's now out of bounds
+                # Reset index if it's now out of bounds OR if the list changed significantly
+                # (safer to reset to 0 on any successful scan with videos)
                 if not (0 <= self.current_video_index < len(self.processed_videos)):
-                    logger.info(f"[{self.name}] 🔄 Réinitialisation de l'index vidéo après scan.")
+                     logger.info(f"[{self.name}] 🔄 Réinitialisation de l'index vidéo à 0 après scan.")
+                     self.current_video_index = 0
+                elif len(self.processed_videos) > 0 and self.current_video_index >= len(self.processed_videos):
+                    # Handle case where list shrank and index is now invalid
+                    logger.info(f"[{self.name}] 🔄 Liste de vidéos réduite, réinitialisation de l'index vidéo à 0.")
                     self.current_video_index = 0
-                    
+
+
                 return True # Success
 
         except Exception as e:
