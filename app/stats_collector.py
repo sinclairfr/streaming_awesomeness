@@ -309,6 +309,45 @@ class StatsCollector:
         try:
             current_time = time.time()
             
+            # Vérifier si l'utilisateur a changé de chaîne
+            if not hasattr(self, '_current_channels'):
+                self._current_channels = {}
+            
+            old_channel = self._current_channels.get(ip)
+            if old_channel and old_channel != channel:
+                # L'utilisateur a changé de chaîne, on le retire de l'ancienne
+                if ip in self.user_stats and isinstance(self.user_stats[ip], dict):
+                    channels = self.user_stats[ip].get('channels', {})
+                    if old_channel in channels:
+                        # Forcer l'inactivité sur l'ancienne chaîne
+                        self.user_stats[ip]['channels'][old_channel]['last_seen'] = 0
+                        logger.info(f"🔄 {ip} a changé de chaîne: {old_channel} → {channel}")
+                        
+                        # Forcer une mise à jour des spectateurs de l'ancienne chaîne
+                        active_ips_old = []
+                        for viewer_ip in self.user_stats:
+                            if viewer_ip == ip:
+                                continue
+                            viewer_data = self.user_stats[viewer_ip]
+                            if not isinstance(viewer_data, dict):
+                                continue
+                            channels = viewer_data.get('channels', {})
+                            if not isinstance(channels, dict):
+                                continue
+                            if old_channel in channels:
+                                channel_data = channels[old_channel]
+                                if isinstance(channel_data, dict):
+                                    last_seen = channel_data.get('last_seen', 0)
+                                    if current_time - last_seen < self.viewer_timeout:
+                                        active_ips_old.append(viewer_ip)
+                        
+                        if hasattr(self, 'update_watchers_callback'):
+                            self.update_watchers_callback(old_channel, len(active_ips_old), active_ips_old, "/hls/", source="channel_change")
+                            logger.info(f"[{old_channel}] 👥 Mise à jour après départ de {ip}: {len(active_ips_old)} spectateurs restants")
+            
+            # Mettre à jour la chaîne actuelle de l'utilisateur
+            self._current_channels[ip] = channel
+            
             # Vérifier si on a déjà fait une mise à jour récente pour cette IP/chaîne
             update_key = f"{ip}_{channel}"
             if hasattr(self, '_last_updates'):
@@ -425,31 +464,27 @@ class StatsCollector:
                 logger.debug(f"📦 Global {channel}: +{accumulated_bytes} bytes (total: {self.channel_stats[channel]['total_bytes']} bytes)")
             
             # CRUCIAL: Notifier le gestionnaire IPTV ici directement des spectateurs actifs
-            # Cette approche est beaucoup plus fiable que de passer par ClientMonitor
             if hasattr(self, 'update_watchers_callback') and self.update_watchers_callback:
-                # On sait que cet IP regarde actuellement cette chaîne
                 # Construire la liste des IPs actives pour cette chaîne
                 active_ips = []
-                for viewer_ip, viewer_data in self.user_stats.items():
-                    if isinstance(viewer_ip, str) and isinstance(viewer_data, dict) and "channels" in viewer_data:
-                        if channel in viewer_data["channels"]:
-                            # Considérer un viewer comme actif s'il a été vu dans les derniers segments
-                            if isinstance(viewer_data["channels"][channel], dict) and "last_seen" in viewer_data["channels"][channel]:
-                                last_seen = viewer_data["channels"][channel]["last_seen"]
-                                if isinstance(last_seen, (int, float)) and current_time - last_seen < self.viewer_timeout:
-                                    active_ips.append(viewer_ip)
+                for viewer_ip in self.user_stats:
+                    # Un spectateur n'est considéré actif que sur sa chaîne actuelle
+                    if self._current_channels.get(viewer_ip) == channel:
+                        viewer_data = self.user_stats[viewer_ip]
+                        if isinstance(viewer_data, dict):
+                            channels = viewer_data.get('channels', {})
+                            if isinstance(channels, dict) and channel in channels:
+                                channel_data = channels[channel]
+                                if isinstance(channel_data, dict):
+                                    last_seen = channel_data.get('last_seen', 0)
+                                    if current_time - last_seen < self.viewer_timeout:
+                                        active_ips.append(viewer_ip)
                 
-                # Vérifier si la liste des spectateurs a changé avant de notifier
-                update_key = f"watchers_{channel}"
-                last_watchers = getattr(self, '_last_watchers', {}).get(update_key, [])
-                if set(active_ips) != set(last_watchers):
-                    # Mise à jour immédiate et forcée des spectateurs
+                # Forcer une mise à jour immédiate pour chaque segment
+                if bytes_transferred == 0:  # C'est un segment HLS
                     try:
                         self.update_watchers_callback(channel, len(active_ips), active_ips, "/hls/", source="stats_collector_direct")
                         logger.info(f"[{channel}] 👁️ Mise à jour directe via StatsCollector: {len(active_ips)} spectateurs actifs")
-                        if not hasattr(self, '_last_watchers'):
-                            self._last_watchers = {}
-                        self._last_watchers[update_key] = active_ips.copy()
                     except Exception as e:
                         logger.error(f"[{channel}] ❌ Erreur lors de la mise à jour directe des spectateurs: {str(e)}")
             

@@ -80,12 +80,18 @@ class ChannelStatusManager:
                 # Create a temporary file
                 temp_file = f"{self.status_file}.tmp"
                 
+                # Calculate total active viewers from all channels
+                total_active_viewers = sum(
+                    channel_data.get('viewers', 0)
+                    for channel_data in self.channels.values()
+                )
+                
                 # Write to temporary file
                 with open(temp_file, 'w') as f:
                     json.dump({
                         'channels': self.channels,
                         'last_updated': int(time.time()),
-                        'active_viewers': self.active_viewers
+                        'active_viewers': total_active_viewers
                     }, f, indent=2)
                 
                 # Atomic replace
@@ -97,7 +103,7 @@ class ChannelStatusManager:
                 except Exception as e:
                     logger.warning(f"Could not chmod status file: {e}")
                 
-                logger.info(f"✅ Status saved: {len(self.channels)} channels, {self.active_viewers} active viewers")
+                logger.info(f"✅ Status saved: {len(self.channels)} channels, {total_active_viewers} active viewers")
                 return True
                 
             except Exception as e:
