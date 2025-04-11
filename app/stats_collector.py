@@ -77,6 +77,11 @@ class StatsCollector:
         self.log_monitor_thread = threading.Thread(target=self._log_monitor_loop, daemon=True)
         self.log_monitor_thread.start()
 
+        # Cleanup Thread - Nouveau thread pour le nettoyage périodique
+        self.cleanup_interval = HLS_SEGMENT_DURATION * 7
+        self.cleanup_thread = threading.Thread(target=self._cleanup_loop, daemon=True)
+        self.cleanup_thread.start()
+
         logger.info(f"📊 StatsCollector initialisé (Mode: Nginx Logs / Bytes Transferred) - Timeout des spectateurs actifs: {ACTIVE_VIEWER_TIMEOUT}s")
 
     def _load_stats(self):
@@ -388,7 +393,7 @@ class StatsCollector:
             # Mettre à jour user_agent si disponible
             if user_agent and not user.get("user_agent"):
                 user["user_agent"] = user_agent
-
+            
             # Initialiser stats pour cette chaîne si nécessaire
             if channel not in user["channels"]:
                 user["channels"][channel] = {
@@ -477,7 +482,8 @@ class StatsCollector:
                                 channel_data = channels[channel]
                                 if isinstance(channel_data, dict):
                                     last_seen = channel_data.get('last_seen', 0)
-                                    if current_time - last_seen < self.viewer_timeout:
+                                    # Vérifier l'inactivité basée sur HLS_SEGMENT_DURATION * 3
+                                    if current_time - last_seen < HLS_SEGMENT_DURATION * 3:
                                         active_ips.append(viewer_ip)
                 
                 # Forcer une mise à jour immédiate pour chaque segment
@@ -487,8 +493,8 @@ class StatsCollector:
                         logger.info(f"[{channel}] 👁️ Mise à jour directe via StatsCollector: {len(active_ips)} spectateurs actifs")
                     except Exception as e:
                         logger.error(f"[{channel}] ❌ Erreur lors de la mise à jour directe des spectateurs: {str(e)}")
-            
-            logger.debug(f"✅ Mise à jour terminée pour {ip} sur {channel}")
+                
+                logger.debug(f"✅ Mise à jour terminée pour {ip} sur {channel}")
             
         except Exception as e:
             logger.error(f"❌ Erreur d'enregistrement d'activité: {e}")
@@ -612,3 +618,63 @@ class StatsCollector:
             logger.error(f"❌ Erreur lors du traitement du changement de chaîne: {str(e)}")
             import traceback
             logger.error(traceback.format_exc())
+
+    def _cleanup_loop(self):
+        """Boucle de nettoyage périodique des viewers inactifs."""
+        while not self.stop_event.is_set():
+            try:
+                self._cleanup_inactive_viewers()
+            except Exception as e:
+                logger.error(f"❌ Erreur dans la boucle de nettoyage: {e}", exc_info=True)
+            
+            # Attendre avant la prochaine vérification
+            if self.stop_event.wait(self.cleanup_interval):
+                break
+
+    def _cleanup_inactive_viewers(self):
+        """Nettoie les viewers inactifs sur toutes les chaînes."""
+        current_time = time.time()
+        with self.lock:
+            # Parcourir toutes les chaînes
+            for channel in list(self.channel_stats.keys()):
+                if channel == "global":
+                    continue
+                
+                # Trouver les viewers actifs pour cette chaîne
+                active_ips = []
+                for ip, user_data in self.user_stats.get("users", {}).items():
+                    if not isinstance(user_data, dict):
+                        continue
+                    
+                    channels = user_data.get("channels", {})
+                    if not isinstance(channels, dict):
+                        continue
+                    
+                    if channel in channels:
+                        channel_data = channels[channel]
+                        if isinstance(channel_data, dict):
+                            last_seen = channel_data.get("last_seen", 0)
+                            if current_time - last_seen < self.viewer_timeout:
+                                active_ips.append(ip)
+                
+                # Mettre à jour les stats de la chaîne
+                if "unique_viewers" in self.channel_stats[channel]:
+                    self.channel_stats[channel]["unique_viewers"] = active_ips
+                
+                # Notifier le changement via le callback
+                if hasattr(self, 'update_watchers_callback') and self.update_watchers_callback:
+                    try:
+                        self.update_watchers_callback(channel, len(active_ips), active_ips, "/hls/", source="periodic_cleanup")
+                        logger.debug(f"[{channel}] 👥 Mise à jour périodique: {len(active_ips)} spectateurs actifs")
+                    except Exception as e:
+                        logger.error(f"[{channel}] ❌ Erreur lors de la mise à jour périodique: {str(e)}")
+
+    def stop(self):
+        """Arrête tous les threads."""
+        self.stop_event.set()
+        if hasattr(self, 'save_thread'):
+            self.save_thread.join(timeout=5)
+        if hasattr(self, 'log_monitor_thread'):
+            self.log_monitor_thread.join(timeout=5)
+        if hasattr(self, 'cleanup_thread'):
+            self.cleanup_thread.join(timeout=5)
