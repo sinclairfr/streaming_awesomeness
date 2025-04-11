@@ -16,8 +16,14 @@ NGINX_ACCESS_LOG = "/app/logs/nginx/access.log"
 SERVER_URL = os.getenv("SERVER_URL", "192.168.10.183")
 
 # Configuration des timeouts
-RESOURCES_CHECK_INTERVAL = int(os.getenv("RESOURCES_CHECK_INTERVAL", "60"))
-CPU_CHECK_INTERVAL = float(os.getenv("CPU_CHECK_INTERVAL", "1"))
+HLS_SEGMENT_DURATION = float(os.getenv("HLS_SEGMENT_DURATION", "2.0"))
+HLS_LIST_SIZE = int(os.getenv("HLS_LIST_SIZE", "10"))
+
+# Calcul des intervalles basés sur HLS_SEGMENT_DURATION
+RESOURCES_CHECK_INTERVAL = int(os.getenv("RESOURCES_CHECK_INTERVAL", str(int(HLS_SEGMENT_DURATION * 15))))  # 15 segments
+CPU_CHECK_INTERVAL = float(os.getenv("CPU_CHECK_INTERVAL", str(HLS_SEGMENT_DURATION)))  # 1 segment
+
+# Configuration des timeouts
 CPU_THRESHOLD = int(os.getenv("CPU_THRESHOLD", "95"))
 FFMPEG_LOG_LEVEL = os.getenv("FFMPEG_LOG_LEVEL", "info")
 FFMPEG_LOGS_DIR = os.getenv("FFMPEG_LOGS_DIR", "/app/logs/ffmpeg")
@@ -25,34 +31,41 @@ USE_GPU = os.getenv("USE_GPU", "false")
 VIDEO_EXTENSIONS = os.getenv("VIDEO_EXTENSIONS", ".mp4,.avi,.mkv,.mov, .m4v").split(",")
 SEGMENT_AGE_THRESHOLD = int(os.getenv("SEGMENT_AGE_THRESHOLD", "120"))
 
-# Durée du segment HLS en secondes - utilisée à la fois par FFmpegCommandBuilder et TimeTracker
-HLS_SEGMENT_DURATION = float(os.getenv("HLS_SEGMENT_DURATION", "2.0"))
-
 # Multiplicateur pour le timeout basé sur la durée du segment
 SEGMENT_TIMEOUT_MULTIPLIER = float(os.getenv("SEGMENT_TIMEOUT_MULTIPLIER", "1.2"))
 
 # Timeout par défaut pour les playlists ou en cas de fallback
-DEFAULT_ACTIVITY_TIMEOUT = float(os.getenv("DEFAULT_ACTIVITY_TIMEOUT", "30"))
+DEFAULT_ACTIVITY_TIMEOUT = float(os.getenv("DEFAULT_ACTIVITY_TIMEOUT", str(HLS_SEGMENT_DURATION * 5)))  # 5 segments
 
 # Timeout pour considérer un utilisateur comme actif (en secondes)
-ACTIVE_VIEWER_TIMEOUT = int(os.getenv("ACTIVE_VIEWER_TIMEOUT", "20"))
+ACTIVE_VIEWER_TIMEOUT = int(os.getenv("ACTIVE_VIEWER_TIMEOUT", str(int(HLS_SEGMENT_DURATION * 5))))  # 5 segments
 
 # Configuration des intervalles de mise à jour
-WATCHERS_LOG_CYCLE = int(os.getenv("WATCHERS_LOG_CYCLE", "5"))
-SUMMARY_CYCLE = int(os.getenv("SUMMARY_CYCLE", "60"))
+MONITORING_INTERVAL = int(os.getenv("MONITORING_INTERVAL", str(int(HLS_SEGMENT_DURATION * 7.5))))  # 7.5 segments
+PLAYLIST_CHECK_INTERVAL = int(os.getenv("PLAYLIST_CHECK_INTERVAL", str(int(HLS_SEGMENT_DURATION * 15))))  # 15 segments
+
+# Configuration des cycles de logging
+WATCHERS_LOG_CYCLE = int(os.getenv("WATCHERS_LOG_CYCLE", str(int(HLS_SEGMENT_DURATION * 2.5))))  # 2.5 segments
+SUMMARY_CYCLE = int(os.getenv("SUMMARY_CYCLE", str(int(HLS_SEGMENT_DURATION * 30))))  # 30 segments
 
 # Configuration des timeouts pour le monitoring des clients
-CLIENT_MONITOR_SEGMENT_TIMEOUT = int(os.getenv("CLIENT_MONITOR_SEGMENT_TIMEOUT", "30"))
-CLIENT_MONITOR_PLAYLIST_TIMEOUT = int(os.getenv("CLIENT_MONITOR_PLAYLIST_TIMEOUT", "20"))
-CLIENT_MONITOR_UNKNOWN_TIMEOUT = int(os.getenv("CLIENT_MONITOR_UNKNOWN_TIMEOUT", "25"))
+CLIENT_MONITOR_SEGMENT_TIMEOUT = int(os.getenv("CLIENT_MONITOR_SEGMENT_TIMEOUT", str(int(HLS_SEGMENT_DURATION * 5))))  # 5 segments
+CLIENT_MONITOR_PLAYLIST_TIMEOUT = int(os.getenv("CLIENT_MONITOR_PLAYLIST_TIMEOUT", str(int(HLS_SEGMENT_DURATION * 10))))  # 10 segments
+CLIENT_MONITOR_UNKNOWN_TIMEOUT = int(os.getenv("CLIENT_MONITOR_UNKNOWN_TIMEOUT", str(int(HLS_SEGMENT_DURATION * 12.5))))  # 12.5 segments
 
-# On configure le stream
-STREAM_SEGMENT_TIMEOUT = int(os.getenv('STREAM_SEGMENT_TIMEOUT', '45'))
+# Configuration des timeouts de stream
+STREAM_SEGMENT_TIMEOUT = int(os.getenv('STREAM_SEGMENT_TIMEOUT', str(int(HLS_SEGMENT_DURATION * 22.5))))  # 22.5 segments
 STREAM_ERROR_THRESHOLD = int(os.getenv('STREAM_ERROR_THRESHOLD', '15'))
-STREAM_RESTART_DELAY = int(os.getenv('STREAM_RESTART_DELAY', '30'))
-STREAM_INITIAL_DELAY = int(os.getenv('STREAM_INITIAL_DELAY', '30'))
-STREAM_START_TIMEOUT = int(os.getenv('STREAM_START_TIMEOUT', '15'))
+STREAM_RESTART_DELAY = int(os.getenv('STREAM_RESTART_DELAY', str(int(HLS_SEGMENT_DURATION * 15))))  # 15 segments
+STREAM_INITIAL_DELAY = int(os.getenv('STREAM_INITIAL_DELAY', str(int(HLS_SEGMENT_DURATION * 15))))  # 15 segments
+STREAM_START_TIMEOUT = int(os.getenv('STREAM_START_TIMEOUT', str(int(HLS_SEGMENT_DURATION * 7.5))))  # 7.5 segments
 CRASH_THRESHOLD = int(os.getenv('CRASH_THRESHOLD', '120'))  # Seuil en secondes pour considérer un crash de stream
+
+# Configuration des timeouts de nettoyage
+HLS_CLEANUP_TIMEOUT = int(os.getenv("HLS_CLEANUP_TIMEOUT", str(int(HLS_SEGMENT_DURATION * 2.5))))  # 2.5 segments
+CLIENT_MONITOR_CLEANUP_SEGMENT_TIMEOUT = int(os.getenv("CLIENT_MONITOR_CLEANUP_SEGMENT_TIMEOUT", str(int(HLS_SEGMENT_DURATION * 150))))  # 150 segments
+CLIENT_MONITOR_CLEANUP_PLAYLIST_TIMEOUT = int(os.getenv("CLIENT_MONITOR_CLEANUP_PLAYLIST_TIMEOUT", str(int(HLS_SEGMENT_DURATION * 90))))  # 90 segments
+CLIENT_MONITOR_CLEANUP_UNKNOWN_TIMEOUT = int(os.getenv("CLIENT_MONITOR_CLEANUP_UNKNOWN_TIMEOUT", str(int(HLS_SEGMENT_DURATION * 120))))  # 120 segments
 
 def get_log_level(level_str: str) -> int:
     """Convertit un niveau de log en string vers sa valeur numérique"""
