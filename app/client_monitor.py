@@ -158,6 +158,13 @@ class ClientMonitor:
             if previous_channel and self.stats_collector:
                 self.stats_collector.handle_channel_change(ip, previous_channel, channel)
                 
+            # Retirer l'IP de l'ancienne chaîne dans current_viewers
+            if previous_channel and previous_channel in current_viewers:
+                current_viewers[previous_channel].discard(ip)
+                # Si la chaîne n'a plus de spectateurs, la retirer
+                if not current_viewers[previous_channel]:
+                    del current_viewers[previous_channel]
+                
             # Mettre à jour le canal actuel
             self.viewers[ip] = channel
             
@@ -172,8 +179,17 @@ class ClientMonitor:
             # NETTOYAGE COMPLET pour éviter le "collage"
             logger.info(f"🧹 NETTOYAGE COMPLET des viewers après changement {previous_channel} → {channel}")
             # Vider tous les viewers sauf pour le canal actuel
-            current_viewers.clear()
-            current_viewers[channel] = {ip}
+            for ch in list(current_viewers.keys()):
+                if ch != channel:
+                    current_viewers[ch].discard(ip)
+                    # Supprimer les chaînes sans spectateurs
+                    if not current_viewers[ch]:
+                        del current_viewers[ch]
+            
+            # S'assurer que l'IP est bien dans la nouvelle chaîne
+            if channel not in current_viewers:
+                current_viewers[channel] = set()
+            current_viewers[channel].add(ip)
             
             # Force update immédiat
             self._update_channel_viewers(current_viewers)
@@ -227,6 +243,32 @@ class ClientMonitor:
         # Obtenir toutes les chaînes connues
         all_channels = set(self.manager.channels.keys()) if hasattr(self.manager, "channels") else set()
         
+        # Vérifier la cohérence des viewers
+        # Un spectateur ne peut être que sur une seule chaîne à la fois
+        seen_ips = {}  # {ip: channel}
+        for channel, viewers in current_viewers.items():
+            for ip in list(viewers):  # Convertir en liste pour pouvoir modifier pendant l'itération
+                if ip in seen_ips:
+                    # L'IP est déjà vue sur une autre chaîne
+                    old_channel = seen_ips[ip]
+                    # Garder l'IP uniquement sur la chaîne la plus récente selon self.viewers
+                    current_channel = self.viewers.get(ip)
+                    if current_channel == channel:
+                        # Retirer l'IP de l'ancienne chaîne
+                        current_viewers[old_channel].discard(ip)
+                        if not current_viewers[old_channel]:
+                            del current_viewers[old_channel]
+                        seen_ips[ip] = channel
+                        logger.info(f"🔄 {ip} retiré de {old_channel} (actif sur {channel})")
+                    else:
+                        # Retirer l'IP de cette chaîne
+                        viewers.discard(ip)
+                        if not viewers:
+                            del current_viewers[channel]
+                        logger.info(f"🔄 {ip} retiré de {channel} (actif sur {old_channel})")
+                else:
+                    seen_ips[ip] = channel
+        
         # Mettre à jour TOUTES les chaînes, pas seulement celles avec des spectateurs
         for channel in all_channels:
             if channel == "master_playlist":
@@ -235,14 +277,17 @@ class ClientMonitor:
             # Obtenir les viewers actuels pour cette chaîne
             viewers = list(current_viewers.get(channel, set()))
             
-            # Vérifier self.viewers pour s'assurer d'inclure tous les spectateurs connus
-            # C'est crucial pour les chaînes qui ont peu de requêtes mais qui sont visionnées
-            for ip, ch in self.viewers.items():
-                if ch == channel and ip not in viewers:
-                    viewers.append(ip)
+            # Vérifier self.viewers pour s'assurer que les spectateurs sont toujours actifs
+            # Un spectateur n'est considéré actif que sur sa chaîne actuelle
+            active_viewers = []
+            for ip in viewers:
+                if self.viewers.get(ip) == channel:
+                    active_viewers.append(ip)
+                else:
+                    logger.debug(f"[{channel}] ⚠️ {ip} ignoré (actif sur {self.viewers.get(ip)})")
             
             # Compteur de spectateurs après l'ajout des viewers manquants
-            count = len(viewers)
+            count = len(active_viewers)
             
             # Mise à jour via callback avec log plus détaillé
             if count > 0:
@@ -253,7 +298,7 @@ class ClientMonitor:
             
             # TOUJOURS envoyer la mise à jour, même quand count = 0
             # C'est crucial pour maintenir l'état cohérent des chaînes sans spectateurs
-            self.update_watchers(channel, count, viewers, "/hls/", source="nginx_log")
+            self.update_watchers(channel, count, active_viewers, "/hls/", source="nginx_log")
 
     def _notify_channel_immediately(self, channel, ip, remove=False):
         """
@@ -269,10 +314,20 @@ class ClientMonitor:
         # Si on veut retirer l'IP
         if remove and ip in viewers:
             viewers.remove(ip)
+            # Retirer aussi l'IP du dictionnaire des viewers
+            if ip in self.viewers and self.viewers[ip] == channel:
+                del self.viewers[ip]
+            logger.info(f"[{channel}] 🚫 Retrait explicite de {ip}")
         # Si on veut ajouter l'IP et qu'elle n'est pas déjà présente
         elif not remove and ip not in viewers:
             viewers.append(ip)
             # Mettre à jour le dictionnaire des viewers
+            # Si l'IP était sur une autre chaîne, la retirer d'abord
+            old_channel = self.viewers.get(ip)
+            if old_channel and old_channel != channel:
+                # Forcer une notification de retrait sur l'ancienne chaîne
+                self._notify_channel_immediately(old_channel, ip, remove=True)
+                logger.info(f"[{old_channel}] 🔄 Retrait forcé de {ip} (changement vers {channel})")
             self.viewers[ip] = channel
             
         # Notification TOUJOURS, même sans viewers pour mettre à jour correctement l'état
