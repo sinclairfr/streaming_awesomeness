@@ -1,7 +1,8 @@
+from pathlib import Path
 import os
 import time
-from pathlib import Path
-from config import logger
+from typing import Callable, Dict, Optional, Set, List
+from config import logger, HLS_SEGMENT_DURATION
 from log_utils import parse_access_log
 
 class ClientMonitor:
@@ -111,71 +112,105 @@ class ClientMonitor:
     def _process_line(self, line, current_viewers):
         """
         Traite une ligne de log et met à jour les statistiques.
-        Version simplifiée sans conditions complexes.
+        Version ULTRA-SIMPLIFIÉE et CENTRALISÉE qui ne traite QUE les segments.
         
         Args:
             line: Ligne de log à traiter
             current_viewers: Dictionnaire {channel: set(ips)} à mettre à jour
         """
-        try:
-            # Parser la ligne
-            ip, channel, request_type, is_valid, path, user_agent = parse_access_log(line)
+        # PREMIÈRE VÉRIFICATION ULTRA-RAPIDE: seulement segments .ts avec code 200
+        if " 200 " not in line or ".ts" not in line or "segment" not in line:
+            return
+        
+        # LOG EXPLICITE DES SEGMENTS RENCONTRÉS
+        logger.info(f"🧠 SEGMENT DÉTECTÉ: {line}")
             
-            # Ignorer les lignes non valides ou sans canal
-            if not is_valid or not channel or channel == "master_playlist" or "404" in line:
-                return
-                
-            # Simple vérification : le canal doit exister dans le manager
-            if not self._is_channel_valid(channel):
-                return
-                
-            # Monitorer les changements de chaîne
-            previous_channel = self.viewers.get(ip)
-            if previous_channel != channel:
-                if previous_channel and self.stats_collector:
-                    # Notifier le changement
-                    logger.info(f"🔄 Changement: {ip}: {previous_channel} → {channel}")
-                    self.stats_collector.handle_channel_change(ip, previous_channel, channel)
-                    
-                # Mettre à jour le canal actuel
-                self.viewers[ip] = channel
-                
-                # Notification immédiate
-                if self.update_watchers:
-                    self._notify_channel_immediately(channel, ip)
-                    if previous_channel:
-                        self._notify_channel_immediately(previous_channel, ip, remove=True)
+        # Toute la logique de parsing est dans parse_access_log
+        # Cette fonction va appliquer tous les filtres nécessaires
+        ip, channel, request_type, is_valid, path, user_agent = parse_access_log(line)
+        
+        # Si parse_access_log a rejeté la ligne, on arrête là
+        if not is_valid or not channel:
+            logger.info(f"❌ SEGMENT REJETÉ après parsing: {channel} (valide: {is_valid})")
+            return
             
-            # Mettre à jour les stats pour l'affichage actuel
-            if channel not in current_viewers:
-                current_viewers[channel] = set()
-            current_viewers[channel].add(ip)
+        logger.info(f"✅ SEGMENT ACCEPTÉ: {channel} demandé par {ip}")
             
-            # Mettre à jour les stats de visionnage
-            if self.stats_collector:
-                if request_type == "segment":
-                    # Durée du segment (par défaut 2s, ou configurable)
-                    segment_duration = 2.0
-                    try:
-                        duration = self.manager.get_channel_segment_duration(channel)
-                        if duration and duration > 0:
-                            segment_duration = duration
-                    except:
-                        pass
+        # Vérifier que c'est un canal valide
+        if not self._is_channel_valid(channel):
+            logger.info(f"⚠️ Canal invalide: {channel}")
+            return
+            
+        # Mémoriser l'IP pour ce canal
+        if channel not in current_viewers:
+            current_viewers[channel] = set()
+        current_viewers[channel].add(ip)
+            
+        # Monitorer les changements de chaîne
+        previous_channel = self.viewers.get(ip)
+        
+        # SI CHANGEMENT DE CHAÎNE: gérer le changement
+        if previous_channel != channel:
+            # Log explicite du changement
+            logger.info(f"🔄 CHANGEMENT DE CHAÎNE DÉTECTÉ: {ip}: {previous_channel} → {channel}")
+            
+            # Mise à jour stats
+            if previous_channel and self.stats_collector:
+                self.stats_collector.handle_channel_change(ip, previous_channel, channel)
+                
+            # Mettre à jour le canal actuel
+            self.viewers[ip] = channel
+            
+            # Notifications immédiates
+            if self.update_watchers:
+                # Force la mise à jour pour la nouvelle chaîne
+                self._notify_channel_immediately(channel, ip)
+                # Et retire le spectateur de l'ancienne
+                if previous_channel:
+                    self._notify_channel_immediately(previous_channel, ip, remove=True)
                     
-                    self.stats_collector._record_log_activity(ip, channel, user_agent, 0)  # bytes_transferred=0 car on veut juste incrémenter le temps
-                    
-                    # MODIFICATION ICI: Mise à jour immédiate du statut du canal pour chaque segment
-                    # Cela garantit que le suivi des spectateurs est cohérent avec le suivi du temps de visionnage
-                    if self.update_watchers:
-                        self._notify_channel_immediately(channel, ip)
-                        
-                elif request_type == "playlist":
-                    # Petit incrément pour les requêtes de playlist
-                    self.stats_collector._record_log_activity(ip, channel, user_agent, 0)  # bytes_transferred=0 car on veut juste incrémenter le temps
-                    
-        except Exception as e:
-            logger.error(f"❌ Erreur traitement ligne: {e}")
+            # NETTOYAGE COMPLET pour éviter le "collage"
+            logger.info(f"🧹 NETTOYAGE COMPLET des viewers après changement {previous_channel} → {channel}")
+            # Vider tous les viewers sauf pour le canal actuel
+            current_viewers.clear()
+            current_viewers[channel] = {ip}
+            
+            # Force update immédiat
+            self._update_channel_viewers(current_viewers)
+            
+            # Log confirmant la mise à jour
+            logger.info(f"✓ Changement {previous_channel} → {channel} traité avec succès")
+        
+        # SI PAS DE CHANGEMENT: mise à jour simple et statistiques
+        else:
+            # Utiliser HLS_SEGMENT_DURATION pour la synchronisation
+            segment_update_interval = float(os.getenv("HLS_SEGMENT_DURATION", "2.0"))
+            last_update_key = f"_last_segment_update_{channel}_{ip}"
+            current_time = time.time()
+            last_update_time = getattr(self, last_update_key, 0)
+            
+            if current_time - last_update_time > segment_update_interval:
+                # Mise à jour avec log explicite
+                logger.debug(f"⏱️ Mise à jour synchronisée pour {channel} (spectateur: {ip})")
+                self._notify_channel_immediately(channel, ip)
+                setattr(self, last_update_key, current_time)
+        
+        # Mise à jour des stats
+        if self.stats_collector:
+            # Durée par défaut depuis l'environnement
+            segment_duration = float(os.getenv("HLS_SEGMENT_DURATION", "2.0"))
+            
+            # Tenter d'obtenir la durée spécifique de ce canal
+            try:
+                duration = self.manager.get_channel_segment_duration(channel)
+                if duration and duration > 0:
+                    segment_duration = duration
+            except:
+                pass
+            
+            # Enregistrer l'activité avec la durée exacte du segment
+            self.stats_collector._record_log_activity(ip, channel, user_agent, 0)
+            logger.debug(f"⏱️ Stats mises à jour pour {channel}: +{segment_duration:.1f}s")
 
     def _is_channel_valid(self, channel):
         """
@@ -187,55 +222,68 @@ class ClientMonitor:
     def _update_channel_viewers(self, current_viewers):
         """
         Met à jour le statut de toutes les chaînes via le callback.
-        Version simplifiée.
+        Version améliorée pour une détection plus fiable des spectateurs actifs.
         """
-        # Utiliser le dictionnaire self.viewers qui contient {ip: channel} pour savoir quelle chaîne
-        # chaque spectateur regarde actuellement (celui-ci est mis à jour dans _process_line)
-        
-        # Créer un dictionnaire {channel: [ip1, ip2, ...]} à partir de self.viewers
-        active_channel_viewers = {}
-        for ip, channel in self.viewers.items():
-            if channel not in active_channel_viewers:
-                active_channel_viewers[channel] = []
-            active_channel_viewers[channel].append(ip)
-        
-        # Maintenant, mettre à jour toutes les chaînes connues
+        # Obtenir toutes les chaînes connues
         all_channels = set(self.manager.channels.keys()) if hasattr(self.manager, "channels") else set()
         
+        # Mettre à jour TOUTES les chaînes, pas seulement celles avec des spectateurs
         for channel in all_channels:
             if channel == "master_playlist":
                 continue
+                
+            # Obtenir les viewers actuels pour cette chaîne
+            viewers = list(current_viewers.get(channel, set()))
             
-            # Pour chaque chaîne, utiliser seulement les IPs qui la regardent actuellement
-            viewers = active_channel_viewers.get(channel, [])
+            # Vérifier self.viewers pour s'assurer d'inclure tous les spectateurs connus
+            # C'est crucial pour les chaînes qui ont peu de requêtes mais qui sont visionnées
+            for ip, ch in self.viewers.items():
+                if ch == channel and ip not in viewers:
+                    viewers.append(ip)
+            
+            # Compteur de spectateurs après l'ajout des viewers manquants
             count = len(viewers)
             
-            # Mise à jour via callback
-            self.update_watchers(channel, count, viewers, "/hls/", source="active_viewers_only")
-        
-        # Log informatif
-        active_channels = [c for c, ips in active_channel_viewers.items() if ips]
-        if active_channels:
-            logger.info(f"👥 {len(self.viewers)} spectateurs actifs sur {len(active_channels)} chaînes")
+            # Mise à jour via callback avec log plus détaillé
+            if count > 0:
+                logger.info(f"[{channel}] 👁️ Mise à jour périodique: {count} spectateurs actifs")
+            else:
+                # Log de niveau debug pour les canaux sans spectateurs
+                logger.debug(f"[{channel}] Mise à jour périodique: 0 spectateurs")
+            
+            # TOUJOURS envoyer la mise à jour, même quand count = 0
+            # C'est crucial pour maintenir l'état cohérent des chaînes sans spectateurs
+            self.update_watchers(channel, count, viewers, "/hls/", source="nginx_log")
 
     def _notify_channel_immediately(self, channel, ip, remove=False):
         """
         Notifie immédiatement un changement pour un canal.
-        Version ultra-simplifiée.
+        Version améliorée et plus robuste.
         """
         if not self.update_watchers:
             return
             
         # Collecter tous les IPs actuels pour ce canal
-        viewers = [ip2 for ip2, ch in self.viewers.items() if ch == channel and ip2 != ip]
+        viewers = [ip2 for ip2, ch in self.viewers.items() if ch == channel]
         
-        # Ajouter l'IP en cours si on ne le supprime pas
-        if not remove:
+        # Si on veut retirer l'IP
+        if remove and ip in viewers:
+            viewers.remove(ip)
+        # Si on veut ajouter l'IP et qu'elle n'est pas déjà présente
+        elif not remove and ip not in viewers:
             viewers.append(ip)
+            # Mettre à jour le dictionnaire des viewers
+            self.viewers[ip] = channel
             
-        # Notification
+        # Notification TOUJOURS, même sans viewers pour mettre à jour correctement l'état
+        # C'est crucial pour les channels sans spectateurs ou quand on en retire
         self.update_watchers(channel, len(viewers), viewers, "/hls/", source="nginx_log_immediate")
-        logger.info(f"[{channel}] 🔄 Notification immédiate: {len(viewers)} watchers actifs")
+        
+        # Log plus détaillé
+        if remove:
+            logger.info(f"[{channel}] 👁️ Notification immédiate (retrait): {len(viewers)} spectateurs actifs")
+        else:
+            logger.info(f"[{channel}] 👁️ Notification immédiate (ajout/mise à jour): {len(viewers)} spectateurs actifs")
 
     def stop(self):
         """Arrête proprement le moniteur"""

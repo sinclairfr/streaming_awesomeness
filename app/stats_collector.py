@@ -1,878 +1,513 @@
-# stats_collector.py
+"""
+StatsCollector simplifié à l'extrême - Se contente de suivre les incréments et sauvegarder
+"""
 import os
 import json
 import time
 import threading
-import re
+import re  # Added for regex parsing
 from pathlib import Path
-from config import logger, HLS_SEGMENT_DURATION
+from typing import Dict, Set, Optional, Tuple # Added Tuple
+from config import logger, HLS_SEGMENT_DURATION, NGINX_ACCESS_LOG, ACTIVE_VIEWER_TIMEOUT
+
+# Regex to parse Nginx access log lines for SUCCESSFUL HLS Segment requests
+# Captures: 1: IP Address, 2: Channel Name, 3: Bytes Sent, 4: User Agent
+LOG_SEGMENT_REGEX = re.compile(
+    r'^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s+-\s+-\s+'  # 1: IP Address
+    r'\[.*?\]\s+'                                      # Timestamp
+    r'"GET /hls/([^/]+)/segment_\d+\.ts\s+HTTP/1\.[01]"\s+' # 2: Channel Name
+    r'(?:200|206)\s+'                                  # Status Code (200 OK or 206 Partial Content)
+    r'(\d+)\s+'                                        # 3: Bytes Sent
+    r'".*?"\s+'                                        # Referrer
+    r'"(.*?)"'                                         # 4: User Agent
+)
+# Regex for Playlist requests (to update last_seen, first_seen etc.)
+LOG_PLAYLIST_REGEX = re.compile(
+    r'^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s+-\s+-\s+' # 1: IP Address
+    r'\[.*?\]\s+'                                      # Timestamp
+    r'"GET /hls/([^/]+)/playlist\.m3u8\s+HTTP/1\.[01]"\s+'# 2: Channel Name
+    r'\d{3}\s+'                                        # Status Code (any)
+    r'\d+\s+'                                         # Bytes Sent
+    r'".*?"\s+'                                        # Referrer
+    r'"(.*?)"'                                         # 3: User Agent
+)
 
 class StatsCollector:
-    """
-    # Collecte et sauvegarde des statistiques de lecture des chaînes
-    # Permet l'analyse future des habitudes de visionnage
-    """
-
-    # Dans stats_collector.py
+    """Gère les statistiques basées sur les logs Nginx (bytes transférés)."""
 
     def __init__(self, stats_dir="/app/stats"):
-        """Initialise le collecteur de statistiques"""
+        """Initialise le collecteur de statistiques."""
         self.stats_dir = Path(stats_dir)
         self.stats_dir.mkdir(parents=True, exist_ok=True)
 
-        self.stats_file = self.stats_dir / "channel_stats.json"
-        self.user_stats_file = self.stats_dir / "user_stats.json"
+        self.channel_stats_file = self.stats_dir / "channel_stats_bytes.json"
+        self.user_stats_file = self.stats_dir / "user_stats_bytes.json"
 
-        # Initialisation des structures de données
-        self.stats = {}  # {channel: {total_watch_time, unique_viewers, watchlist, last_update}}
-        self.global_stats = {
-            "total_watch_time": 0.0,
-            "unique_viewers": set(),
-            "last_update": time.time()
-        }
-        self.user_stats = {}  # {ip: {total_watch_time, channels_watched, last_seen, user_agent}}
-        self.daily_stats = {}  # {date: {channel: {total_watch_time, unique_viewers}}}
-        self.last_save_time = time.time()
         self.lock = threading.Lock()
-        self.save_interval = 60  # Changed from 300 (5 minutes) to 60 (1 minute)
+        
+        # Initialiser les structures de base
+        self.channel_stats = {"global": {"total_watch_time": 0, "total_bytes_transferred": 0, "unique_viewers": set(), "last_update": 0}}
+        self.user_stats = {
+            "users": {},
+            "last_updated": int(time.time())
+        }
+        
+        # Dictionnaire pour suivre le canal actif de chaque IP
+        self.active_channel_by_ip = {}
 
-        # Chargement des stats existantes
-        self.stats, self.global_stats = self._load_stats()
-        self.user_stats = self._load_user_stats()
+        self._load_stats()
 
-        # Démarrage du thread de sauvegarde périodique
-        self.stop_save_thread = threading.Event()
+        # --- Background Threads ---
+        self.stop_event = threading.Event()
+
+        # Save Thread
+        self.save_interval = 15
         self.save_thread = threading.Thread(target=self._save_loop, daemon=True)
         self.save_thread.start()
 
-        # Forcer une sauvegarde initiale des deux fichiers
-        # self.save_stats()  # Remove initial save
-        # self.save_user_stats() # Remove initial save
+        # Nginx Log Monitor Thread
+        self.log_monitor_thread = threading.Thread(target=self._log_monitor_loop, daemon=True)
+        self.log_monitor_thread.start()
 
-        logger.info(
-            f"📊 StatsCollector initialisé (sauvegarde dans {self.stats_file}, user stats dans {self.user_stats_file})"
-        )
+        logger.info(f"📊 StatsCollector initialisé (Mode: Nginx Logs / Bytes Transferred) - Timeout des spectateurs actifs: {ACTIVE_VIEWER_TIMEOUT}s")
 
-        # Ajout des métriques de performance
-        self.buffer_issues = {}  # Dictionnaire pour stocker les problèmes de buffer par chaîne
-        self.latency_issues = {}  # Dictionnaire pour stocker les problèmes de latence par chaîne
-        self.performance_metrics = {}  # Dictionnaire pour stocker les métriques de performance par chaîne
-
-    def add_watch_time(self, channel, ip, duration, user_agent=None):
-        """Ajoute du temps de visionnage pour un watcher avec limitation de fréquence"""
+    def _load_stats(self):
+        """Charge les stats depuis les fichiers (mode bytes)."""
         with self.lock:
             try:
-                current_time = time.time()
-                
-                # Vérifie la dernière mise à jour pour cette paire channel/ip
-                update_key = f"{channel}:{ip}"
-                if not hasattr(self, "_last_update_times"):
-                    self._last_update_times = {}
-                
-                # Limite les mises à jour à une fois par seconde maximum
-                if update_key in self._last_update_times:
-                    last_update = self._last_update_times[update_key]
-                    elapsed = current_time - last_update
-                    
-                    # Si moins d'une seconde depuis la dernière mise à jour, ajuster la durée
-                    if elapsed < 1.0:
-                        # On ignore cette mise à jour trop rapprochée
-                        logger.debug(f"[STATS] Mise à jour trop rapide pour {channel}:{ip} (interval: {elapsed:.2f}s), ignorée")
-                        return
-                    
-                    # Ajuster la durée en fonction du temps réel écoulé
-                    if elapsed < duration and duration > 2.0:
-                        adjusted_duration = max(elapsed, 1.0)  # Au moins 1 seconde
-                        logger.debug(f"[STATS] Durée ajustée pour {channel}:{ip}: {duration:.1f}s → {adjusted_duration:.1f}s")
-                        duration = adjusted_duration
-                
-                # Enregistrer le moment de cette mise à jour
-                self._last_update_times[update_key] = current_time
-                
-                # Initialisation des stats si nécessaire
-                if channel not in self.stats:
-                    self.stats[channel] = {
-                        "total_watch_time": 0.0,
-                        "unique_viewers": set(),
-                        "watchlist": {},  # {ip: total_time}
-                        "last_update": time.time()
+                # --- Channel Stats ---
+                channel_file_existed = self.channel_stats_file.exists()
+                if not channel_file_existed:
+                    logger.info(f"📊 Fichier channel_stats introuvable ({self.channel_stats_file}). Création d'un fichier vide.")
+                    try:
+                        with open(self.channel_stats_file, 'w') as f:
+                            f.write("{}")
+                        os.chmod(self.channel_stats_file, 0o666) # Set permissions
+                    except Exception as e_create:
+                        logger.error(f"❌ Impossible de créer le fichier channel_stats: {e_create}")
+                        # Proceed with default in-memory stats anyway
+
+                # Try to load channel stats (will load the empty one if just created)
+                if self.channel_stats_file.exists(): # Check again in case creation failed
+                    with open(self.channel_stats_file, 'r') as f:
+                        loaded_channel_stats = json.load(f)
+                        # Check if loaded data is a dictionary (basic validation)
+                        if isinstance(loaded_channel_stats, dict):
+                            self.channel_stats = loaded_channel_stats
+                            # Convert lists to sets for unique_viewers
+                            if "global" in self.channel_stats:
+                                self.channel_stats["global"]["unique_viewers"] = set(self.channel_stats["global"].get("unique_viewers", []))
+                            for channel in self.channel_stats:
+                                if channel != "global" and "unique_viewers" in self.channel_stats[channel]:
+                                    self.channel_stats[channel]["unique_viewers"] = set(self.channel_stats[channel]["unique_viewers"])
+                            # Ensure global exists if file was empty or missing keys
+                            if "global" not in self.channel_stats:
+                                self.channel_stats["global"] = {"total_watch_time": 0, "total_bytes_transferred": 0, "unique_viewers": set(), "last_update": 0}
+                        else:
+                            logger.warning(f"⚠️ Fichier channel_stats ({self.channel_stats_file}) ne contient pas un JSON valide (objet). Utilisation des valeurs par défaut.")
+                            self.channel_stats = {"global": {"total_watch_time": 0, "total_bytes_transferred": 0, "unique_viewers": set(), "last_update": 0}}
+                else: # File still doesn't exist (creation failed)
+                    self.channel_stats = {"global": {"total_watch_time": 0, "total_bytes_transferred": 0, "unique_viewers": set(), "last_update": 0}}
+                    if not channel_file_existed: # Log only if we tried and failed to create
+                         logger.warning("📊 Utilisation des channel_stats par défaut en mémoire.")
+                    # No need to log if it existed but couldn't be read (json.load would raise error)
+
+
+                # --- User Stats ---
+                user_file_existed = self.user_stats_file.exists()
+                if not user_file_existed:
+                    logger.info(f"📊 Fichier user_stats introuvable ({self.user_stats_file}). Création d'un fichier vide.")
+                    try:
+                        with open(self.user_stats_file, 'w') as f:
+                            f.write("{}")
+                        os.chmod(self.user_stats_file, 0o666) # Set permissions
+                    except Exception as e_create:
+                        logger.error(f"❌ Impossible de créer le fichier user_stats: {e_create}")
+                        # Proceed with default in-memory stats anyway
+
+                # Try to load user stats (will load the empty one if just created)
+                if self.user_stats_file.exists(): # Check again in case creation failed
+                    with open(self.user_stats_file, 'r') as f:
+                         loaded_user_stats = json.load(f)
+                         # Basic validation
+                         if isinstance(loaded_user_stats, dict) and "users" in loaded_user_stats:
+                             self.user_stats = loaded_user_stats
+                             # Ensure last_updated exists
+                             if "last_updated" not in self.user_stats:
+                                 self.user_stats["last_updated"] = int(time.time())
+                         else:
+                             logger.warning(f"⚠️ Fichier user_stats ({self.user_stats_file}) ne contient pas un JSON valide attendu. Utilisation des valeurs par défaut.")
+                             self.user_stats = {"users": {}, "last_updated": int(time.time())}
+
+                else: # File still doesn't exist (creation failed)
+                    self.user_stats = {
+                        "users": {},
+                        "last_updated": int(time.time())
                     }
+                    if not user_file_existed: # Log only if we tried and failed to create
+                        logger.warning("📊 Utilisation des user_stats par défaut en mémoire.")
+                    # No need to log if it existed but couldn't be read (json.load would raise error)
 
-                # Mise à jour des stats du canal
-                channel_stats = self.stats[channel]
-                channel_stats["total_watch_time"] += duration
-                channel_stats["unique_viewers"].add(ip)
-                channel_stats["last_update"] = time.time()
 
-                # Initialiser watchlist si elle n'existe pas
-                if "watchlist" not in channel_stats:
-                    channel_stats["watchlist"] = {}
-
-                # Mise à jour de la watchlist pour cette IP
-                if ip not in channel_stats["watchlist"]:
-                    channel_stats["watchlist"][ip] = 0.0
-                    logger.debug(f"[STATS] 📊 Nouvelle IP ajoutée à la watchlist: {ip} sur {channel}")
-                channel_stats["watchlist"][ip] += duration
-
-                # Mise à jour des stats globales
-                # Removed the block updating self.stats["global"] as it's redundant
-                # Global stats are now calculated correctly in save_stats from self.global_stats
-
-                # Mise à jour des stats utilisateur (avec vérification des champs manquants)
-                if ip not in self.user_stats:
-                    # Structure complète pour nouvel utilisateur
-                    self.user_stats[ip] = {
-                        "total_watch_time": 0.0,
-                        "channels_watched": set(),
-                        "last_seen": time.time(),
-                        "user_agent": None,
-                        "channels": {}
-                    }
-                
-                user = self.user_stats[ip]
-                user["total_watch_time"] = user.get("total_watch_time", 0.0) + duration
-                user["last_seen"] = time.time()
-                
-                # Update user_agent if provided
-                if user_agent:
-                    user["user_agent"] = user_agent
-                    
-                # Vérifier si channels_watched existe et l'initialiser si nécessaire
-                if "channels_watched" in user:
-                    # Convert list to set if needed
-                    if isinstance(user["channels_watched"], list):
-                        user["channels_watched"] = set(user["channels_watched"])
-                else:
-                    user["channels_watched"] = set()
-                user["channels_watched"].add(channel)
-                
-                # S'assurer que channels existe
-                if "channels" not in user:
-                    user["channels"] = {}
-
-                # Init pour cette chaîne si nécessaire
-                if channel not in user["channels"]:
-                    user["channels"][channel] = {
-                        "first_seen": int(time.time()),
-                        "last_seen": int(time.time()),
-                        "total_watch_time": 0,
-                        "favorite": False,
-                    }
-
-                # MAJ des stats de la chaîne
-                channel_data = user["channels"][channel]
-                channel_data["last_seen"] = int(time.time())
-                channel_data["total_watch_time"] += duration
-
-                # Détermination de la chaîne favorite
-                if len(user["channels"]) > 1:
-                    favorite_channel = max(
-                        user["channels"].items(), key=lambda x: x[1]["total_watch_time"]
-                    )[0]
-
-                    for ch_name, ch_data in user["channels"].items():
-                        ch_data["favorite"] = ch_name == favorite_channel
-
-                # Mise à jour des stats quotidiennes
-                self._update_daily_stats(channel, ip, duration)
-
+            except json.JSONDecodeError as e_json:
+                logger.error(f"❌ Erreur de décodage JSON lors du chargement des stats: {e_json}. Fichier corrompu ? Utilisation des valeurs par défaut.")
+                # Fallback to empty stats
+                self.channel_stats = {"global": {"total_watch_time": 0, "total_bytes_transferred": 0, "unique_viewers": set(), "last_update": 0}}
+                self.user_stats = {"users": {}, "last_updated": int(time.time())}
             except Exception as e:
-                logger.error(f"❌ Erreur mise à jour stats: {e}")
-                import traceback
-                logger.error(traceback.format_exc())
-            
-    def _save_loop(self):
-        """Sauvegarde périodique des statistiques"""
-        while not self.stop_save_thread.is_set():
-            try:
-                # Attente entre sauvegardes
-                time.sleep(self.save_interval)
-
-                # Sauvegarde des stats principales
-                self.save_stats()
-
-                # Sauvegarde des stats utilisateur
-                self.save_user_stats()
-
-            except Exception as e:
-                logger.error(f"❌ Erreur sauvegarde périodique des stats: {e}")
-
-    def _load_user_stats(self):
-        """Charge les stats utilisateurs ou crée une structure vide."""
-        empty_stats = {"users": {}, "last_updated": int(time.time())}
-
-        if self.user_stats_file.exists():
-            try:
-                with open(self.user_stats_file, "r") as f:
-                    loaded_data = json.load(f)
-
-                    # Fix for deeply nested "users" structure - flatten it
-                    if isinstance(loaded_data, dict):
-                        # Check if we have a deeply nested users structure
-                        current = loaded_data
-                        depth = 0
-                        while "users" in current and isinstance(current["users"], dict) and not any(isinstance(v, dict) and "total_watch_time" in v for k, v in current["users"].items()):
-                            current = current["users"]
-                            depth += 1
-                            if depth > 50:  # Safety limit
-                                logger.warning(f"⚠️ Structure trop profondément imbriquée détectée dans {self.user_stats_file}. Création d'une nouvelle structure.")
-                                return empty_stats
-                        
-                        # If we found actual user data at some depth
-                        if depth > 1:
-                            logger.warning(f"⚠️ Structure imbriquée détectée dans {self.user_stats_file} (profondeur: {depth}). Correction en cours...")
-                            # Rebuild proper structure
-                            corrected_data = {"users": {}, "last_updated": loaded_data.get("last_updated", int(time.time()))}
-                            
-                            # If we found actual users at the deepest level, extract them
-                            if isinstance(current, dict) and "users" in current and isinstance(current["users"], dict):
-                                for ip, user_data in current["users"].items():
-                                    if isinstance(user_data, dict) and "total_watch_time" in user_data:
-                                        corrected_data["users"][ip] = user_data
-                            
-                            logger.info(f"📊 Structure corrigée: {len(corrected_data['users'])} utilisateurs extraits")
-                            return corrected_data
-                    
-                    # Basic structure validation for normal cases
-                    if isinstance(loaded_data, dict) and "users" in loaded_data and isinstance(loaded_data["users"], dict):
-                        # Find all actual user entries
-                        valid_users = {}
-                        for ip, user_data in loaded_data["users"].items():
-                            if isinstance(user_data, dict) and "total_watch_time" in user_data:
-                                # Convert channels_watched to set if it's a list
-                                if "channels_watched" in user_data and isinstance(user_data["channels_watched"], list):
-                                    user_data["channels_watched"] = set(user_data["channels_watched"])
-                                valid_users[ip] = user_data
-                        
-                        # Create proper structure
-                        valid_data = {
-                            "users": valid_users,
-                            "last_updated": loaded_data.get("last_updated", int(time.time()))
-                        }
-                        
-                        logger.info(f"📊 Stats utilisateurs chargées: {len(valid_users)} utilisateurs trouvés")
-                        return valid_data
-                    else:
-                        logger.warning(f"⚠️ Structure invalide dans {self.user_stats_file}. Création d'une nouvelle structure.")
-                        return empty_stats
-
-            except json.JSONDecodeError:
-                logger.warning(f"⚠️ Fichier stats utilisateurs ({self.user_stats_file}) corrompu (JSON invalide). Création d'une nouvelle structure.")
-                return empty_stats
-            except Exception as e:
-                logger.error(f"❌ Erreur inattendue lors du chargement de {self.user_stats_file}: {e}. Création d'une nouvelle structure.")
-                return empty_stats
-        else:
-            # File does not exist, return the empty structure
-            logger.info(f"ℹ️ Fichier stats utilisateurs ({self.user_stats_file}) non trouvé. Création d'une nouvelle structure.")
-            return empty_stats
-    
-    def _make_json_serializable(self, data):
-        """Recursively converts sets to lists within a data structure."""
-        if isinstance(data, dict):
-            return {k: self._make_json_serializable(v) for k, v in data.items()}
-        elif isinstance(data, list):
-            return [self._make_json_serializable(elem) for elem in data]
-        elif isinstance(data, set):
-            # Convert set to list, ensuring elements within the set are also processed
-            return [self._make_json_serializable(elem) for elem in sorted(list(data))] # Sort for consistent output
-        else:
-            return data
-
-    def save_user_stats(self):
-        """Sauvegarde les statistiques par utilisateur"""
-        with self.lock:
-            try:
-                # Vérifications de base
-                if not hasattr(self, "user_stats") or not self.user_stats:
-                    self.user_stats = {"users": {}, "last_updated": int(time.time())}
-
-                # S'assurer que le dossier existe
-                os.makedirs(os.path.dirname(self.user_stats_file), exist_ok=True)
-
-                # Préparation des données sérialisables - STRUCTURE SIMPLIFIÉE SANS IMBRICATION
-                serializable_stats = {
+                logger.error(f"❌ Erreur générale lors du chargement des stats: {e}", exc_info=True)
+                # Fallback to empty stats
+                self.channel_stats = {"global": {"total_watch_time": 0, "total_bytes_transferred": 0, "unique_viewers": set(), "last_update": 0}}
+                self.user_stats = {
                     "users": {},
                     "last_updated": int(time.time())
                 }
-                
-                # Parcourir le dictionnaire user_stats pour extraire uniquement les données utilisateurs
-                for ip, user_data in self.user_stats.items():
-                    # Ignorer les clés de métadonnées comme "last_updated"
-                    if ip == "last_updated":
-                        continue
-                        
-                    # Convertir les données utilisateur en format sérialisable RECURSIVEMENT
-                    serializable_user = self._make_json_serializable(user_data)
-                    
-                    # Ajouter cet utilisateur au dictionnaire principal
-                    serializable_stats["users"][ip] = serializable_user
 
-                # Sauvegarde effective
-                with open(self.user_stats_file, "w") as f:
-                    json.dump(serializable_stats, f, indent=2)
-
-                logger.debug(f"✅ Stats utilisateurs sauvegardées dans {self.user_stats_file}")
-                return True
+    def _save_loop(self):
+        """Boucle de sauvegarde périodique."""
+        while not self.stop_event.is_set():
+            # Use event wait for interruptible sleep
+            if self.stop_event.wait(self.save_interval):
+                break # Exit if stop event is set
+            try:
+                self._save_stats()
             except Exception as e:
-                logger.error(f"❌ Erreur sauvegarde stats utilisateurs: {e}")
-                import traceback
-                logger.error(traceback.format_exc())
-                return False
-    
-    def update_user_stats(self, ip, channel_name, duration, user_agent=None):
-        """Met à jour les stats par utilisateur"""
+                logger.error(f"❌ Erreur dans la boucle de sauvegarde: {e}", exc_info=True)
+
+    def _save_stats(self):
+        """Sauvegarde les stats (mode bytes) dans les fichiers."""
         with self.lock:
-            # Log initial
-            logger.debug(f"👤 Mise à jour stats utilisateur: {ip} sur {channel_name} (+{duration:.1f}s)")
+            try:
+                # Save channel stats
+                channel_stats_to_save = self.channel_stats.copy()
+                # Convert sets to lists for JSON serialization
+                if "global" in channel_stats_to_save:
+                    channel_stats_to_save["global"]["unique_viewers"] = list(channel_stats_to_save["global"]["unique_viewers"])
+                for channel in channel_stats_to_save:
+                    if channel != "global" and "unique_viewers" in channel_stats_to_save[channel]:
+                        channel_stats_to_save[channel]["unique_viewers"] = list(channel_stats_to_save[channel]["unique_viewers"])
+                
+                with open(self.channel_stats_file, 'w') as f:
+                    json.dump(channel_stats_to_save, f, indent=2)
 
-            # S'assurer que user_stats et users existent
-            if not hasattr(self, "user_stats"):
-                logger.warning("⚠️ Initialisation de user_stats")
-                self.user_stats = {"last_updated": int(time.time())}
+                # Save user stats
+                with open(self.user_stats_file, 'w') as f:
+                    json.dump(self.user_stats, f, indent=2)
 
-            # Init pour cet utilisateur si nécessaire
+                logger.info(f"💾 Stats sauvegardées: {len(self.channel_stats.get('global', {}).get('unique_viewers', []))} utilisateurs uniques, {len(self.channel_stats) -1} chaînes actives.")
+            except Exception as e:
+                logger.error(f"❌ Erreur lors de la sauvegarde des stats: {e}")
+
+    # --- Log Monitoring ---
+    def _log_monitor_loop(self):
+        """Surveille en continu le fichier access.log de Nginx."""
+        logger.info(f"👁️ Démarrage surveillance Nginx Log: {NGINX_ACCESS_LOG}")
+        last_inode = None
+        try:
+            while not self.stop_event.is_set():
+                try:
+                    current_inode = os.stat(NGINX_ACCESS_LOG).st_ino
+                    if last_inode is None:
+                        last_inode = current_inode
+
+                    # Handle log rotation: reopen file if inode changes
+                    if current_inode != last_inode:
+                        logger.info(f"🔄 Détection rotation du fichier log Nginx. Réouverture...")
+                        if 'f' in locals() and not f.closed:
+                             f.close()
+                        # Wait a moment for the file system
+                        time.sleep(0.5)
+                        f = open(NGINX_ACCESS_LOG, 'r')
+                        last_inode = current_inode
+                        logger.info("✅ Fichier log Nginx ré-ouvert.")
+                    elif 'f' not in locals() or f.closed:
+                         f = open(NGINX_ACCESS_LOG, 'r')
+                         # Go to end only if it's the initial open or after rotation
+                         if last_inode == current_inode:
+                             f.seek(0, os.SEEK_END)
+                             logger.info("⏩ Positionné à la fin du fichier log actuel.")
+
+                    # Read new lines
+                    line = f.readline()
+                    while line:
+                        self._parse_and_update_from_log(line.strip())
+                        line = f.readline() # Read next line immediately if available
+
+                    # If no lines were read, wait before checking again
+                    if not line:
+                         # Use interruptible wait
+                        if self.stop_event.wait(0.2): # Check every 200ms
+                            break
+
+                except FileNotFoundError:
+                    logger.warning(f"⏳ Fichier log Nginx introuvable: {NGINX_ACCESS_LOG}. Réessai dans 5 secondes...")
+                    if 'f' in locals() and not f.closed:
+                        f.close()
+                    last_inode = None # Reset inode tracking
+                    if self.stop_event.wait(5): # Wait 5 seconds before retrying
+                         break
+                except Exception as e:
+                    logger.error(f"❌ Erreur dans la boucle de surveillance Nginx: {e}", exc_info=True)
+                    # Avoid busy-looping on persistent errors
+                    if self.stop_event.wait(5):
+                        break # Exit if stop event is set during error wait
+
+        finally:
+            if 'f' in locals() and not f.closed:
+                f.close()
+            logger.info(f"🛑 Arrêt surveillance Nginx Log: {NGINX_ACCESS_LOG}")
+
+
+    def _parse_and_update_from_log(self, line: str):
+        """Parse une ligne de log et met à jour les stats si pertinent."""
+        segment_match = LOG_SEGMENT_REGEX.match(line)
+        if segment_match:
+            ip_address, channel_name, bytes_str, user_agent = segment_match.groups()
+            try:
+                bytes_transferred = int(bytes_str)
+                if bytes_transferred > 0:
+                    # logger.debug(f"Log Segment: IP={ip_address}, Chan={channel_name}, Bytes={bytes_transferred}, UA={user_agent}")
+                    self._record_log_activity(ip_address, channel_name, user_agent, bytes_transferred)
+                # else: ignore 0 byte transfers for segments
+
+            except ValueError:
+                 logger.warning(f"Impossible de parser les bytes '{bytes_str}' depuis la ligne: {line}")
+            return # Processed as segment
+
+        playlist_match = LOG_PLAYLIST_REGEX.match(line)
+        if playlist_match:
+            ip_address, channel_name, user_agent = playlist_match.groups()
+            # logger.debug(f"Log Playlist: IP={ip_address}, Chan={channel_name}, UA={user_agent}")
+            # Record activity for playlists, but with 0 bytes transferred
+            self._record_log_activity(ip_address, channel_name, user_agent, 0)
+            return # Processed as playlist
+
+        # Optional: Log other lines if needed for debugging
+        else:
+             logger.debug(f"Ligne ignorée (non HLS/format inconnu): {line}")
+
+
+    def _record_log_activity(self, ip, channel, user_agent, bytes_transferred):
+        """
+        Enregistre l'activité d'un utilisateur basée sur les logs.
+        Cette méthode est appelée par ClientMonitor ou d'autres composants qui analysent les logs.
+        
+        Args:
+            ip: Adresse IP de l'utilisateur
+            channel: Nom de la chaîne
+            user_agent: User-agent du client
+            bytes_transferred: Taille du transfert en octets (0 pour les segments HLS)
+        """
+        try:
+            # Obtenir les configurations depuis l'environnement
+            segment_duration = float(os.getenv("HLS_SEGMENT_DURATION", "2.0"))
+            segment_timeout_multiplier = float(os.getenv("SEGMENT_TIMEOUT_MULTIPLIER", "1.2"))
+            active_viewer_timeout = int(os.getenv("ACTIVE_VIEWER_TIMEOUT", "20"))
+            
+            # Obtenir l'utilisateur ou en créer un nouveau
             if ip not in self.user_stats:
                 self.user_stats[ip] = {
-                    "first_seen": int(time.time()),
-                    "last_seen": int(time.time()),
-                    "total_watch_time": 0,
-                    "channels": {},
+                    "first_seen": time.time(),
+                    "last_seen": time.time(),
                     "user_agent": user_agent,
-                }
-                logger.info(f"👤 Nouvel utilisateur détecté: {ip}")
-
-            user = self.user_stats[ip]
-            old_total_time = user.get("total_watch_time", 0)
-            user["last_seen"] = int(time.time())
-            user["total_watch_time"] += duration
-
-            # Log de la mise à jour du temps total
-            logger.info(
-                f"⏱️ {ip}: temps total passé de {old_total_time:.1f}s à {user['total_watch_time']:.1f}s"
-            )
-
-            # MAJ de l'user agent si fourni
-            if user_agent:
-                user["user_agent"] = user_agent
-
-            # S'assurer que channels existe
-            if "channels" not in user:
-                user["channels"] = {}
-
-            # Init pour cette chaîne si nécessaire
-            if channel_name not in user["channels"]:
-                user["channels"][channel_name] = {
-                    "first_seen": int(time.time()),
-                    "last_seen": int(time.time()),
                     "total_watch_time": 0,
-                    "favorite": False,
-                }
-                logger.info(f"📺 {ip}: nouvelle chaîne {channel_name}")
-
-            # MAJ des stats de la chaîne
-            channel = user["channels"][channel_name]
-            old_channel_time = channel["total_watch_time"]
-            channel["last_seen"] = int(time.time())
-            channel["total_watch_time"] += duration
-
-            # Log de la mise à jour du temps par chaîne
-            logger.info(
-                f"📺 {ip} sur {channel_name}: temps passé de {old_channel_time:.1f}s à {channel['total_watch_time']:.1f}s"
-            )
-
-            # Détermination de la chaîne favorite
-            if len(user["channels"]) > 1:
-                favorite_channel = max(
-                    user["channels"].items(), key=lambda x: x[1]["total_watch_time"]
-                )[0]
-
-                for ch_name, ch_data in user["channels"].items():
-                    ch_data["favorite"] = ch_name == favorite_channel
-
-            # Sauvegarde périodique
-            # Removed conditional save block:
-            # if (
-            #     not hasattr(self, "last_user_save")
-            #     or time.time() - self.last_user_save > 300
-            # ):
-            #     threading.Thread(target=self.save_user_stats, daemon=True).start()
-            #     self.last_user_save = time.time()
-            #     logger.info("💾 Sauvegarde forcée des stats utilisateur après 5 minutes d'activité")
-
-    def _load_stats(self):
-        """Charge les stats existantes ou crée un nouveau fichier"""
-        if self.stats_file.exists():
-            try:
-                with open(self.stats_file, "r") as f:
-                    loaded_stats = json.load(f)
-                    
-                    # Conversion de la structure chargée vers la nouvelle structure
-                    stats = {}
-                    # Initialize global_stats with defaults, to be overwritten if found in file
-                    global_stats = {
-                        "total_watch_time": 0.0,
-                        "unique_viewers": set(),
-                        "last_update": time.time()
-                    }
-                    
-                    # Conversion des stats des chaînes
-                    if "channels" in loaded_stats:
-                        for channel_name, channel_data in loaded_stats["channels"].items():
-                            stats[channel_name] = {
-                                "total_watch_time": float(channel_data.get("total_watch_time", 0)),
-                                "unique_viewers": set(channel_data.get("unique_viewers", [])),
-                                "watchlist": channel_data.get("watchlist", {}),
-                                "last_update": time.time()
-                            }
-                    
-                    # Conversion des stats globales
-                    if "global" in loaded_stats:
-                        global_data = loaded_stats["global"]
-                        global_stats["total_watch_time"] = float(global_data.get("total_watch_time", 0))
-                        global_stats["unique_viewers"] = set(global_data.get("unique_viewers", []))
-                        global_stats["last_update"] = time.time()
-                    
-                    # Mise à jour des attributs - REMOVED, assignment happens in __init__
-                    # self.stats = stats
-                    # self.global_stats = global_stats
-                    
-                    logger.debug(f"📊 Stats chargées: {len(stats)} chaînes, {len(global_stats['unique_viewers'])} spectateurs uniques")
-                    return stats, global_stats # Modified: Return both
-                    
-            except json.JSONDecodeError:
-                logger.warning(f"⚠️ Fichier de stats corrompu, création d'un nouveau")
-
-        # Structure initiale des stats en cas d'échec du chargement ou fichier inexistant
-        default_global_stats = {
-            "total_watch_time": 0.0,
-            "unique_viewers": set(),
-            "last_update": time.time()
-        }
-        return {}, default_global_stats # Modified: Return default structures for both
-
-    def save_stats(self):
-        """Sauvegarde les statistiques dans le fichier JSON"""
-        with self.lock:
-            try:
-                # Calculate global statistics from all channels in self.stats
-                total_watch_time = 0.0
-                all_viewers = set()
-                
-                for channel_name, channel_data in self.stats.items():
-                    # Removed check for channel_name == "global"
-                    total_watch_time += channel_data.get("total_watch_time", 0)
-                    all_viewers.update(channel_data.get("unique_viewers", set()))
-                
-                # Update self.global_stats before saving
-                self.global_stats["total_watch_time"] = total_watch_time
-                self.global_stats["unique_viewers"] = all_viewers
-                self.global_stats["last_update"] = time.time()
-                
-                # Préparation des données à sauvegarder
-                stats_to_save = {
-                    "channels": {},
-                    "global": {
-                        "total_watch_time": self.global_stats["total_watch_time"],
-                        "unique_viewers": list(self.global_stats["unique_viewers"]),
-                        "last_update": self.global_stats["last_update"]
-                    }
-                }
-
-                # Conversion des stats des chaînes
-                for channel_name, channel_data in self.stats.items():
-                    # Removed check for channel_name == "global"
-                        
-                    # Ensure all required keys exist
-                    channel_stats = {
-                        "total_watch_time": channel_data.get("total_watch_time", 0),
-                        "unique_viewers": list(channel_data.get("unique_viewers", set())),
-                        "last_update": channel_data.get("last_update", time.time())
-                    }
-                    
-                    # Add watchlist only if it exists
-                    if "watchlist" in channel_data:
-                        channel_stats["watchlist"] = channel_data["watchlist"]
-
-                    stats_to_save["channels"][channel_name] = channel_stats
-
-                # Sauvegarde dans le fichier principal
-                with open(self.stats_file, "w") as f:
-                    json.dump(stats_to_save, f, indent=2)
-
-                # Sauvegarde d'une copie horodatée toutes les 24h
-                now = time.time()
-                last_daily = getattr(self, "last_daily_save", 0)
-                if now - last_daily > 86400:  # 24h
-                    date_str = time.strftime("%Y-%m-%d")
-                    daily_file = self.stats_dir / f"channel_stats_{date_str}.json"
-                    with open(daily_file, "w") as f:
-                        json.dump(stats_to_save, f, indent=2)
-                    self.last_daily_save = now
-                    logger.info(f"📊 Sauvegarde quotidienne des stats: {daily_file}")
-
-                logger.debug(
-                    f"📊 Statistiques sauvegardées ({len(self.stats)} chaînes, {len(self.global_stats['unique_viewers'])} spectateurs uniques)"
-                )
-                return True
-            except Exception as e:
-                logger.error(f"❌ Erreur sauvegarde stats: {e}")
-                import traceback
-                logger.error(traceback.format_exc())
-                return False
-    
-    def update_channel_watchers(self, channel_name, watchers_count):
-        """Met à jour les stats de watchers pour une chaîne"""
-        with self.lock:
-            # Init des stats pour cette chaîne si nécessaire
-            if channel_name not in self.stats:
-                logger.warning(f"Attempting to update watchers for non-existent channel {channel_name}. Skipping.")
-                return
-
-            # Access channel stats directly
-            channel_stats = self.stats[channel_name]
-
-            # Ensure necessary keys exist
-            if "current_watchers" not in channel_stats: channel_stats["current_watchers"] = 0
-            if "peak_watchers" not in channel_stats: channel_stats["peak_watchers"] = 0
-            if "peak_time" not in channel_stats: channel_stats["peak_time"] = 0
-            if "session_count" not in channel_stats: channel_stats["session_count"] = 0
-
-            old_watchers = channel_stats["current_watchers"]
-            channel_stats["current_watchers"] = watchers_count
-
-            # Mise à jour du pic si nécessaire
-            if watchers_count > channel_stats["peak_watchers"]:
-                channel_stats["peak_watchers"] = watchers_count
-                channel_stats["peak_time"] = int(time.time())
-
-            # Si le nombre de watchers augmente, c'est une nouvelle session
-            if watchers_count > old_watchers:
-                channel_stats["session_count"] += watchers_count - old_watchers
-
-            # Mise à jour des stats globales
-            # This section recalculates global watchers based on 'current_watchers'
-            # But 'current_watchers' isn't reliably maintained elsewhere.
-            # It's better to calculate global watchers based on active connections/sessions if needed.
-            # For now, commenting out the potentially inaccurate global update.
-
-            # total_current_watchers = sum(
-            #     ch.get("current_watchers", 0) for ch_name, ch in self.stats.items()
-            # )
-            # # Ensure global stats exist
-            # if "global" not in self.stats: # This check might be wrong, global stats are separate
-            #     # self.stats["global"] = { ... } # Initialize if needed, but global stats are in self.global_stats
-            #     logger.warning("Accessing self.stats['global'] which might not be intended structure.")
-
-            # # Access global stats correctly (assuming self.global_stats is the right place)
-            # if not hasattr(self, 'global_stats'): self.global_stats = {} # Initialize if missing
-            # if "total_watchers" not in self.global_stats: self.global_stats["total_watchers"] = 0
-            # if "peak_watchers" not in self.global_stats: self.global_stats["peak_watchers"] = 0
-            # if "peak_time" not in self.global_stats: self.global_stats["peak_time"] = 0
-
-            # self.global_stats["total_watchers"] = total_current_watchers
-
-            # # Mise à jour du pic global si nécessaire
-            # if (
-            #     self.global_stats["total_watchers"]
-            #     > self.global_stats["peak_watchers"]
-            # ):
-            #     self.global_stats["peak_watchers"] = self.global_stats[
-            #         "total_watchers"
-            #     ]
-            #     self.global_stats["peak_time"] = int(time.time())
-
-            # Mise à jour des stats quotidiennes
-            # This also relies on potentially inaccurate global/current watchers.
-            # Daily stats should ideally aggregate watch time and unique viewers from add_watch_time.
-            # Commenting out for now.
-
-            # today = time.strftime("%Y-%m-%d")
-            # # Ensure daily stats structure exists
-            # if not hasattr(self, 'daily_stats'): self.daily_stats = {}
-            # if today not in self.daily_stats:
-            #     self.daily_stats[today] = {
-            #         "peak_watchers": 0,
-            #         "total_watch_time": 0, # This should be aggregated from watch time updates
-            #         "channels": {},
-            #     }
-
-            # daily_stats = self.daily_stats[today]
-
-            # # Mise à jour du pic quotidien (using potentially inaccurate global watchers)
-            # # if self.global_stats.get("total_watchers", 0) > daily_stats.get("peak_watchers", 0):
-            # #     daily_stats["peak_watchers"] = self.global_stats["total_watchers"]
-
-            # # Init des stats de la chaîne pour aujourd'hui
-            # if channel_name not in daily_stats["channels"]:
-            #     daily_stats["channels"][channel_name] = {
-            #         "peak_watchers": 0,
-            #         "total_watch_time": 0, # Should aggregate from watch time
-            #     }
-
-            # # Mise à jour du pic de la chaîne pour aujourd'hui (using potentially inaccurate watchers_count)
-            # daily_channel = daily_stats["channels"][channel_name]
-            # if watchers_count > daily_channel.get("peak_watchers", 0):
-            #     daily_channel["peak_watchers"] = watchers_count
-
-    def update_segment_stats(self, channel_name, segment_id, size):
-        """Met à jour les stats de segments pour une chaîne"""
-        try:
-            with self.lock:
-                # Init des stats pour cette chaîne si nécessaire
-                if channel_name not in self.stats:
-                    logger.warning(f"Attempting to update segment stats for non-existent channel {channel_name}. Skipping.")
-                    return
-
-                # Access channel stats directly
-                channel_data = self.stats[channel_name]
-
-                # Ensure necessary keys exist
-                if "total_segments" not in channel_data: channel_data["total_segments"] = 0
-                if "segment_history" not in channel_data: channel_data["segment_history"] = []
-
-                # Mise à jour du nombre total de segments
-                channel_data["total_segments"] += 1
-
-                # Mise à jour des stats de segments
-                segment_history = channel_data.get("segment_history", [])
-                segment_history.append(
-                    {"segment_id": segment_id, "size": size, "time": int(time.time())}
-                )
-
-                # On garde que les 100 derniers segments pour limiter la taille
-                channel_data["segment_history"] = segment_history[-100:]
-
-        except Exception as e:
-            logger.error(f"❌ Erreur mise à jour stats segments: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-
-    def cleanup_stats(self):
-        logger.info("Début du nettoyage...")
-
-        # Arrêt du StatsCollector
-        if hasattr(self, "stats_collector"):
-            self.stats_collector.stop()
-            logger.info("📊 StatsCollector arrêté")
-
-        # Arrêt du thread d'initialisation
-        self.stop_init_thread.set()
-
-        if hasattr(self, "channel_init_thread") and self.channel_init_thread.is_alive():
-            self.channel_init_thread.join(timeout=5)
-
-        if hasattr(self, "hls_cleaner"):
-            self.hls_cleaner.stop()
-
-        if hasattr(self, "observer"):
-            self.observer.stop()
-            self.observer.join()
-
-        if hasattr(self, "ready_observer"):
-            self.ready_observer.stop()
-            self.ready_observer.join()
-
-        for name, channel in self.channels.items():
-            channel._clean_processes()
-
-        if hasattr(self, "scan_thread_stop"):
-            self.scan_thread_stop.set()
-
-        if hasattr(self, "scan_thread") and self.scan_thread.is_alive():
-            self.scan_thread.join(timeout=5)
-
-        logger.info("Nettoyage terminé")
-
-    def stop(self):
-        """Arrête proprement le thread de sauvegarde"""
-        try:
-            logger.info("🛑 Arrêt du StatsCollector...")
-            self.stop_save_thread.set()
-            if hasattr(self, "save_thread") and self.save_thread.is_alive():
-                self.save_thread.join(timeout=5)  # Attendre max 5 secondes
-            # Dernière sauvegarde avant l'arrêt
-            self.save_stats()
-            self.save_user_stats()
-            logger.info("✅ StatsCollector arrêté proprement")
-        except Exception as e:
-            logger.error(f"❌ Erreur lors de l'arrêt du StatsCollector: {e}")
-
-    def _update_daily_stats(self, channel, ip, duration):
-        """Met à jour les statistiques quotidiennes"""
-        try:
-            # Obtenir la date actuelle
-            today = time.strftime("%Y-%m-%d")
-
-            # Initialiser les stats pour aujourd'hui si nécessaire
-            if today not in self.daily_stats:
-                self.daily_stats[today] = {
-                    "total_watch_time": 0.0,
-                    "unique_viewers": set(),
+                    "total_bytes": 0,
                     "channels": {}
                 }
+            user = self.user_stats[ip]
 
-            # Mise à jour des stats globales pour aujourd'hui
-            daily_stats = self.daily_stats[today]
-            daily_stats["total_watch_time"] += duration
-            daily_stats["unique_viewers"].add(ip)
+            # Mettre à jour last_seen
+            user["last_seen"] = time.time()
 
-            # Initialiser les stats pour ce canal si nécessaire
-            if channel not in daily_stats["channels"]:
-                daily_stats["channels"][channel] = {
-                    "total_watch_time": 0.0,
-                    "unique_viewers": set()
+            # Mettre à jour user_agent si disponible
+            if user_agent and not user.get("user_agent"):
+                user["user_agent"] = user_agent
+
+            # Initialiser stats pour cette chaîne si nécessaire
+            if channel not in user["channels"]:
+                user["channels"][channel] = {
+                    "first_seen": time.time(),
+                    "last_seen": time.time(),
+                    "total_watch_time": 0,
+                    "total_bytes": 0
                 }
+            
+            # Mettre à jour last_seen pour cette chaîne
+            user["channels"][channel]["last_seen"] = time.time()
+            
+            # Mettre à jour les bytes transférés si > 0
+            if bytes_transferred > 0:
+                user["channels"][channel]["total_bytes"] = user["channels"][channel].get("total_bytes", 0) + bytes_transferred
+                user["total_bytes"] = user.get("total_bytes", 0) + bytes_transferred
 
-            # Mise à jour des stats du canal
-            channel_stats = daily_stats["channels"][channel]
-            channel_stats["total_watch_time"] += duration
-            channel_stats["unique_viewers"].add(ip)
+            # Update watch time for this specific channel for this user
+            if bytes_transferred == 0:  # Indique que c'est un segment HLS
+                # Calculer le temps écoulé depuis la dernière mise à jour
+                last_update = user["channels"][channel].get("last_update_time", time.time())
+                time_since_last_update = time.time() - last_update
+                
+                # Si le temps écoulé est significatif, ajuster la durée
+                if time_since_last_update > segment_duration * segment_timeout_multiplier:
+                    # Ajuster la durée pour compenser les segments potentiellement manqués
+                    adjusted_duration = segment_duration * (time_since_last_update / segment_duration)
+                    # Limiter la compensation à 3x la durée normale
+                    max_compensation = segment_duration * 3
+                    segment_duration = min(adjusted_duration, max_compensation)
+                
+                # Mise à jour du temps de visionnage pour l'utilisateur
+                old_time = user["channels"][channel].get("total_watch_time", 0)
+                user["channels"][channel]["total_watch_time"] = old_time + segment_duration
+                user["total_watch_time"] = user.get("total_watch_time", 0) + segment_duration
+                
+                # Mettre à jour le timestamp de la dernière mise à jour
+                user["channels"][channel]["last_update_time"] = time.time()
+                
+                logger.debug(f"⏱️ {ip} sur {channel}: +{segment_duration:.1f}s (total: {user['channels'][channel]['total_watch_time']:.1f}s)")
 
-            # Log pour debug
-            logger.debug(
-                f"📅 Stats quotidiennes mises à jour pour {channel}:\n"
-                f"  - Temps ajouté: {duration:.1f}s\n"
-                f"  - Total canal: {channel_stats['total_watch_time']:.1f}s\n"
-                f"  - Total journalier: {daily_stats['total_watch_time']:.1f}s"
-            )
+            # Vérifier si la chaîne existe dans les stats globales
+            if channel not in self.channel_stats:
+                self.channel_stats[channel] = {
+                    "first_seen": time.time(),
+                    "last_seen": time.time(),
+                    "total_watch_time": 0,
+                    "total_bytes": 0,
+                    "unique_viewers": [ip]
+                }
+            else:
+                # Mettre à jour last_seen
+                self.channel_stats[channel]["last_seen"] = time.time()
+                
+                # Ajouter l'IP à la liste des viewers uniques si elle n'y est pas déjà
+                if ip not in self.channel_stats[channel].get("unique_viewers", []):
+                    if "unique_viewers" not in self.channel_stats[channel]:
+                        self.channel_stats[channel]["unique_viewers"] = []
+                    self.channel_stats[channel]["unique_viewers"].append(ip)
 
+            # Update watch time and byte counts
+            if bytes_transferred == 0:  # Segment HLS
+                old_time = self.channel_stats[channel].get("total_watch_time", 0)
+                self.channel_stats[channel]["total_watch_time"] = old_time + segment_duration
+                self.channel_stats["global"]["total_watch_time"] = self.channel_stats["global"].get("total_watch_time", 0) + segment_duration
+                logger.debug(f"⏱️ Global {channel}: +{segment_duration}s (total: {self.channel_stats[channel]['total_watch_time']}s)")
+            else:
+                self.channel_stats[channel]["total_bytes"] = self.channel_stats[channel].get("total_bytes", 0) + bytes_transferred
+                self.channel_stats["global"]["total_bytes"] = self.channel_stats["global"].get("total_bytes", 0) + bytes_transferred
+                logger.debug(f"📦 {ip} sur {channel}: +{bytes_transferred} bytes (total: {self.channel_stats[channel]['total_bytes']} bytes)")
+                logger.debug(f"📦 Global {channel}: +{bytes_transferred} bytes (total: {self.channel_stats[channel]['total_bytes']} bytes)")
+            
+            # CRUCIAL: Notifier le gestionnaire IPTV ici directement des spectateurs actifs
+            # Cette approche est beaucoup plus fiable que de passer par ClientMonitor
+            if hasattr(self, 'update_watchers_callback') and self.update_watchers_callback:
+                # On sait que cet IP regarde actuellement cette chaîne
+                # Construire la liste des IPs actives pour cette chaîne
+                active_ips = []
+                for viewer_ip, viewer_data in self.user_stats.items():
+                    if isinstance(viewer_ip, str) and isinstance(viewer_data, dict) and "channels" in viewer_data:
+                        if channel in viewer_data["channels"]:
+                            # Considérer un viewer comme actif s'il a été vu dans les 20 dernières secondes
+                            if isinstance(viewer_data["channels"][channel], dict) and "last_seen" in viewer_data["channels"][channel]:
+                                last_seen = viewer_data["channels"][channel]["last_seen"]
+                                if isinstance(last_seen, (int, float)) and time.time() - last_seen < 20:
+                                    active_ips.append(viewer_ip)
+                
+                # Mise à jour immédiate et forcée des spectateurs
+                try:
+                    self.update_watchers_callback(channel, len(active_ips), active_ips, "/hls/", source="stats_collector_direct")
+                    logger.info(f"[{channel}] 👁️ Mise à jour directe via StatsCollector: {len(active_ips)} spectateurs actifs")
+                except Exception as e:
+                    logger.error(f"[{channel}] ❌ Erreur lors de la mise à jour directe des spectateurs: {str(e)}")
+            
+            logger.debug(f"✅ Mise à jour terminée pour {ip} sur {channel}")
+            
         except Exception as e:
-            logger.error(f"❌ Erreur mise à jour stats quotidiennes: {e}")
+            logger.error(f"❌ Erreur d'enregistrement d'activité: {e}")
             import traceback
             logger.error(traceback.format_exc())
 
-    def handle_segment_request(self, channel, ip, line, user_agent):
-        """Gère une requête de segment et met à jour les statistiques"""
-        with self.lock:
-            try:
-                # Identifier le segment
-                segment_match = re.search(r"segment_(\d+)\.ts", line)
-                segment_id = segment_match.group(1) if segment_match else "unknown"
-
-                # Ajouter du temps de visionnage ET mettre à jour user stats (incl. user_agent)
-                segment_duration = HLS_SEGMENT_DURATION  # Utiliser la variable globale au lieu de la valeur codée en dur
-                self.add_watch_time(channel, ip, segment_duration, user_agent)
-                
-                # Mettre à jour les stats de segments
-                self.update_segment_stats(channel, segment_id, 0)  # Taille inconnue pour l'instant
-
-                logger.debug(f"[{channel}] 📊 Segment {segment_id} traité pour {ip}")
-
-            except Exception as e:
-                logger.error(f"❌ Erreur traitement segment: {e}")
-
-    def handle_playlist_request(self, channel, ip, elapsed, user_agent):
-        """Gère une requête de playlist et met à jour les statistiques"""
-        with self.lock:
-            try:
-                # Ajouter du temps de visionnage ET mettre à jour user stats (incl. user_agent)
-                self.add_watch_time(channel, ip, elapsed, user_agent)
-                
-                logger.debug(f"[{channel}] 📊 Playlist traitée pour {ip} ({elapsed:.1f}s)")
-
-            except Exception as e:
-                logger.error(f"❌ Erreur traitement playlist: {e}")
-
-    def handle_channel_change(self, ip, old_channel, new_channel):
-        """Gère un changement de chaîne et met à jour les statistiques"""
-        with self.lock:
-            try:
-                # Mettre à jour les stats de l'ancienne chaîne
-                if old_channel:
-                    self.update_channel_watchers(old_channel, 0)  # Réduire le compteur
-
-                # Mettre à jour les stats de la nouvelle chaîne
-                if new_channel:
-                    self.update_channel_watchers(new_channel, 1)  # Augmenter le compteur
-
-                logger.debug(f"🔄 Changement de chaîne traité: {ip} de {old_channel} vers {new_channel}")
-
-            except Exception as e:
-                logger.error(f"❌ Erreur traitement changement de chaîne: {e}")
-
-    def record_buffer_issue(self, channel_name: str, delay: float, viewers: int):
-        """Enregistre un problème de buffer pour une chaîne"""
+    def handle_channel_change(self, ip, previous_channel, new_channel):
+        """
+        Gère le changement de chaîne pour un utilisateur spécifique.
+        Cette méthode est appelée par ClientMonitor quand un changement de chaîne est détecté.
+        
+        Args:
+            ip: Adresse IP de l'utilisateur qui change de chaîne
+            previous_channel: Nom de la chaîne précédente
+            new_channel: Nom de la nouvelle chaîne
+        """
+        logger.info(f"🔄 StatsCollector: Traitement du changement de chaîne {ip}: {previous_channel} → {new_channel}")
         try:
-            if channel_name not in self.buffer_issues:
-                self.buffer_issues[channel_name] = []
-                
-            # Ajouter l'incident avec timestamp
-            self.buffer_issues[channel_name].append({
-                'timestamp': time.time(),
-                'delay': delay,
-                'viewers': viewers
-            })
+            # Mettre à jour le dictionnaire de suivi des chaînes actives
+            if hasattr(self, 'active_channel_by_ip'):
+                self.active_channel_by_ip[ip] = new_channel
             
-            # Garder seulement les 100 derniers incidents
-            if len(self.buffer_issues[channel_name]) > 100:
-                self.buffer_issues[channel_name].pop(0)
-                
-            # Mettre à jour les métriques de performance
-            if channel_name not in self.performance_metrics:
-                self.performance_metrics[channel_name] = {
-                    'buffer_issues_count': 0,
-                    'avg_buffer_delay': 0,
-                    'max_buffer_delay': 0
+            # Mettre à jour les statistiques pour la nouvelle chaîne
+            if new_channel not in self.channel_stats:
+                self.channel_stats[new_channel] = {
+                    "first_seen": time.time(),
+                    "last_seen": time.time(),
+                    "total_watch_time": 0,
+                    "total_bytes": 0,
+                    "unique_viewers": [ip]
                 }
+            else:
+                # Mettre à jour last_seen
+                self.channel_stats[new_channel]["last_seen"] = time.time()
                 
-            metrics = self.performance_metrics[channel_name]
-            metrics['buffer_issues_count'] += 1
-            metrics['avg_buffer_delay'] = sum(issue['delay'] for issue in self.buffer_issues[channel_name]) / len(self.buffer_issues[channel_name])
-            metrics['max_buffer_delay'] = max(issue['delay'] for issue in self.buffer_issues[channel_name])
+                # Ajouter l'IP à la liste des viewers uniques si elle n'y est pas déjà
+                if "unique_viewers" not in self.channel_stats[new_channel]:
+                    self.channel_stats[new_channel]["unique_viewers"] = []
+                
+                if ip not in self.channel_stats[new_channel]["unique_viewers"]:
+                    self.channel_stats[new_channel]["unique_viewers"].append(ip)
             
-            logger.warning(
-                f"[{channel_name}] 📊 Problème de buffer enregistré: "
-                f"délai={delay:.2f}s, viewers={viewers}"
-            )
+            # Calculer les spectateurs actifs pour la nouvelle chaîne (incluant l'IP actuelle)
+            active_ips_new_channel = []
             
+            # Calculer les spectateurs actifs pour l'ancienne chaîne (sans l'IP actuelle)
+            active_ips_old_channel = []
+            
+            # Parcourir les utilisateurs pour trouver les spectateurs actifs
+            for viewer_ip, viewer_data in self.user_stats.items():
+                if isinstance(viewer_ip, str) and isinstance(viewer_data, dict) and "channels" in viewer_data:
+                    # Pour la nouvelle chaîne
+                    if new_channel in viewer_data["channels"]:
+                        if isinstance(viewer_data["channels"][new_channel], dict) and "last_seen" in viewer_data["channels"][new_channel]:
+                            last_seen = viewer_data["channels"][new_channel]["last_seen"]
+                            if isinstance(last_seen, (int, float)) and time.time() - last_seen < 20:
+                                active_ips_new_channel.append(viewer_ip)
+                    
+                    # Pour l'ancienne chaîne (exclure l'IP qui change)
+                    if viewer_ip != ip and previous_channel in viewer_data["channels"]:
+                        if isinstance(viewer_data["channels"][previous_channel], dict) and "last_seen" in viewer_data["channels"][previous_channel]:
+                            last_seen = viewer_data["channels"][previous_channel]["last_seen"]
+                            if isinstance(last_seen, (int, float)) and time.time() - last_seen < 20:
+                                active_ips_old_channel.append(viewer_ip)
+            
+            # S'assurer que l'IP actuelle est incluse dans la liste des spectateurs de la nouvelle chaîne
+            if ip not in active_ips_new_channel:
+                active_ips_new_channel.append(ip)
+            
+            # Mise à jour des spectateurs pour les deux chaînes via le callback
+            if hasattr(self, 'update_watchers_callback') and self.update_watchers_callback:
+                # Mettre à jour l'ancienne chaîne
+                try:
+                    logger.info(f"[{previous_channel}] 🔄 Mise à jour après changement: {len(active_ips_old_channel)} spectateurs actifs restants")
+                    self.update_watchers_callback(previous_channel, len(active_ips_old_channel), active_ips_old_channel, "/hls/", source="channel_change")
+                except Exception as e:
+                    logger.error(f"[{previous_channel}] ❌ Erreur lors de la mise à jour après changement: {str(e)}")
+                
+                # Mettre à jour la nouvelle chaîne
+                try:
+                    logger.info(f"[{new_channel}] 🔄 Mise à jour après changement: {len(active_ips_new_channel)} spectateurs actifs")
+                    self.update_watchers_callback(new_channel, len(active_ips_new_channel), active_ips_new_channel, "/hls/", source="channel_change")
+                except Exception as e:
+                    logger.error(f"[{new_channel}] ❌ Erreur lors de la mise à jour après changement: {str(e)}")
+                
+                logger.info(f"✅ Changement de chaîne {ip}: {previous_channel} → {new_channel} traité avec succès")
+            else:
+                logger.warning("⚠️ update_watchers_callback non disponible, impossible de mettre à jour les spectateurs")
+                
         except Exception as e:
-            logger.error(f"❌ Erreur enregistrement problème buffer: {e}")
-            
-    def record_latency_issue(self, channel_name: str, latency: float, viewers: int):
-        """Enregistre un problème de latence pour une chaîne"""
-        try:
-            if channel_name not in self.latency_issues:
-                self.latency_issues[channel_name] = []
-                
-            # Ajouter l'incident avec timestamp
-            self.latency_issues[channel_name].append({
-                'timestamp': time.time(),
-                'latency': latency,
-                'viewers': viewers
-            })
-            
-            # Garder seulement les 100 derniers incidents
-            if len(self.latency_issues[channel_name]) > 100:
-                self.latency_issues[channel_name].pop(0)
-                
-            # Mettre à jour les métriques de performance
-            if channel_name not in self.performance_metrics:
-                self.performance_metrics[channel_name] = {
-                    'latency_issues_count': 0,
-                    'avg_latency': 0,
-                    'max_latency': 0
-                }
-                
-            metrics = self.performance_metrics[channel_name]
-            metrics['latency_issues_count'] += 1
-            metrics['avg_latency'] = sum(issue['latency'] for issue in self.latency_issues[channel_name]) / len(self.latency_issues[channel_name])
-            metrics['max_latency'] = max(issue['latency'] for issue in self.latency_issues[channel_name])
-            
-            logger.warning(
-                f"[{channel_name}] 📊 Problème de latence enregistré: "
-                f"latence={latency:.2f}s, viewers={viewers}"
-            )
-            
-        except Exception as e:
-            logger.error(f"❌ Erreur enregistrement problème latence: {e}")
-            
-    def get_performance_metrics(self, channel_name: str = None):
-        """Récupère les métriques de performance pour une chaîne ou toutes les chaînes"""
-        try:
-            if channel_name:
-                return self.performance_metrics.get(channel_name, {})
-            return self.performance_metrics
-        except Exception as e:
-            logger.error(f"❌ Erreur récupération métriques performance: {e}")
-            return {}
+            logger.error(f"❌ Erreur lors du traitement du changement de chaîne: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())

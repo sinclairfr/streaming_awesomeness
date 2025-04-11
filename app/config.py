@@ -24,15 +24,35 @@ FFMPEG_LOGS_DIR = os.getenv("FFMPEG_LOGS_DIR", "/app/logs/ffmpeg")
 USE_GPU = os.getenv("USE_GPU", "false")
 VIDEO_EXTENSIONS = os.getenv("VIDEO_EXTENSIONS", ".mp4,.avi,.mkv,.mov, .m4v").split(",")
 SEGMENT_AGE_THRESHOLD = int(os.getenv("SEGMENT_AGE_THRESHOLD", "120"))
-WATCHERS_LOG_CYCLE = int(os.getenv("WATCHERS_LOG_CYCLE", "300"))  # 5 minutes par défaut
-SUMMARY_CYCLE = int(os.getenv("SUMMARY_CYCLE", "300"))  # 5 minutes par défaut
-CRASH_THRESHOLD = int(os.getenv("CRASH_THRESHOLD", "30"))  # Seuil en secondes pour considérer un crash de stream (augmenté à 30s)
 
 # Durée du segment HLS en secondes - utilisée à la fois par FFmpegCommandBuilder et TimeTracker
-HLS_SEGMENT_DURATION = float(os.getenv("HLS_SEGMENT_DURATION", "5.0"))
+HLS_SEGMENT_DURATION = float(os.getenv("HLS_SEGMENT_DURATION", "2.0"))
 
-# Timeout pour les viewers inactifs (basé sur la durée du segment HLS)
-VIEWER_INACTIVITY_TIMEOUT = float(os.getenv("VIEWER_INACTIVITY_TIMEOUT", str(HLS_SEGMENT_DURATION * 1.2)))
+# Multiplicateur pour le timeout basé sur la durée du segment
+SEGMENT_TIMEOUT_MULTIPLIER = float(os.getenv("SEGMENT_TIMEOUT_MULTIPLIER", "1.2"))
+
+# Timeout par défaut pour les playlists ou en cas de fallback
+DEFAULT_ACTIVITY_TIMEOUT = float(os.getenv("DEFAULT_ACTIVITY_TIMEOUT", "30"))
+
+# Timeout pour considérer un utilisateur comme actif (en secondes)
+ACTIVE_VIEWER_TIMEOUT = int(os.getenv("ACTIVE_VIEWER_TIMEOUT", "20"))
+
+# Configuration des intervalles de mise à jour
+WATCHERS_LOG_CYCLE = int(os.getenv("WATCHERS_LOG_CYCLE", "5"))
+SUMMARY_CYCLE = int(os.getenv("SUMMARY_CYCLE", "60"))
+
+# Configuration des timeouts pour le monitoring des clients
+CLIENT_MONITOR_SEGMENT_TIMEOUT = int(os.getenv("CLIENT_MONITOR_SEGMENT_TIMEOUT", "30"))
+CLIENT_MONITOR_PLAYLIST_TIMEOUT = int(os.getenv("CLIENT_MONITOR_PLAYLIST_TIMEOUT", "20"))
+CLIENT_MONITOR_UNKNOWN_TIMEOUT = int(os.getenv("CLIENT_MONITOR_UNKNOWN_TIMEOUT", "25"))
+
+# On configure le stream
+STREAM_SEGMENT_TIMEOUT = int(os.getenv('STREAM_SEGMENT_TIMEOUT', '45'))
+STREAM_ERROR_THRESHOLD = int(os.getenv('STREAM_ERROR_THRESHOLD', '15'))
+STREAM_RESTART_DELAY = int(os.getenv('STREAM_RESTART_DELAY', '30'))
+STREAM_INITIAL_DELAY = int(os.getenv('STREAM_INITIAL_DELAY', '30'))
+STREAM_START_TIMEOUT = int(os.getenv('STREAM_START_TIMEOUT', '15'))
+CRASH_THRESHOLD = int(os.getenv('CRASH_THRESHOLD', '120'))  # Seuil en secondes pour considérer un crash de stream
 
 def get_log_level(level_str: str) -> int:
     """Convertit un niveau de log en string vers sa valeur numérique"""

@@ -12,52 +12,30 @@ import time
 
 # Chemin vers les fichiers de statistiques
 STATS_DIR = "/app/stats"
-USER_STATS_FILE = os.path.join(STATS_DIR, "user_stats.json")
-CHANNEL_STATS_FILE = os.path.join(STATS_DIR, "channel_stats.json")
+USER_STATS_FILE = os.path.join(STATS_DIR, "user_stats_bytes.json")
+CHANNEL_STATS_FILE = os.path.join(STATS_DIR, "channel_stats_bytes.json")
 CHANNELS_STATUS_FILE = os.path.join(STATS_DIR, "channels_status.json")
 
 def load_stats():
-    """Charge et nettoie les données de statistiques"""
-    # Charger les statistiques des chaînes
-    with open(CHANNEL_STATS_FILE, 'r') as f:
-        channel_stats = json.load(f)
-    
-    # Charger les statistiques utilisateurs
-    with open(USER_STATS_FILE, 'r') as f:
-        user_stats = json.load(f)
-    
-    # Fonction récursive pour extraire tous les utilisateurs
-    def extract_users(data, result=None):
-        if result is None:
-            result = {}
-        
-        if not isinstance(data, dict):
-            return result
+    """Charge les données de statistiques depuis les fichiers bytes"""
+    try:
+        # Load channel stats
+        with open(CHANNEL_STATS_FILE, 'r') as f:
+            channel_stats = json.load(f)
             
-        for key, value in data.items():
-            if key != "last_updated" and isinstance(value, dict):
-                if "total_watch_time" in value:
-                    # Ce semble être une entrée utilisateur
-                    result[key] = value
-                else:
-                    # Récursion sur la structure imbriquée
-                    extract_users(value, result)
-        
-        return result
-    
-    # Extraire tous les utilisateurs réels quelle que soit la profondeur d'imbrication
-    all_users = {}
-    
-    if "users" in user_stats:
-        all_users = extract_users(user_stats["users"], {})
-    
-    # Créer une structure correcte
-    cleaned_user_stats = {
-        "users": all_users,
-        "last_updated": user_stats.get("last_updated", 0)
-    }
-    
-    return channel_stats, cleaned_user_stats
+        # Load user stats
+        with open(USER_STATS_FILE, 'r') as f:
+            user_stats = json.load(f)
+            
+        print(f"Stats loaded: {len(channel_stats.get('global', {}).get('unique_viewers', []))} users, {len(channel_stats) -1} channels")
+        return channel_stats, user_stats
+    except Exception as e:
+        print(f"Error loading stats: {e}")
+        # Return empty stats
+        channel_stats = {"global": {"total_watch_time": 0, "total_bytes_transferred": 0, "unique_viewers": [], "last_update": 0}}
+        user_stats = {"users": {}, "last_updated": 0}
+        return channel_stats, user_stats
+
 def create_user_activity_df(user_stats):
     """Crée un DataFrame des activités utilisateur avec meilleure détection des chaînes favorites"""
     data = []
@@ -68,23 +46,16 @@ def create_user_activity_df(user_stats):
         
         # Détecter la chaîne favorite (plus complexe pour gérer différentes structures)
         favorite_channel = None
+        max_time = 0
         
         # Si channels est disponible, parcourir chaque chaîne
         if "channels" in user_data and isinstance(user_data["channels"], dict):
-            # Structure normale - chercher le marqueur "favorite"
+            # Trouver la chaîne avec le plus de temps de visionnage
             for channel, channel_data in user_data["channels"].items():
-                if channel_data.get("favorite", False):
+                channel_time = channel_data.get("total_watch_time", 0)
+                if channel_time > max_time:
+                    max_time = channel_time
                     favorite_channel = channel
-                    break
-                
-            # Si aucun marqueur trouvé, utiliser celle avec le plus de temps
-            if not favorite_channel:
-                max_time = 0
-                for channel, channel_data in user_data["channels"].items():
-                    channel_time = channel_data.get("total_watch_time", 0)
-                    if channel_time > max_time:
-                        max_time = channel_time
-                        favorite_channel = channel
             
             # Ajout des données par chaîne
             for channel, channel_data in user_data["channels"].items():
@@ -96,28 +67,6 @@ def create_user_activity_df(user_stats):
                     "favorite": is_favorite,
                     "last_seen": datetime.fromtimestamp(channel_data.get("last_seen", 0)),
                 })
-        else:
-            # Utiliser channels_watched si disponible
-            channels = []
-            if "channels_watched" in user_data:
-                if isinstance(user_data["channels_watched"], list):
-                    channels = user_data["channels_watched"]
-                elif isinstance(user_data["channels_watched"], set):
-                    channels = list(user_data["channels_watched"])
-            
-            # Si au moins une chaîne, la première est considérée comme favorite (approximation)
-            if channels:
-                favorite_channel = channels[0]
-                time_per_channel = total_time / len(channels)
-                
-                for i, channel in enumerate(channels):
-                    data.append({
-                        "ip": ip,
-                        "channel": channel,
-                        "watch_time": time_per_channel,
-                        "favorite": (i == 0),  # Première chaîne = favorite
-                        "last_seen": datetime.fromtimestamp(user_data.get("last_seen", 0)),
-                    })
     
     return pd.DataFrame(data)
 
@@ -125,7 +74,11 @@ def create_channel_stats_df(channel_stats):
     """Crée un DataFrame des statistiques par chaîne"""
     data = []
     
-    for channel, stats in channel_stats.get("channels", {}).items():
+    # Parcourir toutes les chaînes sauf "global"
+    for channel, stats in channel_stats.items():
+        if channel == "global":
+            continue
+            
         viewers = len(stats.get("unique_viewers", []))
         watch_time = stats.get("total_watch_time", 0)
         data.append({
@@ -271,8 +224,8 @@ def update_dashboard(n):
     
     # 1. Statistiques globales
     total_watch_time = channel_stats.get("global", {}).get("total_watch_time", 0)
-    unique_viewers = len(channel_stats.get("global", {}).get("unique_viewers", []))
-    total_channels = len(channel_stats.get("channels", {}))
+    unique_users = len(channel_stats.get("global", {}).get("unique_viewers", []))
+    total_channels = len(channel_stats) - 1  # -1 pour exclure "global"
     
     global_stats = html.Div([
         html.Div([
@@ -280,8 +233,8 @@ def update_dashboard(n):
             html.P("Temps Total de Visionnage")
         ], className="stat-box"),
         html.Div([
-            html.H3(str(unique_viewers)),
-            html.P("Spectateurs Uniques")
+            html.H3(str(unique_users)),
+            html.P("Utilisateurs Uniques")
         ], className="stat-box"),
         html.Div([
             html.H3(str(total_channels)),
@@ -344,11 +297,13 @@ def update_dashboard(n):
         
         # Trouver la chaîne favorite
         favorite_channel = "Inconnue"
+        max_time = 0
         if "channels" in user_data:
             for channel, data in user_data["channels"].items():
-                if data.get("favorite", False):
+                channel_time = data.get("total_watch_time", 0)
+                if channel_time > max_time:
+                    max_time = channel_time
                     favorite_channel = channel
-                    break
         
         user_details.append(html.Div([
             html.H3(f"Utilisateur: {ip}"),

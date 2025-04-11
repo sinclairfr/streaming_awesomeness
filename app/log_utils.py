@@ -4,111 +4,68 @@ Module d'utilitaires pour le traitement des logs
 import re
 from config import logger
 
+# Regexp compilées pour améliorer les performances 
+IP_PATTERN = re.compile(r'^(\d{1,3}\.){3}\d{1,3}$')
+USER_AGENT_PATTERN = re.compile(r'"([^"]*)"$')
+STATUS_CODE_PATTERN = re.compile(r'" (\d{3}) ')
+PATH_PATTERN = re.compile(r'"(?:GET|HEAD) ([^"]*) HTTP')
+CHANNEL_PATTERN = re.compile(r'/hls/([^/]+)/')
+
 def parse_access_log(line):
     """
     Parse une ligne de log nginx pour extraire les informations pertinentes
+    VERSION ULTRA-SIMPLIFIÉE: ne traite QUE les segments réussis (HTTP 200)
     
     Args:
         line (str): Ligne de log au format nginx
     
     Returns:
-        tuple: (ip, channel, request_type, is_valid, path_or_user_agent)
+        tuple: (ip, channel, request_type, is_valid, path, user_agent)
             - ip: L'adresse IP du client
             - channel: Le nom de la chaîne
-            - request_type: Le type de requête (playlist, segment, unknown)
+            - request_type: Le type de requête (toujours "segment" dans cette version)
             - is_valid: Booléen indiquant si la requête est valide
-            - path_or_user_agent: Le chemin ou l'user agent selon le contexte d'appel
+            - path: Le chemin de la requête
+            - user_agent: User agent du client
     """
-    # Log détaillé pour déboguer le traitement des lignes
-    logger.debug(f"PARSE_LOG: {line[:100]}...")
+    # On part du principe que seules les requêtes 200+segment arrivent ici
+    # car le filtre initial a déjà été appliqué dans _process_line
     
-    # Si pas de /hls/ dans la ligne, on ignore direct
-    if "/hls/" not in line:
-        return None, None, None, False, None
-
-    # On récupère l'utilisateur agent si possible
-    user_agent = None
-    user_agent_match = re.search(r'"([^"]*)"$', line)
-    if user_agent_match:
-        user_agent = user_agent_match.group(1)
-
-    # Si pas un GET ou un HEAD, on ignore
-    if not ("GET /hls/" in line or "HEAD /hls/" in line):
-        return None, None, None, False, None
-
-    # Extraction IP (en début de ligne)
+    # Essayer d'extraire l'adresse IP (premier élément de la ligne)
     parts = line.split(" ")
     if len(parts) < 1:
-        logger.warning("⚠️ Ligne de log invalide - pas assez de parties")
-        return None, None, None, False, None
-
+        return None, None, None, False, None, None
+    
     ip = parts[0]
+    # Vérification rapide de l'IP
+    if not IP_PATTERN.match(ip):
+        return None, None, None, False, None, None
     
-    # Validation plus stricte de l'IP avec une regex plus robuste
-    ip_pattern = r'^(\d{1,3}\.){3}\d{1,3}$'
-    if not re.match(ip_pattern, ip):
-        logger.warning(f"⚠️ Format IP invalide: {ip}")
-        return None, None, None, False, None
-        
-    # Vérification que chaque partie est un nombre valide
-    try:
-        ip_parts = ip.split('.')
-        if not all(0 <= int(part) <= 255 for part in ip_parts):
-            logger.warning(f"⚠️ Valeurs IP hors limites: {ip}")
-            return None, None, None, False, None
-    except ValueError:
-        logger.warning(f"⚠️ IP contient des valeurs non numériques: {ip}")
-        return None, None, None, False, None
-
-    # Extraction du code HTTP
-    status_code = "???"
-    status_match = re.search(r'" (\d{3}) ', line)
-    if status_match:
-        status_code = status_match.group(1)
-
-    # Extraction du canal spécifique
-    channel = None
-    request_type = None
-    path = None
-
-    # Récupérer le chemin complet
-    path_match = re.search(r'"(?:GET|HEAD) ([^"]*) HTTP', line)
-    if path_match:
-        path = path_match.group(1)
-
-    # Format attendu: /hls/CHANNEL/...
-    channel_match = re.search(r'/hls/([^/]+)/', line)
-    if channel_match:
-        channel = channel_match.group(1)
-        # Ne pas valider le nom de la chaîne comme une IP
-        if re.match(ip_pattern, channel):
-            logger.warning(f"⚠️ Nom de chaîne ressemble à une IP: {channel}")
-            return None, None, None, False, None
-            
-        # Type de requête
-        request_type = (
-            "playlist"
-            if ".m3u8" in line
-            else "segment" if ".ts" in line else "unknown"
-        )
-        logger.debug(f"📋 Détecté accès {request_type} pour {channel} par {ip}")
-
-    # Validité - note que 404 est valide pour le suivi même si le contenu n'existe pas
-    is_valid = status_code in [
-        "200",
-        "206",
-        "304",  # Ajouter le code 304 (Not Modified) pour les requêtes de mise en cache
-        "404",
-    ]
+    # Extraction du chemin de la requête
+    path_match = PATH_PATTERN.search(line)
+    if not path_match:
+        return None, None, None, False, None, None
     
-    # Log de debug pour les codes 304
-    if status_code == "304" and is_valid:
-        logger.debug(f"✅ Requête 304 validée: {channel} par {ip} - {request_type}")
+    path = path_match.group(1)
+    # Vérification que c'est bien un segment .ts
+    if "segment" not in path or ".ts" not in path:
+        return None, None, None, False, None, None
     
-    # Log détaillé du résultat du parsing
-    logger.debug(f"PARSE_RESULT: ip={ip}, channel={channel}, type={request_type}, valid={is_valid}, code={status_code}")
-
-    # Pour IPTVManager, on retourne le chemin, pour ClientMonitor, on retourne l'user agent
-    return_value = path if path else user_agent
+    # Extraction du canal
+    channel_match = CHANNEL_PATTERN.search(line)
+    if not channel_match:
+        return None, None, None, False, None, None
     
-    return ip, channel, request_type, is_valid, return_value 
+    channel = channel_match.group(1)
+    # Vérifier que le canal n'est pas une IP (sécurité)
+    if IP_PATTERN.match(channel) or channel == "master_playlist":
+        return None, None, None, False, None, None
+    
+    # Extraction du user-agent (optionnel)
+    user_agent = None
+    user_agent_match = USER_AGENT_PATTERN.search(line)
+    if user_agent_match:
+        user_agent = user_agent_match.group(1)
+    
+    # La ligne a passé tous les filtres : c'est un segment valide
+    return ip, channel, "segment", True, path, user_agent 

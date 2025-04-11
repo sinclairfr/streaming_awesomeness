@@ -21,45 +21,36 @@ class ChannelStatusManager:
         """Initialize the channel status manager"""
         self.status_file = status_file
         self.channels = {}
-        self.last_updated = int(time.time())
+        self.last_updated = 0
         self.active_viewers = 0
         self._lock = threading.Lock()
         self._save_lock = threading.Lock()
         self.update_interval = 10
+        
+        # Debounce mechanism for rapid channel switching
+        self._save_timer = None
+        self._pending_save = False
+        self._debounce_interval = 0.8  # Wait 800ms before writing file
+        self._last_update_time = 0
+        self._rapid_switches_count = 0
         
         # Ensure directory exists and has proper permissions
         stats_dir = os.path.dirname(status_file)
         os.makedirs(stats_dir, exist_ok=True)
         os.chmod(stats_dir, 0o777)
         
-        # Load existing status if file exists
-        if os.path.exists(status_file):
-            try:
-                with open(status_file, 'r') as f:
-                    data = json.load(f)
-                    self.channels = data.get('channels', {})
-                    self.last_updated = data.get('last_updated', int(time.time()))
-                    self.active_viewers = data.get('active_viewers', 0)
-                logger.info(f"Loaded existing channel status data with {len(self.channels)} channels")
-            except Exception as e:
-                logger.error(f"Error loading channel status: {e}")
-                # Reset to default values
-                self.channels = {}
-                self.last_updated = int(time.time())
-                self.active_viewers = 0
-        else:
-            # Create initial status file
-            try:
-                with open(status_file, 'w') as f:
-                    json.dump({
-                        'channels': {},
-                        'last_updated': int(time.time()),
-                        'active_viewers': 0
-                    }, f, indent=2)
-                os.chmod(status_file, 0o666)
-                logger.info("Created initial channel status file")
-            except Exception as e:
-                logger.error(f"Error creating initial channel status file: {e}")
+        # Create initial status file
+        try:
+            with open(status_file, 'w') as f:
+                json.dump({
+                    'channels': {},
+                    'last_updated': 0,
+                    'active_viewers': 0
+                }, f, indent=2)
+            os.chmod(status_file, 0o666)
+            logger.info("Created initial channel status file")
+        except Exception as e:
+            logger.error(f"Error creating initial channel status file: {e}")
         
         logger.info(f"ChannelStatusManager initialized, status file: {status_file}")
         
@@ -71,170 +62,235 @@ class ChannelStatusManager:
     def _load_status(self):
         """Load channel status from file if it exists"""
         try:
-            if os.path.exists(self.status_file):
-                with open(self.status_file, 'r') as f:
-                    data = json.load(f)
-                    self.channels = data.get('channels', {})
-                    self.last_updated = data.get('last_updated', 0)
-                    self.active_viewers = data.get('active_viewers', 0)
-                logger.info(f"Loaded existing channel status data with {len(self.channels)} channels")
-            else:
-                # Create empty status file
-                self._save_status()
-                logger.info("Created new channel status file")
+            # Create empty status file
+            self._save_status()
+            logger.info("Created new channel status file")
         except Exception as e:
             logger.error(f"Error loading status file: {e}")
     
     def _save_status(self):
         """Save current status to file using atomic write"""
         with self._save_lock:
+            # Cancel any pending timer
+            if self._save_timer:
+                self._save_timer.cancel()
+                self._save_timer = None
+            
             try:
-                logger.info(f"🔄 Saving status to {self.status_file}")
-                
-                # Ensure directory exists and has proper permissions
-                stats_dir = os.path.dirname(self.status_file)
-                os.makedirs(stats_dir, exist_ok=True)
-                try:
-                    os.chmod(stats_dir, 0o777)
-                except Exception as chmod_err:
-                    logger.warning(f"Could not chmod stats dir {stats_dir}: {chmod_err}")
-                
-                # Format the data to ensure consistency
-                formatted_channels = {}
-                for channel_id, channel_data in self.channels.items():
-                    # Convert old format to new format if needed
-                    is_live = channel_data.get('is_live', channel_data.get('active', False))
-                    viewers = channel_data.get('viewers', 0)
-                    watchers = channel_data.get('watchers', [])
-                    
-                    formatted_channels[channel_id] = {
-                        'is_live': is_live,
-                        'viewers': viewers,
-                        'watchers': watchers,
-                        'last_updated': channel_data.get('last_updated', datetime.now().isoformat())
-                    }
-                
-                # Calculate total active viewers
-                total_viewers = sum(ch.get('viewers', 0) for ch in formatted_channels.values())
-                
-                # Prepare the complete content
-                content_to_save = {
-                    'channels': formatted_channels,
-                    'last_updated': int(time.time()),
-                    'active_viewers': total_viewers
-                }
-                
-                # Log active channels
-                active_channels = [ch_id for ch_id, ch_data in formatted_channels.items() if ch_data.get('viewers', 0) > 0]
-                if active_channels:
-                    logger.info(f"🔄 Status update with {len(active_channels)} active channels: {', '.join(active_channels)}")
-                    
-                # Use a temporary file for atomic write
+                # Create a temporary file
                 temp_file = f"{self.status_file}.tmp"
+                
+                # Write to temporary file
+                with open(temp_file, 'w') as f:
+                    json.dump({
+                        'channels': self.channels,
+                        'last_updated': int(time.time()),
+                        'active_viewers': self.active_viewers
+                    }, f, indent=2)
+                
+                # Atomic replace
+                os.replace(temp_file, self.status_file)
+                
+                # Ensure permissions
                 try:
-                    with open(temp_file, 'w') as f:
-                        json.dump(content_to_save, f, indent=2)
-                        f.flush()
-                        os.fsync(f.fileno())
-                    
-                    # Check if temp file was written correctly
-                    if not os.path.exists(temp_file):
-                        logger.error("❌ Temp file not created during save")
-                        return False
-                        
-                    if os.path.getsize(temp_file) == 0:
-                        logger.error("❌ Temp file is empty after write")
-                        return False
-                    
-                    # Atomic rename (more reliable than direct write)
-                    os.replace(temp_file, self.status_file)
-                    
-                    # Set file permissions
-                    try:
-                        os.chmod(self.status_file, 0o666)
-                    except Exception as chmod_err:
-                        logger.warning(f"Could not chmod status file {self.status_file}: {chmod_err}")
-                    
-                    logger.info(f"✅ Status saved successfully to {self.status_file}")
-                    return True
-                    
-                except Exception as write_err:
-                    logger.error(f"❌ Error writing to temp file {temp_file}: {write_err}")
-                    # Try direct write as fallback
-                    try:
-                        with open(self.status_file, 'w') as f:
-                            json.dump(content_to_save, f, indent=2)
-                        logger.info("✅ Status saved directly (fallback method)")
-                        return True
-                    except Exception as direct_err:
-                        logger.error(f"❌ Error in fallback direct write: {direct_err}")
-                        return False
-                    
+                    os.chmod(self.status_file, 0o666)
+                except Exception as e:
+                    logger.warning(f"Could not chmod status file: {e}")
+                
+                logger.info(f"✅ Status saved: {len(self.channels)} channels, {self.active_viewers} active viewers")
+                return True
+                
             except Exception as e:
-                logger.error(f"❌ Error saving status: {e}")
+                logger.error(f"❌ Error saving status file: {e}")
                 import traceback
                 logger.error(traceback.format_exc())
                 return False
     
-    def update_channel(self, channel_id: str, data: Dict[str, Any]) -> bool:
-        """Update a single channel's status"""
+    def _debounced_save(self):
+        """Schedule a save operation with debouncing for rapid updates"""
+        # Cancel any pending timer
+        if self._save_timer:
+            self._save_timer.cancel()
+            self._save_timer = None
+            
+        # Mark that we have a pending save
+        self._pending_save = True
+        
+        # Check if we're in rapid switching mode
+        current_time = time.time()
+        time_since_last_update = current_time - self._last_update_time
+        self._last_update_time = current_time
+        
+        # If updates are happening rapidly (less than 1.5 seconds apart), adjust the debounce interval
+        if time_since_last_update < 1.5:
+            self._rapid_switches_count += 1
+            # Increase debounce time for rapid switching (up to 2 seconds max)
+            debounce_time = min(2.0, self._debounce_interval + (self._rapid_switches_count * 0.2))
+            logger.debug(f"🚀 Rapid channel switching detected ({self._rapid_switches_count}x) - Increasing debounce to {debounce_time:.1f}s")
+        else:
+            # Reset to normal debounce when switching slows down
+            self._rapid_switches_count = 0
+            debounce_time = self._debounce_interval
+        
+        # Schedule a new timer with the appropriate delay
+        self._save_timer = threading.Timer(debounce_time, self._execute_save)
+        self._save_timer.daemon = True
+        self._save_timer.start()
+        
+    def _execute_save(self):
+        """Execute the actual save operation after debounce delay"""
         try:
+            # Don't acquire self._save_lock here - _save_status does it internally
+            if self._pending_save:
+                success = self._save_status()
+                if not success:
+                    logger.warning("❌ Failed to save status file after debounce - will retry later")
+                    # Try again after a short delay
+                    self._save_timer = threading.Timer(2.0, self._execute_save)
+                    self._save_timer.daemon = True
+                    self._save_timer.start()
+        except Exception as e:
+            logger.error(f"❌ Error in _execute_save: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+    
+    def update_channel(self, channel_id: str, data: Dict[str, Any], force_save: bool = False) -> bool:
+        """
+        Update a single channel's status
+        
+        Args:
+            channel_id: Channel identifier
+            data: Channel data to update
+            force_save: If True, save immediately instead of using debounce
+        
+        Returns:
+            bool: Success status
+        """
+        try:
+            # Check if we should update the channel
             with self._lock:
-                # Get current data
-                current_data = self.channels.get(channel_id, {})
+                # Get the existing data or create it
+                if channel_id not in self.channels:
+                    self.channels[channel_id] = {}
                 
-                # Log current and new watchers
-                current_watchers = current_data.get('watchers', [])
-                new_watchers = data.get('watchers', [])
+                # Check if this is a meaningful update (viewers changed, etc)
+                current_data = self.channels[channel_id]
+                viewers_changed = ("viewers" in data and data["viewers"] != current_data.get("viewers", 0))
+                watchers_changed = ("watchers" in data and set(data["watchers"]) != set(current_data.get("watchers", [])))
                 
-                # Identifier les viewers retirés
-                removed_viewers = set(current_watchers) - set(new_watchers)
-                if removed_viewers:
-                    logger.info(f"🧹 Viewers retirés du fichier status pour {channel_id}: {list(removed_viewers)}")
+                # TOUJOURS mettre à jour le statut du canal, même si les viewers n'ont pas changé
+                # C'est essentiel pour maintenir la synchronisation avec les logs Nginx
+                # Set needs_update to True to always update
+                needs_update = True
                 
-                # Identifier les viewers ajoutés (pour le debug)
-                added_viewers = set(new_watchers) - set(current_watchers)
-                if added_viewers:
-                    logger.debug(f"➕ Nouveaux viewers pour {channel_id}: {list(added_viewers)}")
+                logger.debug(f"Channel {channel_id} - Updating status (viewers changed: {viewers_changed}, watchers changed: {watchers_changed})")
+                # Update the data explicitly, prioritizing keys from 'data'
+                # Get the existing data or an empty dict
+                updated_channel_data = self.channels.get(channel_id, {}).copy()
                 
-                logger.debug(f"Channel {channel_id} - Current watchers: {current_watchers}, New watchers: {new_watchers}")
-                
-                # Forcer une mise à jour si viewers ont changé, même si d'autres champs sont identiques
-                viewers_changed = len(removed_viewers) > 0 or len(added_viewers) > 0
-                
-                # Check if we need to update
-                needs_update = viewers_changed
-                if not needs_update:
-                    for key, value in data.items():
-                        if current_data.get(key) != value:
-                            needs_update = True
-                            logger.debug(f"Channel {channel_id} - Field {key} changed from {current_data.get(key)} to {value}")
-                            break
-                
-                if needs_update or viewers_changed:
-                    logger.debug(f"Channel {channel_id} - Updating status (viewers changed: {viewers_changed})")
-                    # Update the data explicitly, prioritizing keys from 'data'
-                    # Get the existing data or an empty dict
-                    updated_channel_data = self.channels.get(channel_id, {}).copy()
+                # Update with keys from the new 'data' dict
+                for key, value in data.items():
+                    updated_channel_data[key] = value
                     
-                    # Update with keys from the new 'data' dict
-                    for key, value in data.items():
-                        updated_channel_data[key] = value
-                        
-                    # Always update the timestamp
-                    updated_channel_data['last_updated'] = datetime.now().isoformat()
-                    
-                    # Assign the updated dictionary back
-                    self.channels[channel_id] = updated_channel_data
-                    
-                    # Call save status
-                    return self._save_status()
+                # Always update the timestamp
+                updated_channel_data['last_updated'] = datetime.now().isoformat()
+                
+                # Corriger les valeurs incohérentes
+                if 'watchers' in updated_channel_data and 'viewers' in updated_channel_data:
+                    # S'assurer que le nombre de spectateurs correspond à la liste des watchers
+                    watchers_count = len(updated_channel_data['watchers'])
+                    if updated_channel_data['viewers'] != watchers_count:
+                        logger.debug(f"[{channel_id}] Correction du nombre de viewers: {updated_channel_data['viewers']} → {watchers_count}")
+                        updated_channel_data['viewers'] = watchers_count
+                
+                # Assign the updated dictionary back
+                self.channels[channel_id] = updated_channel_data
+                
+                # Use debounced save or immediate save based on force_save parameter
+                if force_save:
+                    # Save immediately without debounce
+                    success = self._save_status()
+                    if success:
+                        logger.info(f"[{channel_id}] ✅ Sauvegarde immédiate forcée réussie")
+                    else:
+                        logger.warning(f"[{channel_id}] ⚠️ Échec de la sauvegarde immédiate forcée")
                 else:
-                    logger.debug(f"No changes needed for channel {channel_id}")
-                    return True
+                    # Use normal debounced save
+                    self._debounced_save()
+                return True
                     
         except Exception as e:
             logger.error(f"Error updating channel {channel_id}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return False
+    
+    def switch_to_channel(self, new_active_channel: str, viewer_ip: str):
+        """
+        Optimized method for channel zapping - marks one channel as active and all others as inactive.
+        This is faster than calling update_channel multiple times.
+        """
+        try:
+            with self._lock:
+                channels_updated = False
+                logger.info(f"🔀 Switching to channel: {new_active_channel} for viewer: {viewer_ip}")
+                
+                # First, check if this viewer is already watching this channel
+                current_watchers = self.channels.get(new_active_channel, {}).get('watchers', [])
+                if viewer_ip in current_watchers:
+                    logger.debug(f"Viewer {viewer_ip} already watching {new_active_channel} - no change needed")
+                    return True
+                
+                # Need to find which channel this viewer was watching before (if any)
+                previous_channel = None
+                for channel_id, channel_data in self.channels.items():
+                    if channel_id == new_active_channel:
+                        continue
+                        
+                    watchers = channel_data.get('watchers', [])
+                    if viewer_ip in watchers:
+                        previous_channel = channel_id
+                        # Remove viewer from previous channel
+                        watchers.remove(viewer_ip)
+                        channel_data['watchers'] = watchers
+                        channel_data['viewers'] = len(watchers)
+                        channel_data['last_updated'] = datetime.now().isoformat()
+                        channels_updated = True
+                        logger.debug(f"Removed viewer {viewer_ip} from previous channel {previous_channel}")
+                
+                # Now add viewer to the new channel
+                if new_active_channel not in self.channels:
+                    self.channels[new_active_channel] = {
+                        'is_live': True,
+                        'viewers': 1,
+                        'watchers': [viewer_ip],
+                        'last_updated': datetime.now().isoformat()
+                    }
+                    channels_updated = True
+                else:
+                    channel_data = self.channels[new_active_channel]
+                    watchers = channel_data.get('watchers', [])
+                    if viewer_ip not in watchers:
+                        watchers.append(viewer_ip)
+                        channel_data['watchers'] = watchers
+                        channel_data['viewers'] = len(watchers)
+                        channel_data['is_live'] = True
+                        channel_data['last_updated'] = datetime.now().isoformat()
+                        channels_updated = True
+                
+                if channels_updated:
+                    # Schedule a save with appropriate debouncing
+                    self._debounced_save()
+                    
+                    if previous_channel:
+                        logger.info(f"✅ Viewer {viewer_ip} switched from {previous_channel} to {new_active_channel}")
+                    else:
+                        logger.info(f"✅ Viewer {viewer_ip} started watching {new_active_channel}")
+                    
+                return True
+                
+        except Exception as e:
+            logger.error(f"❌ Error in switch_to_channel: {e}")
             import traceback
             logger.error(traceback.format_exc())
             return False
@@ -261,13 +317,10 @@ class ChannelStatusManager:
                         'last_updated': datetime.now().isoformat()
                     }
                 
-                # Save the updated status
-                if self._save_status():
-                    logger.debug("✅ Statut de toutes les chaînes mis à jour avec succès")
-                    return True
-                else:
-                    logger.error("❌ Échec de la sauvegarde du statut des chaînes")
-                    return False
+                # Use debounced save for update_all_channels too
+                self._debounced_save()
+                logger.debug("✅ Statut de toutes les chaînes mis à jour avec succès")
+                return True
                     
         except Exception as e:
             logger.error(f"❌ Erreur lors de la mise à jour de toutes les chaînes: {e}")
@@ -297,8 +350,15 @@ class ChannelStatusManager:
         if self.update_thread.is_alive():
             self.update_thread.join(timeout=5)
         
-        # Final save
-        self._save_status()
+        # Cancel any pending save timer
+        if self._save_timer:
+            self._save_timer.cancel()
+            self._save_timer = None
+            
+        # Final save - use direct save to ensure data is written
+        if self._pending_save:
+            self._save_status()
+            
         logger.info("Channel status manager stopped")
 
     def flush_all_viewers(self) -> bool:

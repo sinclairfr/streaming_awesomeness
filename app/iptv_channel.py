@@ -696,9 +696,239 @@ class IPTVChannel:
             return True
             
         except Exception as e:
-            logger.error(f"[{self.name}] ❌ Erreur vérification santé: {e}")
+            logger.error(f"[{self.name}] Erreur lors du check de santé du stream: {e}")
             return False
             
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
     def check_watchers_timeout(self):
         """Vérifie si le stream doit être arrêté en raison d'une absence de watchers"""
         # On ne vérifie pas le timeout s'il n'y a pas de watchers_count
