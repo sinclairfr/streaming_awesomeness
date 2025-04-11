@@ -33,6 +33,7 @@ class ChannelStatusManager:
         self._debounce_interval = 0.8  # Wait 800ms before writing file
         self._last_update_time = 0
         self._rapid_switches_count = 0
+        self._channels_initialized = False  # New flag to track if channels are initialized
         
         # Ensure directory exists and has proper permissions
         stats_dir = os.path.dirname(status_file)
@@ -122,13 +123,13 @@ class ChannelStatusManager:
         # Mark that we have a pending save
         self._pending_save = True
         
-        # Check if we're in rapid switching mode
+        # Check if we're in rapid switching mode - only if channels are initialized
         current_time = time.time()
         time_since_last_update = current_time - self._last_update_time
         self._last_update_time = current_time
         
-        # If updates are happening rapidly (less than 1.5 seconds apart), adjust the debounce interval
-        if time_since_last_update < 1.5:
+        # If updates are happening rapidly and channels are initialized
+        if self._channels_initialized and time_since_last_update < 1.5:
             self._rapid_switches_count += 1
             # Increase debounce time for rapid switching (up to 2 seconds max)
             debounce_time = min(2.0, self._debounce_interval + (self._rapid_switches_count * 0.2))
@@ -173,6 +174,23 @@ class ChannelStatusManager:
             bool: Success status
         """
         try:
+            # Skip rapid switch detection if channels aren't initialized yet
+            if not self._channels_initialized:
+                # Check if this update contains actual viewer data
+                has_viewers = "viewers" in data or "watchers" in data
+                if has_viewers:
+                    self._channels_initialized = True
+                    logger.info("🚀 First viewer activity detected, channel status tracking activated")
+                else:
+                    # For non-viewer updates before initialization, just update without debounce
+                    with self._lock:
+                        if channel_id not in self.channels:
+                            self.channels[channel_id] = {}
+                        self.channels[channel_id].update(data)
+                        if force_save:
+                            self._save_status()
+                    return True
+
             # Check if we should update the channel
             with self._lock:
                 # Get the existing data or create it
@@ -189,7 +207,9 @@ class ChannelStatusManager:
                 # Set needs_update to True to always update
                 needs_update = True
                 
-                logger.debug(f"Channel {channel_id} - Updating status (viewers changed: {viewers_changed}, watchers changed: {watchers_changed})")
+                if viewers_changed or watchers_changed:
+                    logger.debug(f"Channel {channel_id} - Updating status (viewers changed: {viewers_changed}, watchers changed: {watchers_changed})")
+                
                 # Update the data explicitly, prioritizing keys from 'data'
                 # Get the existing data or an empty dict
                 updated_channel_data = self.channels.get(channel_id, {}).copy()
@@ -221,7 +241,7 @@ class ChannelStatusManager:
                     else:
                         logger.warning(f"[{channel_id}] ⚠️ Échec de la sauvegarde immédiate forcée")
                 else:
-                    # Use normal debounced save
+                    # Use normal debounced save only if channels are initialized
                     self._debounced_save()
                 return True
                     

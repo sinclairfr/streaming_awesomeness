@@ -58,10 +58,10 @@ class StatsCollector:
         # Calculer le timeout basé sur HLS_SEGMENT_DURATION et HLS_LIST_SIZE
         segment_duration = float(os.getenv("HLS_SEGMENT_DURATION", "2.0"))
         hls_list_size = int(os.getenv("HLS_LIST_SIZE", "10"))
-        # Le timeout est la durée totale de la playlist HLS plus une marge de sécurité
-        # Marge de sécurité = 2 segments pour tenir compte des délais réseau et de traitement
-        self.viewer_timeout = segment_duration * (hls_list_size + 2)
-        logger.info(f"📊 Timeout des spectateurs calculé: {self.viewer_timeout:.1f}s (basé sur {segment_duration}s x {hls_list_size} segments + marge)")
+        # Le timeout est la durée totale de la playlist HLS plus une marge de sécurité plus grande
+        # Marge de sécurité = 5 segments pour tenir compte des délais réseau, de traitement et des variations
+        self.viewer_timeout = segment_duration * (hls_list_size + 5)
+        logger.info(f"📊 Timeout des spectateurs calculé: {self.viewer_timeout:.1f}s (basé sur {segment_duration}s x {hls_list_size} segments + marge de sécurité)")
 
         self._load_stats()
 
@@ -77,12 +77,12 @@ class StatsCollector:
         self.log_monitor_thread = threading.Thread(target=self._log_monitor_loop, daemon=True)
         self.log_monitor_thread.start()
 
-        # Cleanup Thread - Nouveau thread pour le nettoyage périodique
-        self.cleanup_interval = HLS_SEGMENT_DURATION * 7
+        # Cleanup Thread - Utilise le même timeout que viewer_timeout
+        self.cleanup_interval = self.viewer_timeout
         self.cleanup_thread = threading.Thread(target=self._cleanup_loop, daemon=True)
         self.cleanup_thread.start()
 
-        logger.info(f"📊 StatsCollector initialisé (Mode: Nginx Logs / Bytes Transferred) - Timeout des spectateurs actifs: {ACTIVE_VIEWER_TIMEOUT}s")
+        logger.info(f"📊 StatsCollector initialisé (Mode: Nginx Logs / Bytes Transferred) - Timeout des spectateurs actifs: {self.viewer_timeout}s")
 
     def _load_stats(self):
         """Charge les stats depuis les fichiers (mode bytes)."""

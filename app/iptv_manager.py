@@ -51,8 +51,8 @@ class IPTVManager:
         use_gpu_env = os.getenv("USE_GPU", "false").lower() == "true"
         
         # Configuration
-        self.content_dir = content_dir
-        self.use_gpu = use_gpu or use_gpu_env
+        self.content_dir = Path(content_dir)
+        self.use_gpu = use_gpu_env
         self.channels = {}
         self.channel_ready_status = {}
         self.log_path = NGINX_ACCESS_LOG
@@ -116,21 +116,22 @@ class IPTVManager:
         self.init_channel_status_manager() 
         # <<< END STEP 2
 
-        # MODIFIÉ: StatsCollector et ClientMonitor seront initialisés après que les chaînes soient prêtes
+        # Initialiser les composants de monitoring à None
+        self.stats_collector = None
+        self.client_monitor = None
+        self.ffmpeg_monitor = None
+
+        # Créer un placeholder pour le callback update_watchers
+        self._update_watchers_placeholder = lambda *args, **kwargs: None
+
+        # Initialiser un StatsCollector minimal pour éviter les erreurs d'attribut manquant
         try:
-            # Initialiser un StatsCollector vide immédiatement pour éviter les erreurs d'attribut manquant
-            self.stats_collector = StatsCollector()
-            # Passer le callback update_watchers même avant l'initialisation complète
-            self.stats_collector.update_watchers_callback = self.update_watchers
-            logger.info("📊 StatsCollector initialisé avec succès dès le départ")
-        except Exception as e:
-            logger.error(f"❌ Erreur lors de l'initialisation initiale de StatsCollector: {e}")
-            # Créer un objet vide pour éviter les erreurs None
             from types import SimpleNamespace
             self.stats_collector = SimpleNamespace()
-            self.stats_collector.update_watchers_callback = lambda *args, **kwargs: None  # Fonction vide
-            
-        self.client_monitor = None
+            self.stats_collector.update_watchers_callback = self._update_watchers_placeholder
+            logger.info("📊 StatsCollector minimal initialisé")
+        except Exception as e:
+            logger.error(f"❌ Erreur lors de l'initialisation minimale de StatsCollector: {e}")
 
         # Moniteur FFmpeg
         self.ffmpeg_monitor = FFmpegMonitor(self.channels)
@@ -1230,7 +1231,7 @@ class IPTVManager:
         try:
             channel_name = channel_data["name"]
             channel_dir = channel_data["dir"]
-            from_queue = channel_data.get("from_queue", True)  # Par défaut, on suppose que c'est de la queue
+            from_queue = channel_data.get("from_queue", True)
 
             logger.info(f"[{channel_name}] 🔄 Initialisation asynchrone de la chaîne")
 
@@ -1246,145 +1247,136 @@ class IPTVManager:
             # Ajoute la référence au manager
             channel.manager = self
 
-            # Vérifie si la chaîne est prête immédiatement après l'initialisation
-            is_ready_after_init = hasattr(channel, "ready_for_streaming") and channel.ready_for_streaming
-            
-            if is_ready_after_init:
-                logger.info(f"✅ Chaîne {channel_name} prête immédiatement après initialisation.")
-                # Ajoute la chaîne au dictionnaire sous verrou
-                with self.scan_lock:
-                    self.channels[channel_name] = channel
-                    # Remove reliance on self.channel_ready_status dictionary
-                
-                # Démarrer immédiatement le stream si la chaîne est prête
-                logger.info(f"[{channel_name}] 🚀 Démarrage immédiat du stream")
-                if hasattr(channel, "start_stream"):
-                    success = channel.start_stream()
-                    if success:
-                        logger.info(f"[{channel_name}] ✅ Stream démarré avec succès")
-                        # Trigger master playlist update AFTER successful start
-                        if hasattr(self, "_update_master_playlist"):
-                            logger.info(f"[{channel_name}] 🔄 Mise à jour de la playlist maître après démarrage")
-                            # Call the update function directly
-                            self._update_master_playlist()
-                    else:
-                        logger.error(f"[{channel_name}] ❌ Échec du démarrage du stream")
-                else:
-                    logger.warning(f"[{channel_name}] ⚠️ Channel does not have start_stream method")
-            else:
-                 # La chaîne n'est pas prête (e.g., _scan_videos a échoué dans __init__)
-                 logger.warning(f"⚠️ Chaîne {channel_name} non prête après initialisation (ready_for_streaming={is_ready_after_init}). Ne sera pas ajoutée ni démarrée.")
-                 # Optionnel: Ajouter quand même au dictionnaire avec un statut non prêt?
-                 # with self.scan_lock:
-                 #    self.channels[channel_name] = channel # ou None?
+            # Vérifie si la chaîne est prête
+            is_ready = hasattr(channel, "ready_for_streaming") and channel.ready_for_streaming
 
-            logger.info(f"[{channel_name}] ✅ Traitement d'initialisation terminé (État Prêt: {is_ready_after_init})")
+            # Ajoute la chaîne au manager
+            with self.scan_lock:
+                self.channels[channel_name] = channel
+                self.channel_ready_status[channel_name] = is_ready
+
+            # Si c'est la première chaîne prête, initialiser les composants de monitoring
+            if is_ready and not self.client_monitor:
+                self.init_stats_collector_and_client_monitor()
+
+            return True
 
         except Exception as e:
-            logger.error(f"❌ Erreur initialisation de la chaîne {channel_data.get('name')}: {e}")
-            # Make sure to add placeholder if exception happens before adding the channel object
-            channel_name_for_exc = channel_data.get('name')
-            if channel_name_for_exc:
-                with self.scan_lock:
-                    if channel_name_for_exc not in self.channels:
-                        self.channels[channel_name_for_exc] = None # Placeholder on error
-        finally:
-            # Décrémente le compteur de threads actifs
-            with self.init_threads_lock:
-                self.active_init_threads -= 1
-
-            # Marque la tâche comme terminée UNIQUEMENT si elle vient de la queue
-            if channel_data.get("from_queue", True):
-                self.channel_init_queue.task_done()
+            logger.error(f"[{channel_name}] ❌ Erreur initialisation asynchrone: {e}")
+            return False
 
     def init_stats_collector_and_client_monitor(self):
         """Initialise le StatsCollector et le ClientMonitor une fois que les chaînes sont prêtes"""
-        logger.info("🚀 Initialisation de StatsCollector et ClientMonitor maintenant que les chaînes sont prêtes...")
+        # Vérifier qu'au moins une chaîne est prête
+        ready_channels = [name for name, channel in self.channels.items() 
+                         if hasattr(channel, "ready_for_streaming") and channel.ready_for_streaming]
         
-        # Initialisation du StatsCollector
-        if self.stats_collector is None:
-            try:
-                logger.info(">>> INITIALIZING STATS COLLECTOR <<<")
-                self.stats_collector = StatsCollector()
-                logger.info("📊 StatsCollector initialisé")
-                # Passer le callback update_watchers pour que StatsCollector puisse mettre à jour les spectateurs directement
-                self.stats_collector.update_watchers_callback = self.update_watchers
-            except Exception as e:
-                logger.error(f"❌ Erreur initialisation StatsCollector: {e}")
-                self.stats_collector = None
+        if not ready_channels:
+            logger.info("⏳ Aucune chaîne prête, report de l'initialisation des composants de monitoring")
+            return False
+
+        logger.info(f"🚀 Initialisation des composants de monitoring ({len(ready_channels)} chaînes prêtes)...")
+        
+        # Initialisation du StatsCollector complet
+        try:
+            logger.info(">>> INITIALIZING STATS COLLECTOR <<<")
+            from stats_collector import StatsCollector
+            self.stats_collector = StatsCollector()
+            self.stats_collector.update_watchers_callback = self.update_watchers
+            logger.info("📊 StatsCollector complet initialisé")
+        except Exception as e:
+            logger.error(f"❌ Erreur initialisation StatsCollector: {e}")
+            return False
         
         # Initialisation du ClientMonitor
-        if self.client_monitor is None:
-            try:
-                self.client_monitor = ClientMonitor(
-                    log_path=self.log_path,
-                    update_watchers_callback=self.update_watchers,
-                    manager=self,
-                    stats_collector=self.stats_collector
-                )
-                # Au lieu de démarrer le thread, on initialise juste la position
-                self.client_monitor.start()
-                logger.info("👁️ ClientMonitor initialisé et prêt")
-            except Exception as e:
-                logger.error(f"❌ Erreur initialisation ClientMonitor: {e}")
-                self.client_monitor = None
+        try:
+            from client_monitor import ClientMonitor
+            self.client_monitor = ClientMonitor(
+                log_path=self.log_path,
+                update_watchers_callback=self.update_watchers,
+                manager=self,
+                stats_collector=self.stats_collector
+            )
+            self.client_monitor.start()
+            logger.info("👁️ ClientMonitor initialisé et démarré")
+        except Exception as e:
+            logger.error(f"❌ Erreur initialisation ClientMonitor: {e}")
+            return False
+
+        # Initialisation du FFmpegMonitor
+        try:
+            from ffmpeg_monitor import FFmpegMonitor
+            self.ffmpeg_monitor = FFmpegMonitor(self.channels)
+            logger.info("🎥 FFmpegMonitor initialisé")
+        except Exception as e:
+            logger.error(f"❌ Erreur initialisation FFmpegMonitor: {e}")
+            return False
+
+        logger.info("✅ Tous les composants de monitoring initialisés avec succès")
+        return True
 
     def auto_start_ready_channels(self):
-        """Démarre automatiquement toutes les chaînes prêtes avec un délai entre chaque démarrage"""
-        logger.info("🚀 Démarrage automatique des chaînes prêtes...")
-        
-        # Attendre que plus de chaînes soient prêtes
-        for attempt in range(2):  # 2 tentatives maximum
+        """Démarre automatiquement les chaînes qui sont prêtes"""
+        try:
             ready_channels = []
-            with self.scan_lock:
-                for name, is_ready in self.channel_ready_status.items():
-                    if is_ready and name in self.channels:
-                        channel = self.channels[name]
-                        if channel.ready_for_streaming:
-                            ready_channels.append(name)
-                            logger.info(f"✅ Chaîne {name} prête pour le démarrage automatique")
-
-            if len(ready_channels) >= len(self.channels) * 0.5:  # Au moins 50% des chaînes sont prêtes
-                break
-
-            logger.info(f"⏳ Seulement {len(ready_channels)}/{len(self.channels)} chaînes prêtes, attente supplémentaire ({attempt+1}/2)...")
-            time.sleep(5)  # 5 secondes entre les tentatives
-
-        # Trier pour prévisibilité
-        ready_channels.sort()
-        logger.info(f"📋 Liste des chaînes à démarrer: {ready_channels}")
-
-        # Limiter le CPU pour éviter saturation
-        max_parallel = 4
-        groups = [ready_channels[i:i + max_parallel] for i in range(0, len(ready_channels), max_parallel)]
-
-        for group_idx, group in enumerate(groups):
-            logger.info(f"🚀 Démarrage du groupe {group_idx+1}/{len(groups)} ({len(group)} chaînes)")
-
-            # Démarrer chaque chaîne du groupe avec un petit délai entre elles
-            for i, channel_name in enumerate(group):
-                delay = i * 0.1  # Réduit de 0.5s à 0.1s entre chaque chaîne
-                logger.info(f"[{channel_name}] ⏱️ Démarrage programmé dans {delay} secondes")
-                
-                # Vérifier que la chaîne est toujours prête avant de la démarrer
-                if channel_name in self.channels and self.channels[channel_name].ready_for_streaming:
-                    threading.Timer(delay, self._start_channel, args=[channel_name]).start()
-                else:
-                    logger.warning(f"⚠️ La chaîne {channel_name} n'est plus prête pour le démarrage")
-
-            # Attendre avant le prochain groupe
-            if group_idx < len(groups) - 1:
-                wait_time = 1  # Réduit de max_parallel à 1 seconde
-                logger.info(f"⏳ Attente de {wait_time}s avant le prochain groupe...")
-                time.sleep(wait_time)
-
-        if ready_channels:
-            logger.info(f"✅ {len(ready_channels)} chaînes programmées pour démarrage automatique")
             
-            # NOUVEAU: Initialiser StatsCollector et ClientMonitor maintenant que les chaînes sont prêtes
-            self.init_stats_collector_and_client_monitor()
-        else:
-            logger.warning("⚠️ Aucune chaîne prête à démarrer")
+            # Faire 2 tentatives pour laisser le temps aux chaînes de se préparer
+            for attempt in range(2):
+                ready_channels = []
+                for name, channel in self.channels.items():
+                    if channel and hasattr(channel, "ready_for_streaming") and channel.ready_for_streaming:
+                        ready_channels.append(name)
+                        logger.info(f"✅ Chaîne {name} prête pour le démarrage automatique")
+
+                if len(ready_channels) >= len(self.channels) * 0.5:  # Au moins 50% des chaînes sont prêtes
+                    break
+
+                logger.info(f"⏳ Seulement {len(ready_channels)}/{len(self.channels)} chaînes prêtes, attente supplémentaire ({attempt+1}/2)...")
+                time.sleep(5)  # 5 secondes entre les tentatives
+
+            # Trier pour prévisibilité
+            ready_channels.sort()
+            logger.info(f"📋 Liste des chaînes à démarrer: {ready_channels}")
+
+            # Si au moins une chaîne est prête, initialiser les composants de monitoring
+            if ready_channels:
+                logger.info(f"✅ {len(ready_channels)} chaînes prêtes, initialisation des composants de monitoring...")
+                if not self.init_stats_collector_and_client_monitor():
+                    logger.warning("⚠️ Échec de l'initialisation des composants de monitoring")
+
+            # Limiter le CPU pour éviter saturation
+            max_parallel = 4
+            groups = [ready_channels[i:i + max_parallel] for i in range(0, len(ready_channels), max_parallel)]
+
+            for group_idx, group in enumerate(groups):
+                logger.info(f"🚀 Démarrage du groupe {group_idx+1}/{len(groups)} ({len(group)} chaînes)")
+
+                # Démarrer chaque chaîne du groupe avec un petit délai entre elles
+                for i, channel_name in enumerate(group):
+                    delay = i * 0.1  # Réduit de 0.5s à 0.1s entre chaque chaîne
+                    logger.info(f"[{channel_name}] ⏱️ Démarrage programmé dans {delay} secondes")
+                    
+                    # Vérifier que la chaîne est toujours prête avant de la démarrer
+                    if channel_name in self.channels and self.channels[channel_name].ready_for_streaming:
+                        threading.Timer(delay, self._start_channel, args=[channel_name]).start()
+                    else:
+                        logger.warning(f"⚠️ La chaîne {channel_name} n'est plus prête pour le démarrage")
+
+                # Attendre avant le prochain groupe
+                if group_idx < len(groups) - 1:
+                    wait_time = 1  # Réduit de max_parallel à 1 seconde
+                    logger.info(f"⏳ Attente de {wait_time}s avant le prochain groupe...")
+                    time.sleep(wait_time)
+
+            if ready_channels:
+                logger.info(f"✅ {len(ready_channels)} chaînes programmées pour démarrage automatique")
+            else:
+                logger.warning("⚠️ Aucune chaîne prête à démarrer")
+
+        except Exception as e:
+            logger.error(f"❌ Erreur lors du démarrage automatique des chaînes: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
 
     def _start_channel(self, channel_name):
         """Démarre une chaîne spécifique"""
