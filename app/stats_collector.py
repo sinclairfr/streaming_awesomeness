@@ -321,19 +321,19 @@ class StatsCollector:
             old_channel = self._current_channels.get(ip)
             if old_channel and old_channel != channel:
                 # L'utilisateur a changé de chaîne, on le retire de l'ancienne
-                if ip in self.user_stats and isinstance(self.user_stats[ip], dict):
-                    channels = self.user_stats[ip].get('channels', {})
+                if ip in self.user_stats["users"] and isinstance(self.user_stats["users"][ip], dict):
+                    channels = self.user_stats["users"][ip].get('channels', {})
                     if old_channel in channels:
                         # Forcer l'inactivité sur l'ancienne chaîne
-                        self.user_stats[ip]['channels'][old_channel]['last_seen'] = 0
+                        self.user_stats["users"][ip]['channels'][old_channel]['last_seen'] = 0
                         logger.info(f"🔄 {ip} a changé de chaîne: {old_channel} → {channel}")
                         
                         # Forcer une mise à jour des spectateurs de l'ancienne chaîne
                         active_ips_old = []
-                        for viewer_ip in self.user_stats:
+                        for viewer_ip in self.user_stats["users"]:
                             if viewer_ip == ip:
                                 continue
-                            viewer_data = self.user_stats[viewer_ip]
+                            viewer_data = self.user_stats["users"][viewer_ip]
                             if not isinstance(viewer_data, dict):
                                 continue
                             channels = viewer_data.get('channels', {})
@@ -376,8 +376,8 @@ class StatsCollector:
                 del self._pending_bytes[update_key]
             
             # Obtenir l'utilisateur ou en créer un nouveau
-            if ip not in self.user_stats:
-                self.user_stats[ip] = {
+            if ip not in self.user_stats["users"]:
+                self.user_stats["users"][ip] = {
                     "first_seen": current_time,
                     "last_seen": current_time,
                     "user_agent": user_agent,
@@ -385,7 +385,7 @@ class StatsCollector:
                     "total_bytes": 0,
                     "channels": {}
                 }
-            user = self.user_stats[ip]
+            user = self.user_stats["users"][ip]
 
             # Mettre à jour last_seen
             user["last_seen"] = current_time
@@ -472,10 +472,10 @@ class StatsCollector:
             if hasattr(self, 'update_watchers_callback') and self.update_watchers_callback:
                 # Construire la liste des IPs actives pour cette chaîne
                 active_ips = []
-                for viewer_ip in self.user_stats:
+                for viewer_ip in self.user_stats["users"]:
                     # Un spectateur n'est considéré actif que sur sa chaîne actuelle
                     if self._current_channels.get(viewer_ip) == channel:
-                        viewer_data = self.user_stats[viewer_ip]
+                        viewer_data = self.user_stats["users"][viewer_ip]
                         if isinstance(viewer_data, dict):
                             channels = viewer_data.get('channels', {})
                             if isinstance(channels, dict) and channel in channels:
@@ -544,8 +544,8 @@ class StatsCollector:
                     self.channel_stats[new_channel]["unique_viewers"].append(ip)
             
             # Mettre à jour les statistiques utilisateur
-            if ip not in self.user_stats:
-                self.user_stats[ip] = {
+            if ip not in self.user_stats["users"]:
+                self.user_stats["users"][ip] = {
                     "first_seen": current_time,
                     "last_seen": current_time,
                     "total_watch_time": 0,
@@ -554,27 +554,27 @@ class StatsCollector:
                 }
             
             # Mettre à jour le timestamp de dernière activité pour la nouvelle chaîne
-            if new_channel not in self.user_stats[ip].get("channels", {}):
-                self.user_stats[ip]["channels"][new_channel] = {
+            if new_channel not in self.user_stats["users"][ip].get("channels", {}):
+                self.user_stats["users"][ip]["channels"][new_channel] = {
                     "first_seen": current_time,
                     "last_seen": current_time,
                     "total_watch_time": 0,
                     "total_bytes": 0
                 }
             else:
-                self.user_stats[ip]["channels"][new_channel]["last_seen"] = current_time
+                self.user_stats["users"][ip]["channels"][new_channel]["last_seen"] = current_time
             
             # Marquer explicitement l'IP comme inactive sur l'ancienne chaîne
-            if previous_channel and previous_channel in self.user_stats[ip].get("channels", {}):
+            if previous_channel and previous_channel in self.user_stats["users"][ip].get("channels", {}):
                 # Mettre à jour le timestamp de dernière activité pour forcer l'inactivité
-                self.user_stats[ip]["channels"][previous_channel]["last_seen"] = 0
+                self.user_stats["users"][ip]["channels"][previous_channel]["last_seen"] = 0
             
             # Calculer les spectateurs actifs pour les deux chaînes
             active_ips_new_channel = []
             active_ips_old_channel = []
             
             # Parcourir les utilisateurs pour trouver les spectateurs actifs
-            for viewer_ip, viewer_data in self.user_stats.items():
+            for viewer_ip, viewer_data in self.user_stats["users"].items():
                 if isinstance(viewer_ip, str) and isinstance(viewer_data, dict) and "channels" in viewer_data:
                     # Pour la nouvelle chaîne
                     if new_channel in viewer_data["channels"]:
@@ -642,7 +642,7 @@ class StatsCollector:
                 
                 # Trouver les viewers actifs pour cette chaîne
                 active_ips = []
-                for ip, user_data in self.user_stats.get("users", {}).items():
+                for ip, user_data in self.user_stats["users"].items():
                     if not isinstance(user_data, dict):
                         continue
                     
