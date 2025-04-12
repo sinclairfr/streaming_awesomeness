@@ -18,9 +18,6 @@ app/__pycache__/
 archive.zip
 rebus
 
-# Ignore Dockerfile
-Dockerfile
-
 # Ignore Nginx logs
 nginx_logs/
 
