@@ -9,7 +9,7 @@ import shutil
 # Configuration des chemins
 LOG_DIR = os.getenv("LOG_DIR", "/app/logs")
 CONTENT_DIR = Path(
-    os.getenv("CONTENT_DIR", "/mnt/videos/streaming_awesomeness/content")
+    os.getenv("CONTENT_DIR", "/mnt/frigate_data/streaming_awesomeness/content")
 )
 CHANNELS_STATUS_FILE = os.getenv("CHANNELS_STATUS_FILE", "/app/stats/channels_status.json")
 NGINX_ACCESS_LOG = "/app/logs/nginx/access.log"

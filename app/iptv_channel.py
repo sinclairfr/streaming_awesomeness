@@ -17,7 +17,7 @@ from config import (
     logger,
     CRASH_THRESHOLD,
 )
-from video_processor import verify_file_ready, get_accurate_duration
+from video_processor import get_accurate_duration
 import datetime
 from error_handler import ErrorHandler
 from time_tracker import TimeTracker
@@ -565,6 +565,24 @@ class IPTVChannel:
 
                 if not command:
                     logger.error(f"[{self.name}] ❌ Impossible de construire la commande FFmpeg pour {video_file.name}")
+                    
+                    # Tentative avec le prochain fichier de la playlist
+                    if len(self.processed_videos) > 1:
+                        logger.warning(f"[{self.name}] 🔄 Tentative avec le prochain fichier dans la playlist...")
+                        old_index = self.current_video_index
+                        
+                        # Select a new random index different from the current one
+                        next_video_index = random.randrange(len(self.processed_videos))
+                        while next_video_index == old_index:
+                            next_video_index = random.randrange(len(self.processed_videos))
+                            
+                        logger.info(f"[{self.name}] 🔀 Passage au fichier suivant: {old_index} → {next_video_index}")
+                        self.current_video_index = next_video_index
+                        
+                        # Lancer un nouveau thread pour redémarrer le stream avec le nouvel index
+                        threading.Timer(1.0, self.start_stream).start()
+                        return False
+                    
                     return False
 
                 logger.debug(f"[{self.name}] ⚙️ Commande FFmpeg: {' '.join(command)}")
@@ -577,6 +595,22 @@ class IPTVChannel:
                     self.error_handler.reset() # Reset errors on successful start
                 else:
                     logger.error(f"[{self.name}] ❌ Échec du démarrage du processus FFmpeg pour {video_file.name}")
+                    
+                    # Tentative avec le prochain fichier de la playlist en cas d'échec du démarrage
+                    if len(self.processed_videos) > 1:
+                        logger.warning(f"[{self.name}] 🔄 Échec du démarrage, tentative avec le prochain fichier...")
+                        old_index = self.current_video_index
+                        
+                        # Select a new random index different from the current one
+                        next_video_index = random.randrange(len(self.processed_videos))
+                        while next_video_index == old_index:
+                            next_video_index = random.randrange(len(self.processed_videos))
+                            
+                        logger.info(f"[{self.name}] 🔀 Passage au fichier suivant après échec: {old_index} → {next_video_index}")
+                        self.current_video_index = next_video_index
+                        
+                        # Lancer un nouveau thread pour redémarrer le stream avec le nouvel index
+                        threading.Timer(1.0, self.start_stream).start()
 
                 return success # Return success status outside the lock
 
@@ -698,24 +732,6 @@ class IPTVChannel:
             logger.error(f"[{self.name}] Erreur lors du check de santé du stream: {e}")
             return False
             
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
     # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
     # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
     # def check_watchers_timeout(self):

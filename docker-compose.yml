@@ -12,7 +12,7 @@ services:
       - ./app/hls:/app/hls:rw
       - ./app/logs:/app/logs:rw
       - ./app:/app:rw  # Regroupe tous les fichiers de l'application
-      - /mnt/docker_data/streaming_awesomeness:/mnt/videos/streaming_awesomeness
+      - /mnt/frigate_data/streaming_awesomeness:/mnt/frigate_data/streaming_awesomeness
     devices:
       - /dev/dri/card1:/dev/dri/card1
       - /dev/dri/renderD128:/dev/dri/renderD128
