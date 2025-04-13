@@ -518,6 +518,9 @@ class IPTVChannel:
                     if not self.processed_videos: # Double check after reset
                          logger.error(f"[{self.name}] ❌ Aucune vidéo à lire après réinitialisation de l'index.")
                          return False
+                
+                # Ensure permissions on all content files before starting
+                self._ensure_permissions()
                          
                 # Sélectionner le fichier vidéo actuel
                 video_file = self.processed_videos[self.current_video_index]
@@ -548,10 +551,6 @@ class IPTVChannel:
                 # Nettoyer les anciens segments AVANT de démarrer un nouveau fichier
                 self.hls_cleaner.cleanup_channel(self.name)
 
-                # *** Select the single video file for this run ***
-                video_file = self.processed_videos[self.current_video_index]
-                logger.info(f"[{self.name}] 🎥 Processing file ({self.current_video_index + 1}/{len(self.processed_videos)}): {video_file.name}")
-                
                 # Check if it's an MKV file
                 has_mkv = ('.mkv' in video_file.name.lower())
 
@@ -579,10 +578,10 @@ class IPTVChannel:
                 else:
                     logger.error(f"[{self.name}] ❌ Échec du démarrage du processus FFmpeg pour {video_file.name}")
 
-            return success # Return success status outside the lock
+                return success # Return success status outside the lock
 
         except Exception as e:
-            logger.error(f"[{self.name}] ❌ Erreur start_stream: {e}")
+            logger.error(f"[{self.name}] Erreur lors de la démarrage du stream: {e}")
             logger.error(traceback.format_exc())
             return False
 
@@ -651,7 +650,7 @@ class IPTVChannel:
             logger.error(f"[{self.name}] ❌ Erreur _scan_videos: {e}")
             logger.error(traceback.format_exc())
             self.processed_videos = []
-            return False # Failure
+            return False # Failure 
 
     def is_running(self) -> bool:
         """Vérifie si la chaîne est actuellement en streaming"""
@@ -749,186 +748,6 @@ class IPTVChannel:
 
     # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
     # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
     def check_watchers_timeout(self):
         """Vérifie si le stream doit être arrêté en raison d'une absence de watchers"""
         # On ne vérifie pas le timeout s'il n'y a pas de watchers_count
@@ -949,3 +768,153 @@ class IPTVChannel:
             
         # Le stream continue de tourner même sans watchers
         return False 
+
+    def _ensure_permissions(self):
+        """S'assure que tous les fichiers et dossiers de la chaîne ont les bonnes permissions."""
+        try:
+            # Définir video_extensions s'il n'est pas déjà défini
+            if not hasattr(self, 'video_extensions'):
+                self.video_extensions = (".mp4", ".avi", ".mkv", ".mov", ".m4v")
+                
+            # Vérifier le dossier principal
+            os.chmod(self.video_dir, 0o777)
+            logger.debug(f"[{self.name}] 📂 Permissions 777 appliquées au dossier de chaîne: {self.video_dir}")
+            
+            # Dossiers spéciaux
+            special_dirs = ["ready_to_stream", "processed"]
+            for dir_name in special_dirs:
+                dir_path = Path(self.video_dir) / dir_name
+                if dir_path.exists():
+                    os.chmod(dir_path, 0o777)
+                    logger.debug(f"[{self.name}] 📂 Permissions 777 appliquées à {dir_path}")
+            
+            # Fichiers vidéo
+            for item in Path(self.video_dir).glob("**/*"):
+                if item.is_file() and item.suffix.lower() in self.video_extensions:
+                    try:
+                        os.chmod(item, 0o666)
+                        logger.debug(f"[{self.name}] 📄 Permissions 666 appliquées à {item}")
+                    except Exception as e:
+                        logger.warning(f"[{self.name}] ⚠️ Impossible de modifier les permissions de {item}: {e}")
+            
+            logger.info(f"[{self.name}] ✅ Permissions corrigées pour tous les fichiers et dossiers")
+            return True
+        except Exception as e:
+            logger.error(f"[{self.name}] ❌ Erreur lors de la correction des permissions: {e}")
+            return False
+            
+    def start_stream(self):
+        """Démarre le streaming de la chaîne"""
+        if not self.ready_for_streaming:
+            logger.warning(f"[{self.name}] ⚠️ La chaîne n'est pas prête pour le streaming")
+            return False
+            
+        # Ensure permissions before starting
+        self._ensure_permissions()
+            
+        # Créer le dossier HLS pour cette chaîne s'il n'existe pas
+        hls_dir = Path(f"/app/hls/{self.name}")
+        hls_dir.mkdir(parents=True, exist_ok=True)
+
+        # Nettoyer les anciens segments AVANT de démarrer un nouveau fichier
+        self.hls_cleaner.cleanup_channel(self.name)
+
+        # *** Select the single video file for this run ***
+        video_file = self.processed_videos[self.current_video_index]
+        logger.info(f"[{self.name}] 🎥 Processing file ({self.current_video_index + 1}/{len(self.processed_videos)}): {video_file.name}")
+        
+        # Check if it's an MKV file
+        has_mkv = ('.mkv' in video_file.name.lower())
+
+        # Construire la commande FFmpeg pour le fichier unique
+        command = self.command_builder.build_command(
+            input_file=str(video_file), # Pass the single video file path
+            output_dir=str(hls_dir),
+            progress_file=f"/app/logs/ffmpeg/{self.name}_progress.log",
+            has_mkv=has_mkv, # Pass the MKV check result for this specific file
+            # is_playlist=False # Default or remove parameter
+        )
+
+        if not command:
+            logger.error(f"[{self.name}] ❌ Impossible de construire la commande FFmpeg pour {video_file.name}")
+            return False
+
+        logger.debug(f"[{self.name}] ⚙️ Commande FFmpeg: {' '.join(command)}")
+
+        # Démarrer le processus FFmpeg
+        success = self.process_manager.start_process(command, str(hls_dir))
+
+        if success:
+            logger.info(f"[{self.name}] ✅ Processus FFmpeg démarré avec succès pour {video_file.name}")
+            self.error_handler.reset() # Reset errors on successful start
+        else:
+            logger.error(f"[{self.name}] ❌ Échec du démarrage du processus FFmpeg pour {video_file.name}")
+
+        return success # Return success status outside the lock
+
+    def _scan_videos(self) -> bool:
+        """Scanne le dossier ready_to_stream, valide les fichiers, les mélange et met à jour self.processed_videos. Renvoie True si réussi et au moins une vidéo trouvée, False sinon."""
+        try:
+            with self.lock: # Use lock as we modify shared state
+                ready_to_stream_dir = Path(self.video_dir) / "ready_to_stream"
+                if not ready_to_stream_dir.exists():
+                    logger.error(f"[{self.name}] ❌ Dossier ready_to_stream introuvable: {ready_to_stream_dir}")
+                    self.processed_videos = []
+                    return False
+
+                # Scanner le dossier ready_to_stream (removed sorted())
+                video_files = list(ready_to_stream_dir.glob("*.mp4"))
+
+                if not video_files:
+                    logger.warning(f"[{self.name}] ⚠️ Aucun fichier MP4 dans {ready_to_stream_dir}")
+                    self.processed_videos = []
+                    return False
+                    
+                logger.info(f"[{self.name}] 🔍 {len(video_files)} fichiers trouvés dans ready_to_stream")
+
+                # Vérifier que tous les fichiers sont valides
+                valid_files = []
+                for video in video_files:
+                    if video.exists() and os.access(video, os.R_OK):
+                        # Optional: Add duration check if needed
+                        # try:
+                        #     duration = get_accurate_duration(video)
+                        #     if duration and duration > 0:
+                        #         valid_files.append(video)
+                        #     else:
+                        #         logger.warning(f"[{self.name}] ⚠️ Fichier ignoré: {video.name} (durée invalide)")
+                        # except Exception as e:
+                        #     logger.warning(f"[{self.name}] ⚠️ Fichier ignoré: {video.name} (erreur validation: {e})")
+                        valid_files.append(video) # Simpler validation for now
+                    else:
+                        logger.warning(f"[{self.name}] ⚠️ Fichier ignoré: {video.name} (non accessible)")
+
+                if not valid_files:
+                    logger.error(f"[{self.name}] ❌ Aucun fichier MP4 valide trouvé après vérification")
+                    self.processed_videos = []
+                    return False
+
+                # *** Shuffle the valid files ***
+                random.shuffle(valid_files)
+                logger.info(f"[{self.name}] 🔀 Liste de vidéos mélangée.")
+
+                logger.info(f"[{self.name}] ✅ {len(valid_files)} vidéos valides trouvées.")
+                self.processed_videos = valid_files # Update the list
+                # Reset index if it's now out of bounds OR if the list changed significantly
+                # (safer to reset to 0 on any successful scan with videos)
+                if not (0 <= self.current_video_index < len(self.processed_videos)):
+                     logger.info(f"[{self.name}] 🔄 Réinitialisation de l'index vidéo à 0 après scan.")
+                     self.current_video_index = 0
+                elif len(self.processed_videos) > 0 and self.current_video_index >= len(self.processed_videos):
+                    # Handle case where list shrank and index is now invalid
+                    logger.info(f"[{self.name}] 🔄 Liste de vidéos réduite, réinitialisation de l'index vidéo à 0.")
+                    self.current_video_index = 0
+
+
+                return True # Success
+
+        except Exception as e:
+            logger.error(f"[{self.name}] ❌ Erreur _scan_videos: {e}")
+            logger.error(traceback.format_exc())
+            self.processed_videos = []
+            return False # Failure 

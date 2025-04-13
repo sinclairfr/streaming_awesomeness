@@ -94,17 +94,17 @@ class IPTVManager:
 
         
         # Verrou et cooldown pour les scans
-        self.scan_lock = threading.Lock()
-        self.last_scan_time = 0
+        self.scan_lock = threading.RLock()
         self.scan_cooldown = 60
+        self.last_scan_time = 0
         self.scan_queue = Queue()
         self.failing_channels = set()
 
         # Queue pour les chaînes à initialiser en parallèle
         self.channel_init_queue = Queue()
-        self.max_parallel_inits = 5
+        self.max_parallel_inits = 15
         self.active_init_threads = 0
-        self.init_threads_lock = threading.Lock()
+        self.init_threads_lock = threading.RLock()
 
         # Timeout d'inactivité pour arrêter un stream (en secondes)
         self.channel_inactivity_timeout = 300 # 5 minutes
@@ -236,6 +236,13 @@ class IPTVManager:
                 logger.error(f"Le dossier {content_path} n'existe pas!")
                 return
 
+            # Ensure content directory has proper permissions
+            try:
+                os.chmod(content_path, 0o777)
+                logger.debug(f"📂 Permissions 777 appliquées au dossier de contenu lors du scan: {content_path}")
+            except Exception as chmod_err:
+                logger.warning(f"⚠️ Impossible de modifier les permissions lors du scan: {chmod_err}")
+
             # Scan des dossiers de chaînes
             channel_dirs = [d for d in content_path.iterdir() if d.is_dir()]
             logger.info(f"📂 {len(channel_dirs)} dossiers de chaînes trouvés: {[d.name for d in channel_dirs]}")
@@ -244,6 +251,24 @@ class IPTVManager:
             found_in_this_scan = set()
 
             for channel_dir in channel_dirs:
+                # Ensure each channel directory has proper permissions
+                try:
+                    os.chmod(channel_dir, 0o777)
+                    logger.debug(f"📂 Permissions 777 appliquées au dossier de chaîne: {channel_dir}")
+                    
+                    # Also set permissions for ready_to_stream and processed directories
+                    ready_dir = channel_dir / "ready_to_stream"
+                    if ready_dir.exists():
+                        os.chmod(ready_dir, 0o777)
+                        logger.debug(f"📂 Permissions 777 appliquées à {ready_dir}")
+                        
+                    processed_dir = channel_dir / "processed"
+                    if processed_dir.exists():
+                        os.chmod(processed_dir, 0o777)
+                        logger.debug(f"📂 Permissions 777 appliquées à {processed_dir}")
+                except Exception as chmod_err:
+                    logger.warning(f"⚠️ Impossible de modifier les permissions du dossier {channel_dir}: {chmod_err}")
+                
                 channel_name = channel_dir.name
                 found_in_this_scan.add(channel_name)
                 
@@ -491,6 +516,36 @@ class IPTVManager:
         """Nettoyage initial optimisé"""
         try:
             logger.info("🧹 Nettoyage initial... (appel unique au démarrage)")
+
+            # Ensure content directory has proper permissions
+            logger.info(f"📂 Vérification des permissions du dossier de contenu: {self.content_dir}")
+            content_path = Path(self.content_dir)
+            if not content_path.exists():
+                content_path.mkdir(parents=True, exist_ok=True)
+                logger.info(f"📂 Création du dossier de contenu: {content_path}")
+            
+            try:
+                os.chmod(content_path, 0o777)
+                logger.info(f"📂 Permissions 777 appliquées au dossier de contenu: {content_path}")
+                
+                # Ensure channel directories have proper permissions too
+                for channel_dir in content_path.iterdir():
+                    if channel_dir.is_dir():
+                        os.chmod(channel_dir, 0o777)
+                        logger.debug(f"📂 Permissions 777 appliquées à {channel_dir}")
+                        
+                        # Also set permissions for ready_to_stream and processed directories
+                        ready_dir = channel_dir / "ready_to_stream"
+                        if ready_dir.exists():
+                            os.chmod(ready_dir, 0o777)
+                            logger.debug(f"📂 Permissions 777 appliquées à {ready_dir}")
+                            
+                        processed_dir = channel_dir / "processed"
+                        if processed_dir.exists():
+                            os.chmod(processed_dir, 0o777)
+                            logger.debug(f"📂 Permissions 777 appliquées à {processed_dir}")
+            except Exception as chmod_err:
+                logger.warning(f"⚠️ Impossible de modifier les permissions du dossier de contenu: {chmod_err}")
 
             # Force reset of channel status file at startup
             logger.info("🔄 Réinitialisation du fichier de statut des chaînes...")
@@ -1355,7 +1410,7 @@ class IPTVManager:
         logger.info(f"📋 Liste des chaînes à démarrer: {ready_channels}")
 
         # Limiter le CPU pour éviter saturation
-        max_parallel = 4
+        max_parallel = 8
         groups = [ready_channels[i:i + max_parallel] for i in range(0, len(ready_channels), max_parallel)]
 
         for group_idx, group in enumerate(groups):

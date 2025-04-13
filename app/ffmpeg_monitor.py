@@ -8,6 +8,13 @@ import os
 import signal
 from config import FFMPEG_LOG_LEVEL, logger, WATCHERS_LOG_CYCLE
 import random
+import re
+import json
+import subprocess
+import queue
+import logging
+from datetime import datetime
+from typing import Dict, List, Optional, Union, Any, Tuple
 
 # Constantes
 SUMMARY_CYCLE = 300  # 5 minutes
@@ -225,3 +232,44 @@ class FFmpegMonitor(threading.Thread):
             return False
 
         return True
+
+    def ensure_hls_directory(self, channel_name: str = None):
+        """Ensure that HLS directory exists for a channel or all channels"""
+        self.hls_dir = Path("/app/hls")  # Define hls_dir if not already defined
+        
+        if channel_name:
+            # Ensure a specific channel directory exists
+            channel_path = Path(self.hls_dir) / channel_name
+            channel_path.mkdir(exist_ok=True, parents=True)
+            try:
+                os.chmod(channel_path, 0o777)  # Full permissions
+                logger.debug(f"📁 Set permissions 777 on {channel_path}")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not chmod {channel_path}: {e}")
+            return channel_path
+        else:
+            # Create/verify main HLS directory
+            Path(self.hls_dir).mkdir(exist_ok=True, parents=True)
+            try:
+                os.chmod(self.hls_dir, 0o777)  # Full permissions
+                logger.debug(f"📁 Set permissions 777 on {self.hls_dir}")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not chmod {self.hls_dir}: {e}")
+            return self.hls_dir
+
+    def clean_channel(self, channel_name):
+        """Nettoie les segments d'une chaîne spécifique"""
+        try:
+            # Assure que le répertoire existe avec les bonnes permissions
+            self.ensure_hls_directory(channel_name)
+            
+            channel_dir = os.path.join(self.hls_dir, channel_name)
+            if not os.path.exists(channel_dir):
+                logger.debug(f"Le dossier {channel_dir} n'existe pas, création...")
+                os.makedirs(channel_dir, exist_ok=True)
+                os.chmod(channel_dir, 0o777)  # Full permissions
+                return True
+            return True
+        except Exception as e:
+            logger.error(f"❌ Erreur lors du nettoyage du canal {channel_name}: {e}")
+            return False

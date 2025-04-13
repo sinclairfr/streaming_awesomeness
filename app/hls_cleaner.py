@@ -2,14 +2,15 @@
 import shutil
 import time
 import threading
-from pathlib import Path
-import os
 import logging
+import os
+from pathlib import Path
+from typing import Dict, List, Union, Optional
 
 from config import logger
 
-# Logger
-logger = logging.getLogger("HLS_CLEANER")
+# On utilise le logger de config
+# logger = logging.getLogger("HLS_CLEANER")
 
 
 class HLSCleaner:
@@ -30,6 +31,54 @@ class HLSCleaner:
 
         logger.info(f"HLSCleaner initialisé sur {self.hls_dir}")
 
+    def _clean_old_segments(self, channel_name: str):
+        """Supprime les segments obsolètes d'une chaîne spécifique"""
+        try:
+            channel_dir = self.hls_dir / channel_name
+            if not channel_dir.exists():
+                logger.debug(f"Le dossier de la chaîne {channel_name} n'existe pas.")
+                return
+                
+            # Assurer les permissions
+            try:
+                os.chmod(channel_dir, 0o777)
+            except Exception as e:
+                logger.warning(f"⚠️ Impossible de modifier les permissions de {channel_dir}: {e}")
+                
+            # Lire la playlist pour identifier les segments actifs
+            playlist_path = channel_dir / "playlist.m3u8"
+            active_segments = set()
+            
+            if playlist_path.exists():
+                try:
+                    with open(playlist_path, 'r') as f:
+                        for line in f:
+                            line = line.strip()
+                            if line.endswith(".ts"):
+                                active_segments.add(Path(line).name)
+                except Exception as e:
+                    logger.warning(f"⚠️ Erreur lecture playlist {playlist_path}: {e}")
+            
+            # Supprimer les segments trop vieux ou non référencés
+            now = time.time()
+            deleted_count = 0
+            
+            for segment in channel_dir.glob("*.ts"):
+                # Garder les segments récents ET actifs, supprimer les autres
+                if (segment.name not in active_segments or 
+                    now - segment.stat().st_mtime > self.max_hls_age):
+                    try:
+                        segment.unlink()
+                        deleted_count += 1
+                    except Exception as e:
+                        logger.warning(f"⚠️ Erreur suppression {segment}: {e}")
+            
+            if deleted_count > 0:
+                logger.info(f"🧹 Nettoyage {channel_name}: {deleted_count} segments supprimés")
+                
+        except Exception as e:
+            logger.error(f"❌ Erreur _clean_old_segments pour {channel_name}: {e}")
+            
     def start(self):
         """Démarre le nettoyage en arrière-plan"""
         logger.info("🔄 Démarrage du monitoring HLS...")
@@ -42,16 +91,35 @@ class HLSCleaner:
         logger.info("⏹️ Arrêt du monitoring HLS.")
 
     def initial_cleanup(self):
-        """Nettoyage initial au démarrage"""
+        """Effectue un nettoyage initial de tous les répertoires HLS"""
+        logger.info("🧹 HLSCleaner: Nettoyage initial des dossiers HLS")
         try:
-            logger.info("🧹 Nettoyage initial...")
-            for item in self.hls_dir.glob("**/*"):
-                if item.is_file() and item.suffix in [".ts", ".m3u8"]:
-                    item.unlink()
-                    logger.debug(f"Supprimé: {item}")
-            logger.info("✨ Nettoyage initial terminé")
+            # S'assurer que le dossier principal existe avec les bonnes permissions
+            Path(self.hls_dir).mkdir(parents=True, exist_ok=True)
+            try:
+                os.chmod(self.hls_dir, 0o777)
+                logger.info(f"📂 Permissions 777 appliquées au dossier HLS principal: {self.hls_dir}")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not chmod main HLS dir {self.hls_dir}: {e}")
+            
+            # Nettoyer chaque dossier de chaîne
+            for channel_dir in Path(self.hls_dir).iterdir():
+                if channel_dir.is_dir():
+                    try:
+                        # Appliquer les permissions
+                        os.chmod(channel_dir, 0o777)
+                        logger.info(f"📂 Permissions 777 appliquées au dossier HLS de chaîne: {channel_dir}")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Could not chmod channel HLS dir {channel_dir}: {e}")
+                    
+                    # Nettoyage des anciens segments
+                    self._clean_old_segments(channel_dir.name)
+            
+            logger.info("✅ HLSCleaner: Nettoyage initial terminé")
+            return True
         except Exception as e:
-            logger.error(f"Erreur nettoyage initial: {e}")
+            logger.error(f"❌ HLSCleaner: Erreur nettoyage initial: {e}")
+            return False
 
     def cleanup_channel(self, channel_name: str):
         """Nettoie les fichiers d'une chaîne spécifique"""
