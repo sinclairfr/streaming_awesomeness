@@ -150,6 +150,8 @@ class HLSCleaner:
         try:
             now = time.time()
             deleted_count = 0
+            # Augmentation du délai avant suppression des segments
+            extended_max_age = self.max_hls_age * 2  # Double le délai normal pour éviter les suppressions prématurées
 
             # On vérifie chaque dossier de chaîne
             for channel_dir in self.hls_dir.glob("*"):
@@ -174,11 +176,11 @@ class HLSCleaner:
                     logger.error(f"Erreur lecture playlist {playlist}: {e}")
                     continue
 
-                # On ne supprime QUE les segments inactifs ET vieux
+                # On ne supprime QUE les segments inactifs ET vraiment vieux
                 for segment in channel_dir.glob("*.ts"):
                     if (
                         segment.name not in active_segments
-                        and now - segment.stat().st_mtime > self.max_hls_age
+                        and now - segment.stat().st_mtime > extended_max_age  # Utilise le délai étendu
                     ):
                         try:
                             segment.unlink()

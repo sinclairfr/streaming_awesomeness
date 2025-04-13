@@ -21,17 +21,17 @@ class FileEventHandler(BaseFileEventHandler):
         self.channel_file_counters = {}
         self.channel_all_files = {}
 
-    def is_file_ready(self, file_path: str, timeout: int = 300) -> bool:
+    def is_file_ready(self, file_path: str, timeout: int = 600) -> bool:
         """
-        Vérifie si un fichier a fini d'être copié en surveillant sa taille.
-        Version améliorée avec meilleure détection des MP4 incomplets.
-
+        Attend qu'un fichier soit stable (taille ne change plus) avant de procéder.
+        Utiliser un timeout plus long pour éviter les faux négatifs.
+        
         Args:
-            file_path: Chemin du fichier
+            file_path: Chemin du fichier à vérifier
             timeout: Timeout en secondes
-
+            
         Returns:
-            bool: True si le fichier est prêt, False sinon
+            True si le fichier est stable, False sinon
         """
         path = Path(file_path)
         if not path.exists():
