@@ -269,6 +269,7 @@ class VideoProcessor:
         start_time = time.time()
         last_size = -1
         stable_count = 0
+        logged_stability = False  # Flag pour éviter les logs répétitifs
 
         logger.info(f"Vérification de la stabilité du fichier: {file_path.name}")
 
@@ -285,14 +286,24 @@ class VideoProcessor:
                 if last_size != -1:
                     if current_size == last_size:
                         stable_count += 1
-                        logger.info(
-                            f"Fichier stable depuis {stable_count}s: {file_path.name} ({current_size/1024/1024:.1f} MB)"
-                        )
+                        
+                        # Log une seule fois au début de la stabilité
+                        if not logged_stability and stable_count == 3:
+                            logged_stability = True
+                            logger.info(
+                                f"Fichier stable: {file_path.name} ({current_size/1024/1024:.1f} MB)"
+                            )
                     else:
+                        # Réinitialiser le statut de log si la taille change
+                        if logged_stability:
+                            logged_stability = False
+                            
                         stable_count = 0
-                        logger.info(
-                            f"{file_path.name} Taille en évolution: {current_size/1024/1024:.1f} MB (était {last_size/1024/1024:.1f} MB)"
-                        )
+                        # Log moins fréquent pour les changements de taille
+                        if last_size > 0 and abs(current_size - last_size) > 10240:  # 10KB de changement minimum
+                            logger.info(
+                                f"{file_path.name} Taille en évolution: {current_size/1024/1024:.1f} MB (était {last_size/1024/1024:.1f} MB)"
+                            )
 
                 # Si la taille est stable pendant le temps requis
                 if current_size == last_size and stable_count >= min_stable_seconds:
@@ -447,7 +458,17 @@ class VideoProcessor:
             logger.error(f"❌ Erreur notification traitement: {e}")
 
     def _process_video(self, file_path: Path):
-        """Traite un fichier vidéo avec gestion adaptative des codecs"""
+        """Traite le fichier vidéo: vérifie, normalise et optimise"""
+        # Vérifier si le fichier est déjà traité pour éviter des traitements inutiles
+        if self._is_already_processed_file(file_path):
+            logger.info(f"[{self.channel_name}] ⏩ Fichier {file_path.name} déjà traité, skip")
+            return
+    
+        # Attendre que le fichier soit complètement copié et stable
+        if not self._wait_for_file_stability(file_path):
+            logger.error(f"[{self.channel_name}] ❌ Fichier non stable: {file_path}")
+            return
+            
         original_filename = file_path.name  # On garde le nom d'origine pour les logs
         try:
             # 1. Première étape: Sanitize le nom du fichier source avant tout traitement
@@ -1571,3 +1592,41 @@ class VideoProcessor:
                 logger.info(f"🧹 Répertoire temporaire nettoyé: {temp_dir}")
         except Exception as e:
             logger.error(f"❌ Erreur nettoyage répertoire temporaire: {e}")
+
+    def _is_already_processed_file(self, file_path: Path) -> bool:
+        """
+        Vérifie si un fichier est déjà traité et présent dans ready_to_stream
+        ou already_processed pour éviter des vérifications inutiles.
+        
+        Args:
+            file_path: Chemin du fichier à vérifier
+            
+        Returns:
+            True si le fichier est déjà traité, False sinon
+        """
+        try:
+            # Vérifier dans ready_to_stream
+            for existing_file in self.ready_to_stream_dir.glob("*.*"):
+                if existing_file.name == file_path.name:
+                    logger.debug(f"[{self.channel_name}] ⏩ Fichier {file_path.name} déjà dans ready_to_stream")
+                    return True
+                    
+            # Vérifier dans already_processed
+            for existing_file in self.already_processed_dir.glob("*.*"):
+                if existing_file.name == file_path.name:
+                    logger.debug(f"[{self.channel_name}] ⏩ Fichier {file_path.name} déjà dans already_processed")
+                    return True
+            
+            # Vérifier si le nom du fichier est dans la playlist.txt
+            playlist_path = self.channel_dir / "playlist.txt"
+            if playlist_path.exists():
+                with open(playlist_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                    if file_path.name in content:
+                        logger.debug(f"[{self.channel_name}] ⏩ Fichier {file_path.name} déjà présent dans playlist.txt")
+                        return True
+            
+            return False
+        except Exception as e:
+            logger.error(f"[{self.channel_name}] ❌ Erreur vérification fichier déjà traité {file_path.name}: {e}")
+            return False

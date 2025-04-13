@@ -4,7 +4,9 @@ from pathlib import Path
 import os
 import datetime
 import time
-from config import logger
+import re
+import gc
+from config import logger, handle_ffmpeg_error
 
 
 class FFmpegLogger:
@@ -151,3 +153,50 @@ class FFmpegLogger:
         # Vérifie/effectue une rotation si nécessaire
         self._check_and_rotate_log(self.main_log)
         return self.main_log
+        
+    def process_error_logs(self):
+        """
+        Traite les logs FFmpeg pour détecter et gérer les erreurs
+        """
+        try:
+            # Vérifier que le fichier de log existe
+            if not self.main_log.exists():
+                return
+                
+            # Lire les 20 dernières lignes du log pour rechercher des erreurs récentes
+            with open(self.main_log, 'r', encoding='utf-8', errors='ignore') as f:
+                # Lire tout le fichier
+                lines = f.readlines()
+                # Prendre les 20 dernières lignes
+                last_lines = lines[-20:] if len(lines) >= 20 else lines
+                
+            # Rechercher des patterns d'erreur dans les dernières lignes
+            error_patterns = [
+                r"No such file or directory",
+                r"Invalid data found when processing input",
+                r"Could not find file",
+                r"Error while decoding stream",
+                r"corrupt.*?frame",
+                r"Fichier d'entrée introuvable"
+            ]
+            
+            for line in last_lines:
+                for pattern in error_patterns:
+                    if re.search(pattern, line, re.IGNORECASE):
+                        logger.warning(f"[{self.channel_name}] 🔍 Erreur FFmpeg détectée: {line.strip()}")
+                        # Appeler le gestionnaire d'erreurs
+                        handle_ffmpeg_error(self.channel_name, line)
+                        return  # Une seule erreur à la fois suffit
+                        
+        except Exception as e:
+            logger.error(f"[{self.channel_name}] ❌ Erreur traitement logs FFmpeg: {e}")
+            
+    def check_for_errors(self):
+        """
+        Vérifie les logs pour des erreurs et les traite si nécessaire.
+        À appeler périodiquement.
+        """
+        # Vérifier la taille des logs avant traitement
+        self._check_and_rotate_log(self.main_log)
+        # Traiter les logs pour détecter les erreurs
+        self.process_error_logs()

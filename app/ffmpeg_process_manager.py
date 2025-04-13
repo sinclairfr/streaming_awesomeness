@@ -10,6 +10,7 @@ from config import logger
 import traceback
 from typing import Callable, Optional
 from datetime import datetime
+from error_handler import ErrorHandler  # Import the ErrorHandler class
 
 # Constante pour le seuil de détection des problèmes
 # Plus élevé = plus tolérant aux délais entre segments
@@ -92,6 +93,13 @@ class FFmpegProcessManager:
                 
                 if input_file and not os.path.exists(input_file):
                     logger.error(f"[{self.channel_name}] ❌ Fichier d'entrée introuvable: {input_file}")
+                    
+                    # Gérer l'erreur de fichier introuvable avec notre nouveau gestionnaire d'erreurs
+                    error_handler = ErrorHandler(self.channel_name)
+                    if error_handler.handle_ffmpeg_file_error(self.channel_name, input_file):
+                        logger.info(f"[{self.channel_name}] ✅ Récupération automatique après erreur de fichier")
+                        # On retourne False car ce processus ne démarrera pas,
+                        # mais le système a déjà lancé une récupération
                     return False
 
                 # Démarrer le processus

@@ -455,7 +455,22 @@ class StatsCollector:
                     if "unique_viewers" not in self.channel_stats[channel]:
                         self.channel_stats[channel]["unique_viewers"] = []
                     self.channel_stats[channel]["unique_viewers"].append(ip)
-
+            
+            # CORRECTION: Ajouter l'IP aux viewers uniques globaux
+            if "unique_viewers" not in self.channel_stats["global"]:
+                if isinstance(self.channel_stats["global"], dict):
+                    self.channel_stats["global"]["unique_viewers"] = set()
+                else:
+                    self.channel_stats["global"] = {"total_watch_time": 0, "total_bytes_transferred": 0, "unique_viewers": set(), "last_update": 0}
+            
+            # Si c'est un set, ajouter directement
+            if isinstance(self.channel_stats["global"]["unique_viewers"], set):
+                self.channel_stats["global"]["unique_viewers"].add(ip)
+            # Si c'est une liste, vérifier si l'IP est déjà présente avant d'ajouter
+            elif isinstance(self.channel_stats["global"]["unique_viewers"], list):
+                if ip not in self.channel_stats["global"]["unique_viewers"]:
+                    self.channel_stats["global"]["unique_viewers"].append(ip)
+            
             # Update watch time and byte counts
             if bytes_transferred == 0:  # Segment HLS
                 old_time = self.channel_stats[channel].get("total_watch_time", 0)
@@ -542,6 +557,21 @@ class StatsCollector:
                 
                 if ip not in self.channel_stats[new_channel]["unique_viewers"]:
                     self.channel_stats[new_channel]["unique_viewers"].append(ip)
+            
+            # CORRECTION: Ajouter l'IP aux viewers uniques globaux
+            if "unique_viewers" not in self.channel_stats["global"]:
+                if isinstance(self.channel_stats["global"], dict):
+                    self.channel_stats["global"]["unique_viewers"] = set()
+                else:
+                    self.channel_stats["global"] = {"total_watch_time": 0, "total_bytes_transferred": 0, "unique_viewers": set(), "last_update": 0}
+            
+            # Si c'est un set, ajouter directement
+            if isinstance(self.channel_stats["global"]["unique_viewers"], set):
+                self.channel_stats["global"]["unique_viewers"].add(ip)
+            # Si c'est une liste, vérifier si l'IP est déjà présente avant d'ajouter
+            elif isinstance(self.channel_stats["global"]["unique_viewers"], list):
+                if ip not in self.channel_stats["global"]["unique_viewers"]:
+                    self.channel_stats["global"]["unique_viewers"].append(ip)
             
             # Mettre à jour les statistiques utilisateur
             if ip not in self.user_stats["users"]:

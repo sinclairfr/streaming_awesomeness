@@ -15,6 +15,7 @@ import queue
 import logging
 from datetime import datetime
 from typing import Dict, List, Optional, Union, Any, Tuple
+from ffmpeg_logger import FFmpegLogger
 
 # Constantes
 SUMMARY_CYCLE = 300  # 5 minutes
@@ -170,7 +171,9 @@ class FFmpegMonitor(threading.Thread):
     def run_monitor_loop(self):
         """Boucle principale du monitoring avec intervalle plus long"""
         last_check_time = 0
+        last_error_check_time = 0
         check_interval = 30  # Vérifier toutes les 30 secondes
+        error_check_interval = 60  # Vérifier les erreurs toutes les 60 secondes
         
         while not self.stop_event.is_set():
             try:
@@ -181,12 +184,31 @@ class FFmpegMonitor(threading.Thread):
                     self._check_all_ffmpeg_processes()
                     last_check_time = current_time
                 
+                # Vérification des erreurs dans les logs FFmpeg
+                if current_time - last_error_check_time >= error_check_interval:
+                    self._check_ffmpeg_logs_for_errors()
+                    last_error_check_time = current_time
+                
                 # Pause plus longue
                 time.sleep(5)
                 
             except Exception as e:
                 logger.error(f"❌ Erreur monitoring FFmpeg: {e}")
                 time.sleep(10)
+
+    def _check_ffmpeg_logs_for_errors(self):
+        """Vérifie périodiquement les logs FFmpeg pour détecter des erreurs"""
+        try:
+            # Vérifier les logs de chaque chaîne
+            for channel_name in self.channels:
+                # Créer ou récupérer le logger FFmpeg pour cette chaîne
+                ffmpeg_logger = FFmpegLogger(channel_name)
+                
+                # Vérifier les erreurs dans les logs
+                ffmpeg_logger.check_for_errors()
+                
+        except Exception as e:
+            logger.error(f"❌ Erreur lors de la vérification des logs FFmpeg: {e}")
 
     def _save_stats_periodically(self):
         """Sauvegarde périodiquement les statistiques"""

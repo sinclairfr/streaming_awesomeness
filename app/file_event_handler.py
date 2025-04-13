@@ -47,6 +47,7 @@ class FileEventHandler(BaseFileEventHandler):
         start_time = time.time()
         last_size = -1
         stable_count = 0
+        logged_stability = False  # Flag pour éviter les logs répétitifs
 
         # Vérification initiale de la taille pour les gros fichiers
         try:
@@ -72,43 +73,55 @@ class FileEventHandler(BaseFileEventHandler):
                 # Si la taille n'a pas changé
                 if current_size == last_size:
                     stable_count += 1
-                    logger.info(
-                        f"Fichier stable depuis {stable_count}s: {file_path} ({current_size/1024/1024:.1f} MB)"
-                    )
+                    
+                    # Log une seule fois au début de la stabilité
+                    if not logged_stability and stable_count == 3:
+                        logged_stability = True
+                        logger.info(
+                            f"Fichier stable: {path.name} ({current_size/1024/1024:.1f} MB)"
+                        )
 
                     # Si le fichier est stable depuis assez longtemps et qu'il s'agit d'un MP4,
                     # on vérifie la présence de l'atom MOOV qui est crucial pour les MP4
                     if stable_count >= 5 and path.suffix.lower() == ".mp4":
                         # Vérification avancée pour MP4
                         if self._verify_mp4_completeness(file_path):
+                            logger.info(f"✅ MP4 validé comme stable après {stable_count}s: {path.name}")
                             return True
                         else:
                             # Si l'atome MOOV est manquant mais que le fichier est stable,
                             # on attend un peu plus pour les gros fichiers
                             if stable_count >= 15:
                                 logger.warning(
-                                    f"❌ Fichier MP4 incomplet même après stabilité prolongée: {file_path}"
+                                    f"❌ Fichier MP4 incomplet même après stabilité prolongée: {path.name}"
                                 )
                                 return False
                     elif stable_count >= 5:
                         # Pour les autres types de fichiers, la stabilité suffit
+                        logger.info(f"✅ Fichier validé comme stable après {stable_count}s: {path.name}")
                         return True
                 else:
+                    # Réinitialiser le statut de log si la taille change
+                    if logged_stability:
+                        logged_stability = False
+                    
                     stable_count = 0
-                    logger.info(
-                        f"{file_path} Taille en évolution: {current_size/1024/1024:.1f} MB (était {last_size/1024/1024:.1f} MB)"
-                    )
+                    # Log moins fréquent pour les changements de taille
+                    if last_size > 0 and abs(current_size - last_size) > 10240:  # 10KB de changement minimum
+                        logger.info(
+                            f"{path.name} Taille en évolution: {current_size/1024/1024:.1f} MB (était {last_size/1024/1024:.1f} MB)"
+                        )
 
                 last_size = current_size
                 time.sleep(1)
 
             except (OSError, PermissionError) as e:
                 # Le fichier est probablement encore verrouillé
-                logger.debug(f"Fichier {file_path} pas encore accessible: {e}")
+                logger.debug(f"Fichier {path.name} pas encore accessible: {e}")
                 time.sleep(1)
                 continue
 
-        logger.warning(f"⏰ Timeout en attendant {file_path}")
+        logger.warning(f"⏰ Timeout en attendant {path.name}")
         return False
 
     def _verify_mp4_completeness(self, file_path: str) -> bool:
@@ -239,12 +252,61 @@ class FileEventHandler(BaseFileEventHandler):
             logger.info(f"[{channel_name}] 🔄 Forçage de la création de la chaîne")
             self._force_channel_creation(channel_name)
 
+    def _is_already_indexed(self, file_path: str) -> bool:
+        """
+        Vérifie si un fichier est déjà indexé dans un playlist.txt
+        pour éviter des vérifications inutiles de stabilité.
+        
+        Args:
+            file_path: Chemin du fichier à vérifier
+            
+        Returns:
+            True si le fichier est déjà dans une playlist, False sinon
+        """
+        try:
+            # Vérifier si le fichier existe
+            if not os.path.exists(file_path):
+                return False
+                
+            # Obtenir le nom du canal (dossier parent)
+            path = Path(file_path)
+            channel_name = self._get_channel_name(str(path))
+            if not channel_name:
+                return False
+                
+            # Chemin vers le fichier playlist.txt
+            playlist_path = Path(self.manager.content_dir) / channel_name / "playlist.txt"
+            if not playlist_path.exists():
+                return False
+                
+            # Lire le contenu de playlist.txt
+            with open(playlist_path, "r", encoding="utf-8") as f:
+                content = f.read()
+                
+            # Vérifier si le nom du fichier est dans le contenu
+            if path.name in content:
+                logger.debug(f"[{channel_name}] Fichier {path.name} déjà dans la playlist, skip de la vérification")
+                return True
+                
+            return False
+        except Exception as e:
+            logger.error(f"Erreur vérification fichier déjà indexé {file_path}: {e}")
+            return False
+            
     def _wait_for_copy_completion(self, file_path: str, channel_name: str = ""):
         """Surveille un fichier en cours de copie et attend qu'il soit stable"""
         try:
+            # Vérifier si le fichier est déjà indexé
+            if self._is_already_indexed(file_path):
+                logger.info(f"✅ Fichier déjà indexé, skip d'attente: {Path(file_path).name}")
+                with self.lock:
+                    if file_path in self.copying_files:
+                        del self.copying_files[file_path]
+                return
+                
             # Vérification du fichier
             if not self.is_file_ready(file_path):
-                logger.info(f"❌ Fichier {file_path} non stable après le délai")
+                logger.info(f"❌ Fichier {Path(file_path).name} non stable après le délai")
                 with self.lock:
                     if file_path in self.copying_files:
                         del self.copying_files[file_path]
@@ -255,7 +317,7 @@ class FileEventHandler(BaseFileEventHandler):
                             self.channel_all_files[channel_name].remove(file_path)
                 return
 
-            logger.info(f"✅ Copie terminée: {file_path}")
+            logger.info(f"✅ Copie terminée: {Path(file_path).name}")
 
             # Planifier un scan si on a changé le channel_name
             if channel_name:

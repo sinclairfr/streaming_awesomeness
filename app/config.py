@@ -3,6 +3,7 @@ import os
 import logging
 import time
 import json
+import re
 from pathlib import Path
 import shutil
 
@@ -96,6 +97,53 @@ logger = logging.getLogger(__name__)
 
 # On désactive les logs de watchdog, quoi qu'il arrive
 logging.getLogger("watchdog").setLevel(logging.WARNING)
+
+def handle_ffmpeg_error(channel_name: str, error_message: str):
+    """
+    Détecte et gère les erreurs FFmpeg spécifiques aux fichiers.
+    
+    Args:
+        channel_name: Nom de la chaîne
+        error_message: Message d'erreur de FFmpeg
+    """
+    try:
+        # Import ici pour éviter l'import circulaire
+        from error_handler import ErrorHandler
+        
+        # Patterns d'erreurs liées aux fichiers
+        file_error_patterns = [
+            # Fichier introuvable
+            r"No such file or directory: '(.*?)'",
+            r"Invalid data found when processing input: '(.*?)'",
+            r"Could not find file: (.*?)$",
+            # Corruption de fichier
+            r"Invalid data found when processing input at (.*?)",
+            r"Error while decoding stream.*?: (.*?)",
+            r"corrupt.*?frame in (.*?)"
+        ]
+        
+        # Chercher un pattern qui correspond
+        file_path = None
+        for pattern in file_error_patterns:
+            match = re.search(pattern, error_message, re.IGNORECASE)
+            if match and match.group(1):
+                file_path = match.group(1)
+                break
+                
+        # Si on a trouvé un fichier problématique
+        if file_path:
+            logger.warning(f"[{channel_name}] 🔍 Détection d'un fichier problématique: {file_path}")
+            
+            # Initialiser le gestionnaire d'erreurs et traiter le problème
+            error_handler = ErrorHandler(channel_name)
+            if error_handler.handle_ffmpeg_file_error(channel_name, file_path):
+                logger.info(f"[{channel_name}] ✅ Récupération après problème de fichier réussie")
+            else:
+                logger.error(f"[{channel_name}] ❌ Échec de récupération après problème de fichier")
+        
+    except Exception as e:
+        logger.error(f"[{channel_name}] ❌ Erreur dans handle_ffmpeg_error: {e}")
+
 
 # Nouveau mode de streaming: true = ancien système (concaténation), false = fichier par fichier
 # Version simplifiée pour éviter les problèmes de type

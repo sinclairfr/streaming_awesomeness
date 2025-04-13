@@ -758,6 +758,171 @@ class IPTVChannel:
 
     # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
     # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    def check_watchers_timeout(self):
+        """Vérifie si le stream doit être arrêté en raison d'une absence de watchers"""
+        # On ne vérifie pas le timeout s'il n'y a pas de watchers_count
+        if not hasattr(self, "watchers_count"):
+            return False
+            
+        # On ne vérifie pas le timeout s'il n'est pas actif
+        if not self.process_manager.is_running():
+            return False
+            
+        # On ne vérifie pas le timeout s'il y a des watchers actifs
+        if self.watchers_count > 0:
+            return False
+            
+        # On ne vérifie pas le timeout s'il y a des erreurs critiques
+        if self.error_handler.has_critical_errors():
+            return False
+            
+        # Le stream continue de tourner même sans watchers
+        return False 
+
+    def _ensure_permissions(self):
+        """S'assure que tous les fichiers et dossiers de la chaîne ont les bonnes permissions."""
+        try:
+            # Définir video_extensions s'il n'est pas déjà défini
+            if not hasattr(self, 'video_extensions'):
+                self.video_extensions = (".mp4", ".avi", ".mkv", ".mov", ".m4v")
+                
+            # Vérifier le dossier principal
+            os.chmod(self.video_dir, 0o777)
+            logger.debug(f"[{self.name}] 📂 Permissions 777 appliquées au dossier de chaîne: {self.video_dir}")
+            
+            # Dossiers spéciaux
+            special_dirs = ["ready_to_stream", "processed"]
+            for dir_name in special_dirs:
+                dir_path = Path(self.video_dir) / dir_name
+                if dir_path.exists():
+                    os.chmod(dir_path, 0o777)
+                    logger.debug(f"[{self.name}] 📂 Permissions 777 appliquées à {dir_path}")
+            
+            # Fichiers vidéo
+            for item in Path(self.video_dir).glob("**/*"):
+                if item.is_file() and item.suffix.lower() in self.video_extensions:
+                    try:
+                        os.chmod(item, 0o666)
+                        logger.debug(f"[{self.name}] 📄 Permissions 666 appliquées à {item}")
+                    except Exception as e:
+                        logger.warning(f"[{self.name}] ⚠️ Impossible de modifier les permissions de {item}: {e}")
+            
+            logger.info(f"[{self.name}] ✅ Permissions corrigées pour tous les fichiers et dossiers")
+            return True
+        except Exception as e:
+            logger.error(f"[{self.name}] ❌ Erreur lors de la correction des permissions: {e}")
+            return False
+            
+    def refresh_videos(self):
+        """
+        Rafraîchit la liste des vidéos et redémarre le stream si nécessaire.
+        Cette méthode est appelée quand des fichiers sont ajoutés/supprimés dans ready_to_stream.
+        """
+        logger.info(f"[{self.name}] 🔄 Rafraîchissement des vidéos suite à un changement")
+        
+        # Sauvegarder la liste actuelle pour détecter les changements
+        old_videos = set()
+        if hasattr(self, "processed_videos") and self.processed_videos:
+            old_videos = set(str(v) for v in self.processed_videos)
+        
+        # Scanner les vidéos
+        with self.lock:  # Verrouiller pour modifier l'état partagé
+            scan_success = self._scan_videos()
+            if not scan_success:
+                logger.warning(f"[{self.name}] ⚠️ Échec du scan lors du rafraîchissement des vidéos")
+                # Si échec du scan et qu'on était en cours de lecture, il faut arrêter
+                if self.is_running() and not self.processed_videos:
+                    logger.warning(f"[{self.name}] ⚠️ Plus de vidéos disponibles, arrêt du stream")
+                    self.process_manager.stop_process()
+                return False
+        
+        # Vérifier si la liste des vidéos a changé
+        new_videos = set(str(v) for v in self.processed_videos)
+        if old_videos == new_videos:
+            logger.info(f"[{self.name}] ℹ️ Aucun changement détecté dans la liste des vidéos")
+            return True
+            
+        # La liste a changé, vérifier si le stream est en cours
+        if self.is_running():
+            # Si on lit actuellement un fichier qui a été supprimé
+            if self.current_video_index < len(self.processed_videos):
+                current_file = str(self.processed_videos[self.current_video_index])
+                # Vérifier si le fichier actuel existe toujours
+                if current_file not in old_videos or not Path(current_file).exists():
+                    logger.warning(f"[{self.name}] ⚠️ Le fichier actuel a été supprimé ou modifié, redémarrage nécessaire")
+                    # Redémarrer le stream avec un nouveau fichier
+                    return self._restart_stream(diagnostic="file_deleted")
+            else:
+                # Index invalide, nécessite un redémarrage
+                logger.warning(f"[{self.name}] ⚠️ Index vidéo ({self.current_video_index}) invalide après changement de liste")
+                return self._restart_stream(diagnostic="index_invalid")
+        
+        # Le stream n'est pas en cours, ou le fichier actuel existe toujours
+        logger.info(f"[{self.name}] ✅ Liste de vidéos mise à jour: {len(self.processed_videos)} fichiers")
+        return True
+
+    def check_stream_health(self):
+        """
+        Vérifie la santé du stream avec une approche plus tolérante
+        Logge les problèmes mais ne force pas le redémarrage immédiatement
+        """
+        try:
+            # Initialiser le compteur d'avertissements si nécessaire
+            if not hasattr(self, "_health_check_warnings"):
+                self._health_check_warnings = 0
+                self._last_health_check_time = time.time()
+            
+            # Réinitialiser périodiquement les avertissements (toutes les 30 minutes)
+            if time.time() - getattr(self, "_last_health_check_time", 0) > 1800:
+                self._health_check_warnings = 0
+                self._last_health_check_time = time.time()
+                logger.info(f"[{self.name}] Réinitialisation périodique des avertissements de santé")
+            
+            # Vérifier l'état de base: processus en cours?
+            if not self.process_manager.is_running():
+                logger.warning(f"[{self.name}] ⚠️ Processus FFmpeg inactif")
+                self._health_check_warnings += 1
+                
+                # Seuil de tolérance plus élevé
+                if self._health_check_warnings >= 3 and getattr(self, "watchers_count", 0) > 0:
+                    logger.warning(f"[{self.name}] ⚠️ {self._health_check_warnings} avertissements accumulés, tentative de redémarrage")
+                    self._health_check_warnings = 0
+                    return self._restart_stream()
+                else:
+                    logger.info(f"[{self.name}] Avertissement {self._health_check_warnings}/3 (attente avant action)")
+                    return False
+            
+            # Processus en cours, santé OK
+            if self._health_check_warnings > 0:
+                self._health_check_warnings -= 1  # Réduction progressive des avertissements
+                logger.info(f"[{self.name}] ✅ Santé améliorée, avertissements: {self._health_check_warnings}")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"[{self.name}] Erreur lors du check de santé du stream: {e}")
+            return False
+            
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
+    # def check_watchers_timeout(self):
+    #    ...
+
+
+    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
+    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
     # def check_watchers_timeout(self):
     #    ...
 
