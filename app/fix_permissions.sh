@@ -27,11 +27,14 @@ chown streamer:streamer /app/stats/*.json
 
 echo "Permissions fixed for stats files"
 
-# Chemin des répertoires à vérifier
-CONTENT_DIR="/mnt/frigate_data/streaming_awesomeness/content"
-HLS_DIR="/app/hls"
+# Utiliser les variables d'environnement du fichier .env
+# Avec des valeurs par défaut en cas d'absence
+CONTENT_DIR=${CONTENT_DIR:-"/mnt/frigate_data/streaming_awesomeness/content"}
+HLS_DIR=${HLS_DIR:-"/app/hls"}
 
 echo "💡 Démarrage du script de correction des permissions"
+echo "📂 Utilisation de CONTENT_DIR=$CONTENT_DIR"
+echo "📂 Utilisation de HLS_DIR=$HLS_DIR"
 
 # Vérifier si le répertoire content existe
 if [ ! -d "$CONTENT_DIR" ]; then
