@@ -36,8 +36,20 @@ class ChannelStatusManager:
         
         # Ensure directory exists and has proper permissions
         stats_dir = os.path.dirname(status_file)
-        os.makedirs(stats_dir, exist_ok=True)
-        os.chmod(stats_dir, 0o777)
+        try:
+            os.makedirs(stats_dir, exist_ok=True)
+            try:
+                os.chmod(stats_dir, 0o777)
+                logger.info(f"Set permissions 777 on stats directory: {stats_dir}")
+            except PermissionError:
+                logger.warning(f"⚠️ Cannot change permissions on stats directory: {stats_dir} (permission denied)")
+                # Check if the directory is at least writable
+                if os.access(stats_dir, os.W_OK):
+                    logger.info(f"✅ Stats directory {stats_dir} is writable, continuing anyway")
+                else:
+                    logger.error(f"❌ Stats directory {stats_dir} is not writable")
+        except Exception as e:
+            logger.error(f"❌ Error creating stats directory: {e}")
         
         # Create initial status file
         try:
@@ -47,7 +59,14 @@ class ChannelStatusManager:
                     'last_updated': 0,
                     'active_viewers': 0
                 }, f, indent=2)
-            os.chmod(status_file, 0o666)
+            try:
+                os.chmod(status_file, 0o666)
+                logger.info(f"Set permissions 666 on status file: {status_file}")
+            except PermissionError:
+                logger.warning(f"⚠️ Cannot change permissions on status file (permission denied)")
+                # Check if the file is at least writable
+                if os.access(status_file, os.W_OK):
+                    logger.info(f"✅ Status file is writable, continuing anyway")
             logger.info("Created initial channel status file")
         except Exception as e:
             logger.error(f"Error creating initial channel status file: {e}")

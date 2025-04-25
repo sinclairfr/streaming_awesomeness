@@ -82,6 +82,16 @@ RUN echo "*/5 * * * * /usr/bin/python3 /app/stuck_stream_monitor.py >> /var/log/
 RUN touch /var/log/cron.log && \
     chmod 666 /var/log/cron.log
 
+# Créer les fichiers stats initiaux
+RUN touch /app/stats/user_stats_v2.json /app/stats/channel_stats.json /app/stats/channels_status.json /app/stats/channel_stats_bytes.json /app/stats/user_stats_bytes.json && \
+    chmod 666 /app/stats/*.json && \
+    echo "{}" > /app/stats/user_stats_v2.json && \
+    echo "{}" > /app/stats/channel_stats.json && \
+    echo "{}" > /app/stats/channels_status.json && \
+    echo '{"global":{"total_watch_time":0,"total_bytes_transferred":0,"unique_viewers":[],"last_update":0}}' > /app/stats/channel_stats_bytes.json && \
+    echo '{"users":{},"last_updated":0}' > /app/stats/user_stats_bytes.json && \
+    chown -R streamer:streamer /app/stats
+
 # Passer à l'utilisateur non-root
 USER streamer
 
@@ -92,8 +102,12 @@ WORKDIR /app
 COPY --chown=streamer:streamer requirements.txt /app/
 COPY --chown=streamer:streamer setup_cron.sh /app/
 COPY --chown=streamer:streamer app/fix_permissions.sh /app/
+COPY --chown=streamer:streamer app/fix_log_permissions.sh /app/
+COPY --chown=streamer:streamer app/fix_stats_permissions.sh /app/
 RUN chmod +x /app/setup_cron.sh
 RUN chmod +x /app/fix_permissions.sh
+RUN chmod +x /app/fix_log_permissions.sh
+RUN chmod +x /app/fix_stats_permissions.sh
 
 # Installation des dépendances Python
 RUN pip3 install --no-cache-dir -r /app/requirements.txt
@@ -110,6 +124,9 @@ chmod 666 /app/stats/*.json\n\
 chown streamer:streamer /app/stats/*.json\n\
 sudo service cron start\n\
 echo "Cron service started"\n\
+/app/fix_log_permissions.sh\n\
+/app/fix_stats_permissions.sh\n\
+echo "Log and stats permissions fixed"\n\
 exec python3 main.py' > /app/start.sh && \
 chmod +x /app/start.sh
 

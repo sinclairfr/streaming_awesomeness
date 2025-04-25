@@ -86,9 +86,31 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - [%(levelname)s] - %(message)s",
     handlers=[
         logging.StreamHandler(),  # Pour afficher dans la console
-        logging.FileHandler("/app/logs/app.log"),  # Pour sauvegarder dans un fichier
     ],
 )
+
+# Essayons d'ajouter le FileHandler avec gestion d'erreur
+try:
+    # Vérifier que le dossier existe
+    log_dir = Path("/app/logs")
+    log_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Vérifier que le fichier existe
+    log_file = log_dir / "app.log"
+    if not log_file.exists():
+        try:
+            log_file.touch(mode=0o666)
+        except:
+            pass  # Ignorer l'erreur si on ne peut pas créer le fichier
+    
+    # Essayer d'ajouter le handler si le fichier existe et est accessible
+    if log_file.exists() and os.access(log_file, os.W_OK):
+        handler = logging.FileHandler(str(log_file))
+        handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - [%(levelname)s] - %(message)s"))
+        logging.getLogger().addHandler(handler)
+except Exception as e:
+    print(f"Impossible d'initialiser le FileHandler: {e}")
+    
 # On s'assure que tous les loggers utilisent le même niveau
 logging.getLogger().setLevel(get_log_level(os.getenv("LOG_LEVEL", "INFO")))
 

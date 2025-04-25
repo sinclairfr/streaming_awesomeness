@@ -7,15 +7,16 @@ services:
       context: .
       dockerfile: Dockerfile
     user: "1000:1000"  # Exécuter en tant qu'utilisateur non-root (streamer)
-    entrypoint: ["/bin/bash", "-c", "id -g streamer || groupadd streamer; id -u streamer || useradd -m -g streamer streamer; chmod 777 /dev/dri/renderD128 || true; chmod 777 /dev/dri/card1 || true; chown -R streamer:streamer /app || true; chmod -R 777 /app || true; sudo /app/fix_permissions.sh || true; exec python3 main.py"]
+    entrypoint: ["/app/start.sh"]
     volumes:
       - ./app/hls:/app/hls:rw
       - ./app/logs:/app/logs:rw
-      - ./app:/app:rw  # Regroupe tous les fichiers de l'application
-      - /mnt/frigate_data/streaming_awesomeness:/mnt/frigate_data/streaming_awesomeness
-    devices:
-      - /dev/dri/card1:/dev/dri/card1
-      - /dev/dri/renderD128:/dev/dri/renderD128
+      - ./app/stats:/app/stats:rw
+      - ./app:/app:ro  # En lecture seule, avec exceptions spécifiques ci-dessus
+      - /mnt/frigate_data/streaming_awesomeness/content:/mnt/videos
+    #dvices:
+      #- /dev/dri/card1:/dev/dri/card1
+      #- /dev/dri/renderD128:/dev/dri/renderD128
     security_opt:
       - apparmor:unconfined  # May be needed for full GPU access
     environment:
