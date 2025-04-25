@@ -4,7 +4,7 @@ import threading
 from watchdog.events import FileSystemEventHandler
 from pathlib import Path
 import os
-from config import logger, HLS_SEGMENT_DURATION
+from config import logger, HLS_SEGMENT_DURATION, SERVER_URL
 import subprocess
 import traceback
 import shutil
@@ -384,32 +384,58 @@ class FileEventHandler(BaseFileEventHandler):
         # Si la chaîne existe déjà, forcer un redémarrage direct
         if channel_name in self.manager.channels:
             channel = self.manager.channels[channel_name]
-            if hasattr(channel, "_restart_stream"):
-                logger.info(f"[{channel_name}] 🔄 Forçage du redémarrage du stream après détection de stabilité des fichiers")
-                channel._restart_stream()
-                # Attendre que le stream démarre
-                time.sleep(2)
-                # Vérifier que le stream est bien démarré
-                if hasattr(channel, "process_manager") and channel.process_manager.is_running():
-                    logger.info(f"[{channel_name}] ✅ Stream redémarré avec succès")
-                    # Réinitialiser le flag de stabilité après un redémarrage réussi
-                    if hasattr(self, stability_check_key):
-                         delattr(self, stability_check_key)
-                else:
-                    # Si le redémarrage a échoué, tenter le démarrage direct
-                    logger.warning(f"[{channel_name}] ⚠️ Échec du redémarrage, tentative de démarrage direct FFmpeg")
-                    # On ne force pas le démarrage ffmpeg ici, cela pourrait causer des problèmes si la chaîne n'est pas prête
-                    # self._force_ffmpeg_start(channel_name)
+            # Vérifier que la chaîne n'est pas None
+            if channel is None:
+                logger.error(f"[{channel_name}] ❌ La chaîne existe dans le manager mais est None")
+                return
+                
+            if not hasattr(channel, "_restart_stream"):
+                logger.warning(f"[{channel_name}] ⚠️ Adding missing _restart_stream method to channel.")
+                # Add a basic implementation that will restart using start_stream
+                def restart_stream_impl(diagnostic=None):
+                    """Basic implementation for channels missing _restart_stream method"""
+                    try:
+                        logger.info(f"[{channel_name}] 🔄 Basic restart implementation called. Reason: {diagnostic or 'Unknown'}")
+                        # Stop current stream if it's running
+                        if hasattr(channel, "process_manager") and channel.process_manager.is_running():
+                            channel.process_manager.stop_process()
+                        
+                        # Clean HLS segments if possible
+                        if hasattr(channel, "hls_cleaner"):
+                            channel.hls_cleaner.cleanup_channel(channel_name)
+                        
+                        # Try to start the stream again
+                        if hasattr(channel, "start_stream"):
+                            success = channel.start_stream()
+                            logger.info(f"[{channel_name}] {'✅ Stream restarted successfully' if success else '❌ Failed to restart stream'}")
+                            return success
+                        else:
+                            logger.error(f"[{channel_name}] ❌ Channel doesn't have start_stream method")
+                            return False
+                    except Exception as e:
+                        logger.error(f"[{channel_name}] ❌ Error in basic restart implementation: {e}")
+                        return False
+                
+                # Add the method to the channel
+                setattr(channel, "_restart_stream", restart_stream_impl)
+                logger.info(f"[{channel_name}] ✅ Added basic _restart_stream method to channel")
+                
+            # Now call the _restart_stream method (either original or our added implementation)
+            logger.info(f"[{channel_name}] 🔄 Forçage du redémarrage du stream après détection de stabilité des fichiers")
+            channel._restart_stream()
+            # Attendre que le stream démarre
+            time.sleep(2)
+            # Vérifier que le stream est bien démarré
+            if hasattr(channel, "process_manager") and channel.process_manager.is_running():
+                logger.info(f"[{channel_name}] ✅ Stream redémarré avec succès")
+                # Réinitialiser le flag de stabilité après un redémarrage réussi
+                if hasattr(self, stability_check_key):
+                     delattr(self, stability_check_key)
             else:
-                logger.warning(f"[{channel_name}] ⚠️ La chaîne existe mais n'a pas de méthode _restart_stream.")
-        # REMOVED ELSE BLOCK - Do not force creation from file events
-        # else:
-        #     # La chaîne n'existe pas, la créer et démarrer directement
-        #     logger.info(f"[{channel_name}] 🔄 Création et démarrage forcé de la chaîne")
-        #     if not self._force_channel_creation(channel_name):
-        #         # Si la création échoue, tenter le démarrage direct FFmpeg
-        #         logger.warning(f"[{channel_name}] ⚠️ Échec de la création, tentative de démarrage direct FFmpeg")
-        #         self._force_ffmpeg_start(channel_name)
+                # Si le redémarrage a échoué, tenter le démarrage direct
+                logger.warning(f"[{channel_name}] ⚠️ Échec du redémarrage, tentative de démarrage direct FFmpeg")
+                # On ne force pas le démarrage ffmpeg ici, cela pourrait causer des problèmes si la chaîne n'est pas prête
+                # self._force_ffmpeg_start(channel_name)
 
         # Mise à jour de la playlist principale - Only if channel exists and restarted?
         # Let's move this inside the if block to avoid updating if channel didn't exist
@@ -540,10 +566,9 @@ class FileEventHandler(BaseFileEventHandler):
             active_channels.sort()
             
             # Ajouter chaque chaîne à la playlist
-            server_url = os.getenv("SERVER_URL", "192.168.10.183")
             for channel_name in active_channels:
                 content += f'#EXTINF:-1 tvg-id="{channel_name}" tvg-name="{channel_name}",{channel_name}\n'
-                content += f"http://{server_url}/hls/{channel_name}/playlist.m3u8\n"
+                content += f"http://{SERVER_URL}/hls/{channel_name}/playlist.m3u8\n"
             
             # Écrire le contenu
             with open(playlist_path, "w", encoding="utf-8") as f:
@@ -780,6 +805,37 @@ class ReadyContentHandler(FileSystemEventHandler):
                     # NOUVEAU: Redémarrer le stream seulement si la playlist a changé
                     if old_content != new_content:
                         logger.info(f"[{channel_name}] 🔄 Playlist modifiée, redémarrage nécessaire")
+                        if not hasattr(channel, "_restart_stream"):
+                            logger.warning(f"[{channel_name}] ⚠️ Adding missing _restart_stream method to channel.")
+                            # Add a basic implementation that will restart using start_stream
+                            def restart_stream_impl(diagnostic=None):
+                                """Basic implementation for channels missing _restart_stream method"""
+                                try:
+                                    logger.info(f"[{channel_name}] 🔄 Basic restart implementation called. Reason: {diagnostic or 'Unknown'}")
+                                    # Stop current stream if it's running
+                                    if hasattr(channel, "process_manager") and channel.process_manager.is_running():
+                                        channel.process_manager.stop_process()
+                                    
+                                    # Clean HLS segments if possible
+                                    if hasattr(channel, "hls_cleaner"):
+                                        channel.hls_cleaner.cleanup_channel(channel_name)
+                                    
+                                    # Try to start the stream again
+                                    if hasattr(channel, "start_stream"):
+                                        success = channel.start_stream()
+                                        logger.info(f"[{channel_name}] {'✅ Stream restarted successfully' if success else '❌ Failed to restart stream'}")
+                                        return success
+                                    else:
+                                        logger.error(f"[{channel_name}] ❌ Channel doesn't have start_stream method")
+                                        return False
+                                except Exception as e:
+                                    logger.error(f"[{channel_name}] ❌ Error in basic restart implementation: {e}")
+                                    return False
+                            
+                            # Add the method to the channel
+                            setattr(channel, "_restart_stream", restart_stream_impl)
+                            logger.info(f"[{channel_name}] ✅ Added basic _restart_stream method to channel")
+                            
                         if hasattr(channel, "_restart_stream"):
                             logger.info(f"[{channel_name}] 🔄 Redémarrage du stream pour appliquer la nouvelle playlist")
                             # Redémarrer dans un thread séparé pour ne pas bloquer

@@ -764,11 +764,11 @@ class IPTVManager:
                          logger.debug(f"[{name}] ⏳ Chaîne non initialisée (objet None), non ajoutée à la playlist maître.")
 
                 # Écriture des chaînes prêtes
-                # No need to get SERVER_URL from os.getenv since we already imported it from config
+                server_url = os.getenv("SERVER_URL", "192.168.10.183")
                 if ready_channels:
                     for name, _ in ready_channels:
                         content += f'#EXTINF:-1 tvg-id="{name}" tvg-name="{name}",{name}\n'
-                        content += f"http://{SERVER_URL}/hls/{name}/playlist.m3u8\n"
+                        content += f"http://{server_url}/hls/{name}/playlist.m3u8\n"
                 else:
                     # Si aucune chaîne n'est prête, ajouter un commentaire
                     content += "# Aucune chaîne active pour le moment\n"

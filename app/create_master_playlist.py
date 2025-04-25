@@ -5,8 +5,13 @@ from pathlib import Path
 import time
 import traceback
 
-# Configuration de base
-SERVER_URL = os.getenv("SERVER_URL", "192.168.10.183")
+# Import from config
+try:
+    from config import SERVER_URL
+except ImportError:
+    # Fallback if config.py is not available
+    SERVER_URL = os.getenv("SERVER_URL", "192.168.10.183")
+    
 PLAYLIST_PATH = "/app/hls/playlist.m3u"
 
 def create_master_playlist():

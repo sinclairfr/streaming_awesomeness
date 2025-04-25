@@ -4,6 +4,8 @@ import time
 import logging
 from pathlib import Path
 from base_file_event_handler import BaseFileEventHandler
+import os
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -11,42 +13,45 @@ class ReadyContentHandler(BaseFileEventHandler):
     """Surveille les modifications dans les dossiers ready_to_stream"""
 
     def __init__(self, manager):
-        super().__init__(manager)
+        """Initialise le gestionnaire d'événements"""
+        self.manager = manager
+        super().__init__(manager)  # Call the parent class's __init__ method
 
     def _handle_event(self, event):
         """Gère tous les événements détectés dans ready_to_stream"""
         try:
-            # Vérifie que c'est un fichier MP4
-            path = Path(event.src_path)
-            if not self._should_process_event(event):
+            if event.is_directory:
                 return
 
-            # Extrait le nom de la chaîne du chemin
+            path = Path(event.src_path)
+            if not path.exists():
+                return
+
             # Le format attendu est */content/{channel_name}/ready_to_stream/*.mp4
-            path_parts = path.parts
+            parts = path.parts
 
             # Trouve l'index du dossier ready_to_stream
-            ready_index = -1
-            for i, part in enumerate(path_parts):
+            ready_idx = None
+            for i, part in enumerate(parts):
                 if part == "ready_to_stream":
-                    ready_index = i
+                    ready_idx = i
                     break
 
-            if ready_index > 0 and ready_index < len(path_parts):
-                # Le nom de la chaîne est juste avant "ready_to_stream"
-                channel_name = path_parts[ready_index - 1]
+            if ready_idx is None or ready_idx == 0:
+                return
 
-                # Vérifie le cooldown pour éviter les mises à jour trop fréquentes
-                if not self._check_cooldown(channel_name):
-                    return
+            # Le nom de la chaîne est juste avant "ready_to_stream"
+            channel_name = parts[ready_idx - 1]
 
-                # Log l'événement
-                logger.info(
-                    f"🔔 Modification détectée dans ready_to_stream pour {channel_name}: {path.name}"
-                )
+            if not path.suffix.lower() in [".mp4", ".mkv", ".avi", ".mov"]:
+                return
 
-                # Effectue les mises à jour nécessaires
-                self._update_channel(channel_name)
+            logger.info(
+                f"🔔 Modification détectée dans ready_to_stream pour {channel_name}: {path.name}"
+            )
+
+            # Mettre à jour la chaîne
+            self._update_channel(channel_name)
 
         except Exception as e:
             logger.error(f"❌ Erreur traitement événement ready_to_stream: {e}")
@@ -54,87 +59,91 @@ class ReadyContentHandler(BaseFileEventHandler):
     def _update_channel(self, channel_name):
         """Met à jour les playlists et l'état de la chaîne"""
         try:
-            # Vérifie que la chaîne existe
-            if channel_name not in self.manager.channels:
-                logger.warning(f"⚠️ Chaîne {channel_name} non trouvée dans le manager")
-                return
+            logger.info(f"[{channel_name}] 🔄 Mise à jour suite à modification dans ready_to_stream")
 
-            channel = self.manager.channels[channel_name]
+            # Vérifier si la chaîne existe déjà dans le gestionnaire
+            channel = None
+            if channel_name in self.manager.channels:
+                channel = self.manager.channels[channel_name]
+                logger.info(f"[{channel_name}] ✅ Chaîne existante, mise à jour...")
 
-            # 1. Demande à la chaîne de rafraîchir ses vidéos
-            threading.Thread(target=channel.refresh_videos, daemon=True).start()
+                # ----------------- Refresh videos -----------------
+                # Récupérer les fichiers actuels
+                if hasattr(channel, "refresh_videos"):
+                    channel.refresh_videos()
+                else:
+                    logger.warning(f"[{channel_name}] ⚠️ La chaîne n'a pas de méthode refresh_videos.")
+                
+                # Add _restart_stream method if it doesn't exist
+                if not hasattr(channel, "_restart_stream"):
+                    logger.warning(f"[{channel_name}] ⚠️ Adding missing _restart_stream method to channel.")
+                    # Add a basic implementation that will restart using start_stream
+                    def restart_stream_impl(diagnostic=None):
+                        """Basic implementation for channels missing _restart_stream method"""
+                        try:
+                            logger.info(f"[{channel_name}] 🔄 Basic restart implementation called. Reason: {diagnostic or 'Unknown'}")
+                            # Stop current stream if it's running
+                            if hasattr(channel, "process_manager") and channel.process_manager.is_running():
+                                channel.process_manager.stop_process()
+                            
+                            # Clean HLS segments if possible
+                            if hasattr(channel, "hls_cleaner"):
+                                channel.hls_cleaner.cleanup_channel(channel_name)
+                            
+                            # Try to start the stream again
+                            if hasattr(channel, "start_stream"):
+                                success = channel.start_stream()
+                                logger.info(f"[{channel_name}] {'✅ Stream restarted successfully' if success else '❌ Failed to restart stream'}")
+                                return success
+                            else:
+                                logger.error(f"[{channel_name}] ❌ Channel doesn't have start_stream method")
+                                return False
+                        except Exception as e:
+                            logger.error(f"[{channel_name}] ❌ Error in basic restart implementation: {e}")
+                            return False
+                    
+                    # Add the method to the channel
+                    setattr(channel, "_restart_stream", restart_stream_impl)
+                    logger.info(f"[{channel_name}] ✅ Added basic _restart_stream method to channel")
 
-            # 2. Met à jour le statut de la chaîne dans le manager
-            with self.manager.scan_lock:
-                self.manager.channel_ready_status[channel_name] = True
+                # Vérifier l'état de la playlist
+                playlist_path = Path(channel.video_dir) / "_playlist.txt"
+                old_content = ""
+                if playlist_path.exists():
+                    with open(playlist_path, "r", encoding="utf-8") as f:
+                        old_content = f.read()
 
-            # 3. Met à jour la playlist maître
-            threading.Thread(
-                target=self.manager._manage_master_playlist, daemon=True
-            ).start()
-
-            # 4. Calcul et mise à jour de la durée totale
-            if hasattr(channel, "position_manager") and hasattr(
-                channel, "_calculate_total_duration"
-            ):
-
-                def update_duration():
-                    try:
-                        total_duration = channel._calculate_total_duration()
-                        channel.position_manager.set_total_duration(total_duration)
-                        channel.process_manager.set_total_duration(total_duration)
-                        logger.info(
-                            f"[{channel_name}] ✅ Durée totale mise à jour: {total_duration:.2f}s"
-                        )
-                    except Exception as e:
-                        logger.error(
-                            f"[{channel_name}] ❌ Erreur mise à jour durée: {e}"
-                        )
-
-                threading.Thread(target=update_duration, daemon=True).start()
-
-            # 5. Mise à jour des offsets si stream en cours d'exécution
-            if (
-                hasattr(channel, "process_manager")
-                and channel.process_manager.is_running()
-            ):
-                # On ne fait plus de mise à jour d'offset, on recrée juste la playlist si nécessaire
+                # Forcer la création du fichier de playlist
                 if hasattr(channel, "_create_concat_file"):
-                    # Vérifier l'état actuel de la playlist avant modification
-                    playlist_path = Path(channel.video_dir) / "_playlist.txt"
-                    old_content = ""
-                    if playlist_path.exists():
-                        with open(playlist_path, "r", encoding="utf-8") as f:
-                            old_content = f.read()
-                    
-                    # Mettre à jour la playlist
                     channel._create_concat_file()
-                    logger.info(f"[{channel_name}] 🔄 Playlist mise à jour suite aux changements")
-                    
-                    # Vérifier si la playlist a réellement changé
-                    new_content = ""
-                    if playlist_path.exists():
-                        with open(playlist_path, "r", encoding="utf-8") as f:
-                            new_content = f.read()
-                    
-                    # Redémarrer le stream seulement si la playlist a changé
-                    if old_content != new_content:
-                        logger.info(f"[{channel_name}] 🔄 Playlist modifiée, redémarrage nécessaire")
-                        if hasattr(channel, "_restart_stream"):
-                            logger.info(f"[{channel_name}] 🔄 Redémarrage du stream pour appliquer la nouvelle playlist")
-                            # Redémarrer dans un thread séparé pour ne pas bloquer
-                            threading.Thread(
-                                target=channel._restart_stream,
-                                daemon=True
-                            ).start()
-                    else:
-                        logger.info(f"[{channel_name}] ✓ Playlist inchangée, vérification du démarrage")
-                        # Même si la playlist n'a pas changé, on vérifie si le stream doit être démarré
-                        if hasattr(channel, "start_stream_if_needed"):
-                            threading.Thread(
-                                target=channel.start_stream_if_needed,
-                                daemon=True
-                            ).start()
+                    logger.info(f"[{channel_name}] ✅ Playlist mise à jour")
+                else:
+                    logger.warning(f"[{channel_name}] ⚠️ La chaîne n'a pas de méthode _create_concat_file.")
+
+                # Vérifier si la playlist a changé
+                new_content = ""
+                if playlist_path.exists():
+                    with open(playlist_path, "r", encoding="utf-8") as f:
+                        new_content = f.read()
+
+                # Redémarrer le stream seulement si la playlist a changé
+                if old_content != new_content:
+                    logger.info(f"[{channel_name}] 🔄 Playlist modifiée, redémarrage nécessaire")
+                    if hasattr(channel, "_restart_stream"):
+                        logger.info(f"[{channel_name}] 🔄 Redémarrage du stream pour appliquer la nouvelle playlist")
+                        # Redémarrer dans un thread séparé pour ne pas bloquer
+                        threading.Thread(
+                            target=channel._restart_stream,
+                            daemon=True
+                        ).start()
+                else:
+                    logger.info(f"[{channel_name}] ✓ Playlist inchangée, vérification du démarrage")
+                    # Même si la playlist n'a pas changé, on vérifie si le stream doit être démarré
+                    if hasattr(channel, "start_stream_if_needed"):
+                        threading.Thread(
+                            target=channel.start_stream_if_needed,
+                            daemon=True
+                        ).start()
 
             logger.info(
                 f"✅ Mises à jour initiées pour {channel_name} suite à changement dans ready_to_stream"

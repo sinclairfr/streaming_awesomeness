@@ -4,8 +4,19 @@ import logging
 import time
 import json
 import re
+import socket
 from pathlib import Path
 import shutil
+
+# Configure logging first
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger("config")
 
 # Configuration des chemins
 LOG_DIR = os.getenv("LOG_DIR", "/app/logs")
@@ -14,7 +25,27 @@ CONTENT_DIR = Path(
 )
 CHANNELS_STATUS_FILE = os.getenv("CHANNELS_STATUS_FILE", "/app/stats/channels_status.json")
 NGINX_ACCESS_LOG = "/app/logs/nginx/access.log"
-SERVER_URL = os.getenv("SERVER_URL", "192.168.10.183")
+
+# Determine server URL - automatically detect IP if set to "auto"
+def get_server_ip():
+    """Get the server's IP address by connecting to Google DNS server."""
+    try:
+        # This doesn't actually establish a connection but gives us the IP we'd use to connect
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception as e:
+        print(f"Failed to auto-detect IP address: {e}")
+        return "192.168.10.183"  # Fallback IP
+
+server_url_env = os.getenv("SERVER_URL", "auto")
+if server_url_env.lower() == "auto":
+    SERVER_URL = get_server_ip()
+    print(f"Auto-detected SERVER_URL: {SERVER_URL}")
+else:
+    SERVER_URL = server_url_env
 
 # Configuration des timeouts
 HLS_SEGMENT_DURATION = float(os.getenv("HLS_SEGMENT_DURATION", "2.0"))
@@ -80,14 +111,6 @@ def get_log_level(level_str: str) -> int:
     # On retourne le niveau demandé ou INFO par défaut
     return valid_levels.get(level_str.upper(), logging.INFO)
 
-
-logging.basicConfig(
-    level=get_log_level(os.getenv("LOG_LEVEL", "INFO")),
-    format="%(asctime)s - %(name)s - [%(levelname)s] - %(message)s",
-    handlers=[
-        logging.StreamHandler(),  # Pour afficher dans la console
-    ],
-)
 
 # Essayons d'ajouter le FileHandler avec gestion d'erreur
 try:

@@ -14,7 +14,11 @@ import subprocess
 # Configuration
 PLAYLIST_PATH = "/app/hls/playlist.m3u"
 CHECK_INTERVAL = 60  # Vérification toutes les 60 secondes
-SERVER_URL = os.getenv("SERVER_URL", "192.168.10.183")
+try:
+    from config import SERVER_URL
+except ImportError:
+    # Fallback if config.py is not available
+    SERVER_URL = os.getenv("SERVER_URL", "192.168.10.183")
 MASTER_PLAYLIST_CREATOR = "/app/create_master_playlist.py"
 
 # Configuration du logger
