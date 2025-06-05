@@ -13,7 +13,7 @@ services:
       - ./app/logs:/app/logs:rw
       - ./app/stats:/app/stats:rw
       - ./app:/app:ro  # En lecture seule, avec exceptions spécifiques ci-dessus
-      - /mnt/frigate_data/streaming_awesomeness/content:/mnt/videos
+      - /mnt/docker_data/streaming_awesomeness/streaming_awesomeness/content:/mnt/videos:rw
     #dvices:
       #- /dev/dri/card1:/dev/dri/card1
       #- /dev/dri/renderD128:/dev/dri/renderD128
