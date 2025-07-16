@@ -6,7 +6,7 @@ from pathlib import Path
 from config import logger
 import os
 import signal
-from config import FFMPEG_LOG_LEVEL, logger, WATCHERS_LOG_CYCLE
+from config import FFMPEG_LOG_LEVEL, logger, WATCHERS_LOG_CYCLE, HLS_DIR
 import random
 import re
 import json
@@ -66,7 +66,7 @@ class FFmpegMonitor(threading.Thread):
 
                         # Détecter le nom de la chaîne
                         for channel_name in self.channels:
-                            if f"/hls/{channel_name}/" in cmd_str:
+                            if f"/{HLS_DIR.strip('/')}/{channel_name}/" in cmd_str:
                                 ffmpeg_processes.setdefault(channel_name, []).append(proc.info["pid"])
                                 break
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
@@ -257,26 +257,16 @@ class FFmpegMonitor(threading.Thread):
 
     def ensure_hls_directory(self, channel_name: str = None):
         """Ensure that HLS directory exists for a channel or all channels"""
-        self.hls_dir = Path("/app/hls")  # Define hls_dir if not already defined
+        self.hls_dir = Path(HLS_DIR)  # Define hls_dir if not already defined
         
         if channel_name:
             # Ensure a specific channel directory exists
             channel_path = Path(self.hls_dir) / channel_name
             channel_path.mkdir(exist_ok=True, parents=True)
-            try:
-                os.chmod(channel_path, 0o777)  # Full permissions
-                logger.debug(f"📁 Set permissions 777 on {channel_path}")
-            except Exception as e:
-                logger.warning(f"⚠️ Could not chmod {channel_path}: {e}")
             return channel_path
         else:
             # Create/verify main HLS directory
             Path(self.hls_dir).mkdir(exist_ok=True, parents=True)
-            try:
-                os.chmod(self.hls_dir, 0o777)  # Full permissions
-                logger.debug(f"📁 Set permissions 777 on {self.hls_dir}")
-            except Exception as e:
-                logger.warning(f"⚠️ Could not chmod {self.hls_dir}: {e}")
             return self.hls_dir
 
     def clean_channel(self, channel_name):
@@ -289,7 +279,6 @@ class FFmpegMonitor(threading.Thread):
             if not os.path.exists(channel_dir):
                 logger.debug(f"Le dossier {channel_dir} n'existe pas, création...")
                 os.makedirs(channel_dir, exist_ok=True)
-                os.chmod(channel_dir, 0o777)  # Full permissions
                 return True
             return True
         except Exception as e:

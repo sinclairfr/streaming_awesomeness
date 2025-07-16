@@ -53,9 +53,11 @@ RUN usermod -aG sudo streamer && \
     echo "streamer ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers.d/streamer
 
 # Donne TOUS les droits sur /app
-RUN mkdir -p /app/hls /app/logs/ffmpeg /app/restart_requests /app/stats && \
+RUN mkdir -p /app/hls /app/logs/ffmpeg /app/restart_requests /app/stats /mnt/iptv && \
     chown -R streamer:streamer /app && \
-    chmod -R 777 /app
+    chmod -R 777 /app && \
+    chown -R streamer:streamer /mnt/iptv && \
+    chmod -R 777 /mnt/iptv
 
 # Configuration de logrotate pour nginx
 RUN echo '/var/log/nginx/*.log {\n\
@@ -101,19 +103,21 @@ WORKDIR /app
 # Copier les fichiers nécessaires à l'application
 COPY --chown=streamer:streamer requirements.txt /app/
 COPY --chown=streamer:streamer setup_cron.sh /app/
-COPY --chown=streamer:streamer app/fix_permissions.sh /app/
-COPY --chown=streamer:streamer app/fix_log_permissions.sh /app/
-COPY --chown=streamer:streamer app/fix_stats_permissions.sh /app/
-RUN chmod +x /app/setup_cron.sh
-RUN chmod +x /app/fix_permissions.sh
-RUN chmod +x /app/fix_log_permissions.sh
-RUN chmod +x /app/fix_stats_permissions.sh
+COPY --chown=streamer:streamer app/ /app/
+RUN chmod +x /app/setup_cron.sh && \
+    chmod +x /app/fix_permissions.sh && \
+    chmod +x /app/fix_log_permissions.sh && \
+    chmod +x /app/fix_stats_permissions.sh
 
 # Installation des dépendances Python
 RUN pip3 install --no-cache-dir -r /app/requirements.txt
 
 # Création du script de démarrage
 RUN echo '#!/bin/bash\n\
+sudo chown -R streamer:streamer /mnt/iptv\n\
+mkdir -p /mnt/iptv\n\
+chown -R streamer:streamer /mnt/iptv\n\
+chmod -R 777 /mnt/iptv\n\
 chown -R streamer:streamer /app\n\
 chmod -R 777 /app\n\
 mkdir -p /app/stats\n\

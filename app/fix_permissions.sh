@@ -29,7 +29,7 @@ echo "Permissions fixed for stats files"
 
 # Utiliser les variables d'environnement du fichier .env
 # Avec des valeurs par défaut en cas d'absence
-CONTENT_DIR=${CONTENT_DIR:-"/mnt/frigate_data/streaming_awesomeness/content"}
+CONTENT_DIR=${CONTENT_DIR:-"/mnt/docker_data/streaming_awesomeness/content"}
 HLS_DIR=${HLS_DIR:-"/app/hls"}
 
 echo "💡 Démarrage du script de correction des permissions"

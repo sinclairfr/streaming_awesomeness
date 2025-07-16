@@ -13,7 +13,8 @@ import psutil
 from config import (
     CONTENT_DIR,
     USE_GPU,
-    logger
+    logger,
+    HLS_DIR
 )
 import traceback
 
@@ -46,7 +47,7 @@ class Application:
             # On vérifie/crée les dossiers requis avec les bonnes permissions
             required_dirs = [
                 CONTENT_DIR,
-                "/app/hls",
+                HLS_DIR,
                 "/app/logs",
                 "/app/logs/ffmpeg",
                 "/app/logs/nginx"
@@ -64,16 +65,11 @@ class Application:
                 
                 # Check if directory exists and is writable
                 if path.exists():
-                    try:
-                        os.chmod(str(path), 0o777)
-                        writeable_dirs[d] = True
-                        logger.info(f"📁 Dossier {d} créé/vérifié avec permissions 777")
-                    except PermissionError:
-                        writeable_dirs[d] = os.access(str(path), os.W_OK)
-                        if writeable_dirs[d]:
-                            logger.info(f"📁 Dossier {d} accessible en écriture mais impossible de changer les permissions")
-                        else:
-                            logger.warning(f"⚠️ Dossier {d} n'est pas accessible en écriture")
+                    writeable_dirs[d] = os.access(str(path), os.W_OK)
+                    if writeable_dirs[d]:
+                        logger.info(f"📁 Dossier {d} vérifié et accessible en écriture.")
+                    else:
+                        logger.warning(f"⚠️ Dossier {d} n'est pas accessible en écriture.")
                 else:
                     writeable_dirs[d] = False
                     logger.warning(f"⚠️ Dossier {d} n'existe pas et ne peut pas être créé")
@@ -84,13 +80,12 @@ class Application:
                 if not nginx_log.exists():
                     try:
                         nginx_log.touch()
-                        os.chmod(str(nginx_log), 0o666)
-                        logger.info("📝 Fichier access.log créé avec permissions 666")
+                        logger.info("📝 Fichier access.log créé.")
                     except PermissionError:
                         logger.warning("⚠️ Impossible de créer le fichier access.log (permission denied)")
             
             # Verify critical directories are writable
-            critical_dirs = ["/app/hls", "/app/logs"]
+            critical_dirs = [HLS_DIR, "/app/logs"]
             for d in critical_dirs:
                 if not writeable_dirs.get(d, False) and not os.access(d, os.W_OK):
                     logger.error(f"❌ Pas de droits d'écriture sur le répertoire critique {d}")
@@ -105,48 +100,26 @@ class Application:
             if writeable_dirs.get("/app/logs/nginx", False):
                 setup_log_rotation("/app/logs/nginx")
             
-            # Créer la playlist maître initiale si HLS est accessible
-            if writeable_dirs.get("/app/hls", False):
-                try:
-                    # Utiliser notre script dédié
-                    logger.info("🔄 Création de la playlist maître initiale...")
-                    import subprocess
-                    result = subprocess.run(
-                        ["/app/create_master_playlist.py"],
-                        capture_output=True, 
-                        text=True
-                    )
-                    
-                    if result.returncode == 0:
-                        logger.info("✅ Playlist maître initiale créée avec succès")
-                        # Enregistrer les logs du script pour debug
-                        for line in result.stdout.splitlines():
-                            logger.debug(f"📝 [create_master_playlist] {line}")
-                    else:
-                        logger.warning("⚠️ Échec création playlist via script, création manuelle")
-                        logger.warning(f"Erreur: {result.stderr}")
-                        
-                        # Création manuelle en fallback
-                        master_playlist = Path("/app/hls/playlist.m3u")
-                        with open(master_playlist, "w", encoding="utf-8") as f:
-                            f.write("#EXTM3U\n# Playlist initiale (fallback)\n")
-                        os.chmod(str(master_playlist), 0o777)
-                        logger.info("✅ Playlist maître minimale créée manuellement")
-                except Exception as e:
-                    logger.error(f"❌ Erreur création playlist initiale: {e}")
-                    # Dernière tentative
-                    try:
-                        with open("/app/hls/playlist.m3u", "w", encoding="utf-8") as f:
-                            f.write("#EXTM3U\n")
-                        os.chmod("/app/hls/playlist.m3u", 0o777)
-                        logger.info("✅ Playlist maître créée en dernier recours")
-                    except:
-                        logger.error("❌ Impossible de créer la playlist maître")
-            else:
-                logger.error("❌ Impossible de créer la playlist maître (HLS dir not writable)")
+            # Forcer la création de la playlist maître au démarrage comme source de vérité
+            try:
+                import subprocess
+                playlist_script = "/app/create_master_playlist.py"
+                if os.access(playlist_script, os.X_OK):
+                    logger.info("🚀 Exécution du script create_master_playlist.py pour établir la source de vérité...")
+                    result = subprocess.run([playlist_script], capture_output=True, text=True, check=True)
+                    logger.info("✅ Script de création de playlist exécuté avec succès.")
+                    logger.debug(f"Sortie du script:\n{result.stdout}")
+                else:
+                    logger.error(f"Le script {playlist_script} n'est pas exécutable.")
+            except (subprocess.CalledProcessError, FileNotFoundError) as e:
+                logger.error(f"❌ Échec de l'exécution du script de création de playlist: {e}")
+                # Tenter une création manuelle minimale en cas d'échec
+                with open(f"{HLS_DIR}/playlist.m3u", "w", encoding="utf-8") as f:
+                    f.write("#EXTM3U\n")
+                logger.warning("Création d'une playlist minimale suite à l'échec du script.")
             
             # Démarrer le watchdog de playlist si la playlist a pu être créée
-            if os.path.exists("/app/hls/playlist.m3u"):
+            if os.path.exists(f"{HLS_DIR}/playlist.m3u"):
                 self._start_playlist_watchdog()
                     
             # Continue even if there were permission issues

@@ -16,6 +16,7 @@ import subprocess
 from config import (
     logger,
     CRASH_THRESHOLD,
+    HLS_DIR,
 )
 from video_processor import get_accurate_duration
 import datetime
@@ -410,80 +411,42 @@ class IPTVChannel:
             restart_reason = diagnostic or "Raison inconnue"
             logger.info(f"[{self.name}] 🔄 Tentative de redémarrage du stream - Raison: {restart_reason}")
 
-            # Vérifier l'utilisation CPU du système
-            try:
-                cpu_system = psutil.cpu_percent(interval=0.5)
-                mem_percent = psutil.virtual_memory().percent
-                logger.info(f"[{self.name}] 🖥️ Ressources système: CPU {cpu_system}%, Mémoire {mem_percent}%")
-                
-                # Avertir si ressources critiques
-                if cpu_system > 85:
-                    logger.warning(f"[{self.name}] ⚠️ Attention: CPU système élevé ({cpu_system}%) pendant le redémarrage")
-                    time.sleep(5)  # Attendre un peu pour laisser le système se calmer
-            except Exception as e:
-                logger.debug(f"[{self.name}] Impossible de vérifier les ressources système: {e}")
-
             # Arrêter proprement les processus FFmpeg
-            logger.info(f"[{self.name}] 🛑 Arrêt du processus FFmpeg en cours...")
             self.process_manager.stop_process()
 
             # Nettoyer le dossier HLS
-            logger.info(f"[{self.name}] 🧹 Nettoyage des segments HLS...")
-            hls_dir = Path(f"/app/hls/{self.name}")
-            segments_before = len(list(hls_dir.glob("*.ts"))) if hls_dir.exists() else 0
             self.hls_cleaner.cleanup_channel(self.name)
-            segments_after = len(list(hls_dir.glob("*.ts"))) if hls_dir.exists() else 0
-            logger.info(f"[{self.name}] 🧹 Nettoyage des segments: {segments_before} → {segments_after}")
 
             # Attendre un peu avant de redémarrer
-            time.sleep(2)
+            time.sleep(random.uniform(1.5, 3.0))
             
-            # *** SELECT RANDOM NEXT VIDEO ON ERROR RESTART ***
+            # Sélectionner un nouveau fichier aléatoire
             with self.lock:
                 if not self.processed_videos:
-                    logger.warning(f"[{self.name}] ⚠️ Liste de vidéos vide, impossible de choisir un fichier pour le redémarrage.")
-                    return False # Can't restart if no videos
-
-                num_videos = len(self.processed_videos)
-                old_index = self.current_video_index # Index of the video that failed
-                next_video_index = 0
-
-                logger.info(f"[{self.name}] ⏭️ Sélection d'un nouveau fichier aléatoire après erreur sur l'index {old_index}")
-
-                if num_videos > 1:
-                    # Pick a new random index, different from the one that failed
-                    next_video_index = random.randrange(num_videos)
-                    while next_video_index == old_index:
-                        logger.debug(f"[{self.name}] 🔀 Vidéo suivante aléatoire identique à celle échouée ({next_video_index}), re-tirage...")
-                        next_video_index = random.randrange(num_videos)
-                    logger.info(f"[{self.name}] 🔀 Sélection aléatoire pour le redémarrage: Index {next_video_index}")
-                elif num_videos == 1:
-                     next_video_index = 0
-                     logger.info(f"[{self.name}] ℹ️ Une seule vidéo disponible, tentative de relance sur celle-ci.")
-                else: # Should be caught above
-                    logger.error(f"[{self.name}] ❌ Incohérence lors de la sélection aléatoire pour redémarrage.")
+                    logger.warning(f"[{self.name}] ⚠️ Liste de vidéos vide, impossible de redémarrer.")
                     return False
 
-                self.current_video_index = next_video_index
+                num_videos = len(self.processed_videos)
+                if num_videos > 1:
+                    old_index = self.current_video_index
+                    next_video_index = random.randrange(num_videos)
+                    while next_video_index == old_index:
+                        next_video_index = random.randrange(num_videos)
+                    self.current_video_index = next_video_index
+                    logger.info(f"[{self.name}] 🔀 Sélection d'un nouveau fichier aléatoire: Index {next_video_index}")
+                else:
+                    self.current_video_index = 0
 
-
-            # Redémarrer le stream (start_stream will now use the new random index)
+            # Redémarrer le stream
             success = self.start_stream()
             if success:
-                # Reset error handler counts maybe? Or only for the specific error type?
-                # self.error_handler.reset() # Consider implications
-                # Use the updated index for logging
-                logger.info(f"[{self.name}] ✅ Stream redémarré avec succès sur un nouveau fichier ({self.current_video_index+1}/{len(self.processed_videos)}) - Ancien problème: {diagnostic}")
+                logger.info(f"[{self.name}] ✅ Stream redémarré avec succès sur un nouveau fichier.")
             else:
-                logger.error(f"[{self.name}] ❌ Échec du redémarrage sur un nouveau fichier après problème: {diagnostic}")
-                # Maybe try another random video? Or stop? For now, just return False.
-                return False
-
+                logger.error(f"[{self.name}] ❌ Échec du redémarrage sur un nouveau fichier.")
+            
             return success
         except Exception as e:
-            logger.error(f"[{self.name}] ❌ Erreur lors du redémarrage: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
+            logger.error(f"[{self.name}] ❌ Erreur majeure lors du redémarrage: {e}", exc_info=True)
             return False
 
     def stop_stream_if_needed(self):
@@ -545,7 +508,7 @@ class IPTVChannel:
 
 
                 # Créer le dossier HLS
-                hls_dir = Path(f"/app/hls/{self.name}")
+                hls_dir = Path(f"{HLS_DIR}/{self.name}")
                 hls_dir.mkdir(parents=True, exist_ok=True)
 
                 # Nettoyer les anciens segments AVANT de démarrer un nouveau fichier
@@ -690,128 +653,25 @@ class IPTVChannel:
         """Vérifie si la chaîne est actuellement en streaming"""
         return self.process_manager.is_running()
 
-    def check_stream_health(self):
-        """
-        Vérifie la santé du stream avec une approche plus tolérante
-        Logge les problèmes mais ne force pas le redémarrage immédiatement
-        """
+    def is_ready_for_streaming(self) -> bool:
+        """Vérifie si la chaîne est prête à être ajoutée à la playlist principale."""
+        return self.ready_for_streaming and self.initial_scan_complete and len(self.processed_videos) > 0
+
+    def _clean_processes(self):
+        """Nettoie tous les processus FFmpeg associés à cette chaîne."""
         try:
-            # Initialiser le compteur d'avertissements si nécessaire
-            if not hasattr(self, "_health_check_warnings"):
-                self._health_check_warnings = 0
-                self._last_health_check_time = time.time()
-            
-            # Réinitialiser périodiquement les avertissements (toutes les 30 minutes)
-            if time.time() - getattr(self, "_last_health_check_time", 0) > 1800:
-                self._health_check_warnings = 0
-                self._last_health_check_time = time.time()
-                logger.info(f"[{self.name}] Réinitialisation périodique des avertissements de santé")
-            
-            # Vérifier l'état de base: processus en cours?
-            if not self.process_manager.is_running():
-                logger.warning(f"[{self.name}] ⚠️ Processus FFmpeg inactif")
-                self._health_check_warnings += 1
-                
-                # Seuil de tolérance plus élevé
-                if self._health_check_warnings >= 3 and getattr(self, "watchers_count", 0) > 0:
-                    logger.warning(f"[{self.name}] ⚠️ {self._health_check_warnings} avertissements accumulés, tentative de redémarrage")
-                    self._health_check_warnings = 0
-                    return self._restart_stream()
-                else:
-                    logger.info(f"[{self.name}] Avertissement {self._health_check_warnings}/3 (attente avant action)")
-                    return False
-            
-            # Processus en cours, santé OK
-            if self._health_check_warnings > 0:
-                self._health_check_warnings -= 1  # Réduction progressive des avertissements
-                logger.info(f"[{self.name}] ✅ Santé améliorée, avertissements: {self._health_check_warnings}")
-            
-            return True
-            
+            if self.process_manager:
+                self.process_manager.stop_process()
+            logger.info(f"[{self.name}] Processus FFmpeg nettoyés.")
         except Exception as e:
-            logger.error(f"[{self.name}] Erreur lors du check de santé du stream: {e}")
-            return False
-            
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    def check_watchers_timeout(self):
-        """Vérifie si le stream doit être arrêté en raison d'une absence de watchers"""
-        # On ne vérifie pas le timeout s'il n'y a pas de watchers_count
-        if not hasattr(self, "watchers_count"):
-            return False
-            
-        # On ne vérifie pas le timeout s'il n'est pas actif
-        if not self.process_manager.is_running():
-            return False
-            
-        # On ne vérifie pas le timeout s'il y a des watchers actifs
-        if self.watchers_count > 0:
-            return False
-            
-        # On ne vérifie pas le timeout s'il y a des erreurs critiques
-        if self.error_handler.has_critical_errors():
-            return False
-            
-        # Le stream continue de tourner même sans watchers
-        return False 
+            logger.error(f"[{self.name}] Erreur lors du nettoyage des processus: {e}")
 
     def _ensure_permissions(self):
         """S'assure que tous les fichiers et dossiers de la chaîne ont les bonnes permissions."""
-        try:
-            # Définir video_extensions s'il n'est pas déjà défini
-            if not hasattr(self, 'video_extensions'):
-                self.video_extensions = (".mp4", ".avi", ".mkv", ".mov", ".m4v")
-                
-            # Vérifier le dossier principal
-            os.chmod(self.video_dir, 0o777)
-            logger.debug(f"[{self.name}] 📂 Permissions 777 appliquées au dossier de chaîne: {self.video_dir}")
-            
-            # Dossiers spéciaux
-            special_dirs = ["ready_to_stream", "processed"]
-            for dir_name in special_dirs:
-                dir_path = Path(self.video_dir) / dir_name
-                if dir_path.exists():
-                    os.chmod(dir_path, 0o777)
-                    logger.debug(f"[{self.name}] 📂 Permissions 777 appliquées à {dir_path}")
-            
-            # Fichiers vidéo
-            for item in Path(self.video_dir).glob("**/*"):
-                if item.is_file() and item.suffix.lower() in self.video_extensions:
-                    try:
-                        os.chmod(item, 0o666)
-                        logger.debug(f"[{self.name}] 📄 Permissions 666 appliquées à {item}")
-                    except Exception as e:
-                        logger.warning(f"[{self.name}] ⚠️ Impossible de modifier les permissions de {item}: {e}")
-            
-            logger.info(f"[{self.name}] ✅ Permissions corrigées pour tous les fichiers et dossiers")
-            return True
-        except Exception as e:
-            logger.error(f"[{self.name}] ❌ Erreur lors de la correction des permissions: {e}")
-            return False
+        # Cette fonction est conservée pour la structure mais les appels chmod sont désactivés.
+        if not hasattr(self, 'video_extensions'):
+            self.video_extensions = (".mp4", ".avi", ".mkv", ".mov", ".m4v")
+        return True
             
     def refresh_videos(self):
         """
@@ -861,241 +721,3 @@ class IPTVChannel:
         logger.info(f"[{self.name}] ✅ Liste de vidéos mise à jour: {len(self.processed_videos)} fichiers")
         return True
 
-    def check_stream_health(self):
-        """
-        Vérifie la santé du stream avec une approche plus tolérante
-        Logge les problèmes mais ne force pas le redémarrage immédiatement
-        """
-        try:
-            # Initialiser le compteur d'avertissements si nécessaire
-            if not hasattr(self, "_health_check_warnings"):
-                self._health_check_warnings = 0
-                self._last_health_check_time = time.time()
-            
-            # Réinitialiser périodiquement les avertissements (toutes les 30 minutes)
-            if time.time() - getattr(self, "_last_health_check_time", 0) > 1800:
-                self._health_check_warnings = 0
-                self._last_health_check_time = time.time()
-                logger.info(f"[{self.name}] Réinitialisation périodique des avertissements de santé")
-            
-            # Vérifier l'état de base: processus en cours?
-            if not self.process_manager.is_running():
-                logger.warning(f"[{self.name}] ⚠️ Processus FFmpeg inactif")
-                self._health_check_warnings += 1
-                
-                # Seuil de tolérance plus élevé
-                if self._health_check_warnings >= 3 and getattr(self, "watchers_count", 0) > 0:
-                    logger.warning(f"[{self.name}] ⚠️ {self._health_check_warnings} avertissements accumulés, tentative de redémarrage")
-                    self._health_check_warnings = 0
-                    return self._restart_stream()
-                else:
-                    logger.info(f"[{self.name}] Avertissement {self._health_check_warnings}/3 (attente avant action)")
-                    return False
-            
-            # Processus en cours, santé OK
-            if self._health_check_warnings > 0:
-                self._health_check_warnings -= 1  # Réduction progressive des avertissements
-                logger.info(f"[{self.name}] ✅ Santé améliorée, avertissements: {self._health_check_warnings}")
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"[{self.name}] Erreur lors du check de santé du stream: {e}")
-            return False
-            
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    # def check_watchers_timeout(self):
-    #    ...
-
-
-    # Méthode supprimée car la logique de timeout des watchers est maintenant gérée par IPTVManager
-    # en se basant sur les informations du ChannelStatusManager (alimenté par ClientMonitor).
-    def check_watchers_timeout(self):
-        """Vérifie si le stream doit être arrêté en raison d'une absence de watchers"""
-        # On ne vérifie pas le timeout s'il n'y a pas de watchers_count
-        if not hasattr(self, "watchers_count"):
-            return False
-            
-        # On ne vérifie pas le timeout s'il n'est pas actif
-        if not self.process_manager.is_running():
-            return False
-            
-        # On ne vérifie pas le timeout s'il y a des watchers actifs
-        if self.watchers_count > 0:
-            return False
-            
-        # On ne vérifie pas le timeout s'il y a des erreurs critiques
-        if self.error_handler.has_critical_errors():
-            return False
-            
-        # Le stream continue de tourner même sans watchers
-        return False 
-
-    def _ensure_permissions(self):
-        """S'assure que tous les fichiers et dossiers de la chaîne ont les bonnes permissions."""
-        try:
-            # Définir video_extensions s'il n'est pas déjà défini
-            if not hasattr(self, 'video_extensions'):
-                self.video_extensions = (".mp4", ".avi", ".mkv", ".mov", ".m4v")
-                
-            # Vérifier le dossier principal
-            os.chmod(self.video_dir, 0o777)
-            logger.debug(f"[{self.name}] 📂 Permissions 777 appliquées au dossier de chaîne: {self.video_dir}")
-            
-            # Dossiers spéciaux
-            special_dirs = ["ready_to_stream", "processed"]
-            for dir_name in special_dirs:
-                dir_path = Path(self.video_dir) / dir_name
-                if dir_path.exists():
-                    os.chmod(dir_path, 0o777)
-                    logger.debug(f"[{self.name}] 📂 Permissions 777 appliquées à {dir_path}")
-            
-            # Fichiers vidéo
-            for item in Path(self.video_dir).glob("**/*"):
-                if item.is_file() and item.suffix.lower() in self.video_extensions:
-                    try:
-                        os.chmod(item, 0o666)
-                        logger.debug(f"[{self.name}] 📄 Permissions 666 appliquées à {item}")
-                    except Exception as e:
-                        logger.warning(f"[{self.name}] ⚠️ Impossible de modifier les permissions de {item}: {e}")
-            
-            logger.info(f"[{self.name}] ✅ Permissions corrigées pour tous les fichiers et dossiers")
-            return True
-        except Exception as e:
-            logger.error(f"[{self.name}] ❌ Erreur lors de la correction des permissions: {e}")
-            return False
-            
-    def start_stream(self):
-        """Démarre le streaming de la chaîne"""
-        if not self.ready_for_streaming:
-            logger.warning(f"[{self.name}] ⚠️ La chaîne n'est pas prête pour le streaming")
-            return False
-            
-        # Ensure permissions before starting
-        self._ensure_permissions()
-            
-        # Créer le dossier HLS pour cette chaîne s'il n'existe pas
-        hls_dir = Path(f"/app/hls/{self.name}")
-        hls_dir.mkdir(parents=True, exist_ok=True)
-
-        # Nettoyer les anciens segments AVANT de démarrer un nouveau fichier
-        self.hls_cleaner.cleanup_channel(self.name)
-
-        # *** Select the single video file for this run ***
-        video_file = self.processed_videos[self.current_video_index]
-        logger.info(f"[{self.name}] 🎥 Processing file ({self.current_video_index + 1}/{len(self.processed_videos)}): {video_file.name}")
-        
-        # Check if it's an MKV file
-        has_mkv = ('.mkv' in video_file.name.lower())
-
-        # Construire la commande FFmpeg pour le fichier unique
-        command = self.command_builder.build_command(
-            input_file=str(video_file), # Pass the single video file path
-            output_dir=str(hls_dir),
-            progress_file=f"/app/logs/ffmpeg/{self.name}_progress.log",
-            has_mkv=has_mkv, # Pass the MKV check result for this specific file
-            # is_playlist=False # Default or remove parameter
-        )
-
-        if not command:
-            logger.error(f"[{self.name}] ❌ Impossible de construire la commande FFmpeg pour {video_file.name}")
-            return False
-
-        logger.debug(f"[{self.name}] ⚙️ Commande FFmpeg: {' '.join(command)}")
-
-        # Démarrer le processus FFmpeg
-        success = self.process_manager.start_process(command, str(hls_dir))
-
-        if success:
-            logger.info(f"[{self.name}] ✅ Processus FFmpeg démarré avec succès pour {video_file.name}")
-            self.error_handler.reset() # Reset errors on successful start
-        else:
-            logger.error(f"[{self.name}] ❌ Échec du démarrage du processus FFmpeg pour {video_file.name}")
-
-        return success # Return success status outside the lock
-
-    def _scan_videos(self) -> bool:
-        """Scanne le dossier ready_to_stream, valide les fichiers, les mélange et met à jour self.processed_videos. Renvoie True si réussi et au moins une vidéo trouvée, False sinon."""
-        try:
-            with self.lock: # Use lock as we modify shared state
-                ready_to_stream_dir = Path(self.video_dir) / "ready_to_stream"
-                if not ready_to_stream_dir.exists():
-                    logger.error(f"[{self.name}] ❌ Dossier ready_to_stream introuvable: {ready_to_stream_dir}")
-                    self.processed_videos = []
-                    return False
-
-                # Scanner le dossier ready_to_stream (removed sorted())
-                video_files = list(ready_to_stream_dir.glob("*.mp4"))
-
-                if not video_files:
-                    logger.warning(f"[{self.name}] ⚠️ Aucun fichier MP4 dans {ready_to_stream_dir}")
-                    self.processed_videos = []
-                    return False
-                    
-                logger.info(f"[{self.name}] 🔍 {len(video_files)} fichiers trouvés dans ready_to_stream")
-
-                # Vérifier que tous les fichiers sont valides
-                valid_files = []
-                for video in video_files:
-                    if video.exists() and os.access(video, os.R_OK):
-                        # Optional: Add duration check if needed
-                        # try:
-                        #     duration = get_accurate_duration(video)
-                        #     if duration and duration > 0:
-                        #         valid_files.append(video)
-                        #     else:
-                        #         logger.warning(f"[{self.name}] ⚠️ Fichier ignoré: {video.name} (durée invalide)")
-                        # except Exception as e:
-                        #     logger.warning(f"[{self.name}] ⚠️ Fichier ignoré: {video.name} (erreur validation: {e})")
-                        valid_files.append(video) # Simpler validation for now
-                    else:
-                        logger.warning(f"[{self.name}] ⚠️ Fichier ignoré: {video.name} (non accessible)")
-
-                if not valid_files:
-                    logger.error(f"[{self.name}] ❌ Aucun fichier MP4 valide trouvé après vérification")
-                    self.processed_videos = []
-                    return False
-
-                # *** Shuffle the valid files ***
-                random.shuffle(valid_files)
-                logger.info(f"[{self.name}] 🔀 Liste de vidéos mélangée.")
-
-                logger.info(f"[{self.name}] ✅ {len(valid_files)} vidéos valides trouvées.")
-                self.processed_videos = valid_files # Update the list
-                # Reset index if it's now out of bounds OR if the list changed significantly
-                # (safer to reset to 0 on any successful scan with videos)
-                if not (0 <= self.current_video_index < len(self.processed_videos)):
-                     logger.info(f"[{self.name}] 🔄 Réinitialisation de l'index vidéo à 0 après scan.")
-                     self.current_video_index = 0
-                elif len(self.processed_videos) > 0 and self.current_video_index >= len(self.processed_videos):
-                    # Handle case where list shrank and index is now invalid
-                    logger.info(f"[{self.name}] 🔄 Liste de vidéos réduite, réinitialisation de l'index vidéo à 0.")
-                    self.current_video_index = 0
-
-
-                return True # Success
-
-        except Exception as e:
-            logger.error(f"[{self.name}] ❌ Erreur _scan_videos: {e}")
-            logger.error(traceback.format_exc())
-            self.processed_videos = []
-            return False # Failure 

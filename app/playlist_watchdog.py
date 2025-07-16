@@ -12,10 +12,10 @@ from pathlib import Path
 import subprocess
 
 # Configuration
-PLAYLIST_PATH = "/app/hls/playlist.m3u"
+PLAYLIST_PATH = f"{os.getenv('HLS_DIR', '/mnt/iptv')}/playlist.m3u"
 CHECK_INTERVAL = 60  # Vérification toutes les 60 secondes
 try:
-    from config import SERVER_URL
+    from config import SERVER_URL, HLS_DIR
 except ImportError:
     # Fallback if config.py is not available
     SERVER_URL = os.getenv("SERVER_URL", "192.168.10.183")
@@ -78,8 +78,6 @@ class PlaylistWatchdog:
             # Vérifier les permissions
             permissions = oct(os.stat(PLAYLIST_PATH).st_mode)[-3:]
             if permissions != "777":
-                logger.warning(f"Permissions incorrectes: {permissions}, mise à jour...")
-                os.chmod(PLAYLIST_PATH, 0o777)
             
             logger.info(f"Playlist vérifiée: {PLAYLIST_PATH}, taille: {file_size} octets")
             return True
@@ -114,7 +112,7 @@ class PlaylistWatchdog:
             logger.info("Création d'une playlist de secours...")
             
             # Vérifier les dossiers HLS
-            hls_dir = Path("/app/hls")
+            hls_dir = Path(HLS_DIR)
             active_channels = []
             
             # Trouver les chaînes actives
@@ -139,8 +137,6 @@ class PlaylistWatchdog:
             with open(PLAYLIST_PATH, "w", encoding="utf-8") as f:
                 f.write(content)
             
-            # Définir les permissions
-            os.chmod(PLAYLIST_PATH, 0o777)
             
             # Vérifier le résultat
             if os.path.exists(PLAYLIST_PATH) and os.path.getsize(PLAYLIST_PATH) > 0:
@@ -158,7 +154,6 @@ class PlaylistWatchdog:
             try:
                 with open(PLAYLIST_PATH, "w", encoding="utf-8") as f:
                     f.write("#EXTM3U\n# Playlist minimale d'urgence\n")
-                os.chmod(PLAYLIST_PATH, 0o777)
                 logger.info("✅ Playlist minimale d'urgence créée")
                 return True
             except Exception as e2:

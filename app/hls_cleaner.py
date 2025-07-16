@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from typing import Dict, List, Union, Optional
 
-from config import logger
+from config import logger, HLS_DIR
 
 # On utilise le logger de config
 # logger = logging.getLogger("HLS_CLEANER")
@@ -16,7 +16,7 @@ from config import logger
 class HLSCleaner:
     """Gestionnaire unique de nettoyage des segments HLS"""
 
-    def __init__(self, hls_dir: str = "/app/hls/"):
+    def __init__(self, hls_dir: str = HLS_DIR):
         # On permet de personnaliser le dossier HLS
         self.hls_dir = Path(hls_dir)
         self.max_hls_age = 28800  # Augmenté à 8h (au lieu de 4h)
@@ -39,11 +39,6 @@ class HLSCleaner:
                 logger.debug(f"Le dossier de la chaîne {channel_name} n'existe pas.")
                 return
                 
-            # Assurer les permissions
-            try:
-                os.chmod(channel_dir, 0o777)
-            except Exception as e:
-                logger.warning(f"⚠️ Impossible de modifier les permissions de {channel_dir}: {e}")
                 
             # Lire la playlist pour identifier les segments actifs
             playlist_path = channel_dir / "playlist.m3u8"
@@ -96,21 +91,10 @@ class HLSCleaner:
         try:
             # S'assurer que le dossier principal existe avec les bonnes permissions
             Path(self.hls_dir).mkdir(parents=True, exist_ok=True)
-            try:
-                os.chmod(self.hls_dir, 0o777)
-                logger.info(f"📂 Permissions 777 appliquées au dossier HLS principal: {self.hls_dir}")
-            except Exception as e:
-                logger.warning(f"⚠️ Could not chmod main HLS dir {self.hls_dir}: {e}")
             
             # Nettoyer chaque dossier de chaîne
             for channel_dir in Path(self.hls_dir).iterdir():
                 if channel_dir.is_dir():
-                    try:
-                        # Appliquer les permissions
-                        os.chmod(channel_dir, 0o777)
-                        logger.info(f"📂 Permissions 777 appliquées au dossier HLS de chaîne: {channel_dir}")
-                    except Exception as e:
-                        logger.warning(f"⚠️ Could not chmod channel HLS dir {channel_dir}: {e}")
                     
                     # Nettoyage des anciens segments
                     self._clean_old_segments(channel_dir.name)
@@ -122,16 +106,14 @@ class HLSCleaner:
             return False
 
     def cleanup_channel(self, channel_name: str):
-        """Nettoie les fichiers d'une chaîne spécifique"""
+        """Supprime le dossier HLS complet d'une chaîne."""
         try:
             channel_dir = self.hls_dir / channel_name
-            if channel_dir.exists():
-                for item in channel_dir.glob("*"):
-                    if item.is_file():
-                        item.unlink()
-                logger.info(f"✨ Chaîne {channel_name} nettoyée")
+            if channel_dir.exists() and channel_dir.is_dir():
+                shutil.rmtree(channel_dir)
+                logger.info(f"🗑️ Dossier HLS de la chaîne '{channel_name}' supprimé.")
         except Exception as e:
-            logger.error(f"Erreur nettoyage chaîne {channel_name}: {e}")
+            logger.error(f"Erreur lors de la suppression du dossier HLS pour '{channel_name}': {e}")
 
     def _cleanup_loop(self):
         """Boucle de nettoyage périodique"""

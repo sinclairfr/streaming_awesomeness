@@ -197,7 +197,7 @@ class ErrorHandler:
             file_path_obj = Path(file_path)
             if file_path_obj.exists():
                 # Créer le dossier ignored s'il n'existe pas
-                ignored_dir = Path(f"/mnt/frigate_data/streaming_awesomeness/content/{channel_name}/ignored")
+                ignored_dir = Path(f"/mnt/docker_data/streaming_awesomeness/content/{channel_name}/ignored")
                 ignored_dir.mkdir(exist_ok=True)
                 
                 # Déplacer le fichier
@@ -236,8 +236,8 @@ class ErrorHandler:
         """Régénère la playlist.txt à partir des fichiers dans ready_to_stream"""
         try:
             # Chemin du dossier ready_to_stream
-            ready_dir = Path(f"/mnt/frigate_data/streaming_awesomeness/content/{channel_name}/ready_to_stream")
-            playlist_path = Path(f"/mnt/frigate_data/streaming_awesomeness/content/{channel_name}/playlist.txt")
+            ready_dir = Path(f"/mnt/docker_data/streaming_awesomeness/content/{channel_name}/ready_to_stream")
+            playlist_path = Path(f"/mnt/docker_data/streaming_awesomeness/content/{channel_name}/playlist.txt")
             
             if not ready_dir.exists():
                 logger.error(f"[{channel_name}] ❌ Dossier ready_to_stream introuvable")

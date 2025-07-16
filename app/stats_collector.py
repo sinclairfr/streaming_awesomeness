@@ -8,7 +8,7 @@ import threading
 import re  # Added for regex parsing
 from pathlib import Path
 from typing import Dict, Set, Optional, Tuple # Added Tuple
-from config import logger, HLS_SEGMENT_DURATION, NGINX_ACCESS_LOG, ACTIVE_VIEWER_TIMEOUT
+from config import logger, HLS_SEGMENT_DURATION, NGINX_ACCESS_LOG, ACTIVE_VIEWER_TIMEOUT, HLS_DIR
 
 # Regex to parse Nginx access log lines for SUCCESSFUL HLS Segment requests
 # Captures: 1: IP Address, 2: Channel Name, 3: Bytes Sent, 4: User Agent
@@ -35,9 +35,11 @@ LOG_PLAYLIST_REGEX = re.compile(
 class StatsCollector:
     """Gère les statistiques basées sur les logs Nginx (bytes transférés)."""
 
-    def __init__(self, stats_dir="/app/stats"):
+    def __init__(self, stats_dir="/app/stats", manager=None, valid_channels: Optional[Set[str]] = None):
         """Initialise le collecteur de statistiques."""
         self.stats_dir = Path(stats_dir)
+        self.manager = manager
+        self.valid_channels = valid_channels if valid_channels is not None else set()
         self.stats_dir.mkdir(parents=True, exist_ok=True)
 
         self.channel_stats_file = self.stats_dir / "channel_stats_bytes.json"
@@ -64,6 +66,10 @@ class StatsCollector:
         logger.info(f"📊 Timeout des spectateurs calculé: {self.viewer_timeout:.1f}s (basé sur {segment_duration}s x {hls_list_size} segments + marge)")
 
         self._load_stats()
+
+        # --- Nettoyage initial basé sur les canaux valides ---
+        if valid_channels is not None:
+            self._reconcile_with_valid_channels(valid_channels)
 
         # --- Background Threads ---
         self.stop_event = threading.Event()
@@ -95,7 +101,6 @@ class StatsCollector:
                     try:
                         with open(self.channel_stats_file, 'w') as f:
                             f.write("{}")
-                        os.chmod(self.channel_stats_file, 0o666) # Set permissions
                     except Exception as e_create:
                         logger.error(f"❌ Impossible de créer le fichier channel_stats: {e_create}")
                         # Proceed with default in-memory stats anyway
@@ -133,7 +138,6 @@ class StatsCollector:
                     try:
                         with open(self.user_stats_file, 'w') as f:
                             f.write("{}")
-                        os.chmod(self.user_stats_file, 0o666) # Set permissions
                     except Exception as e_create:
                         logger.error(f"❌ Impossible de créer le fichier user_stats: {e_create}")
                         # Proceed with default in-memory stats anyway
@@ -312,6 +316,11 @@ class StatsCollector:
             bytes_transferred: Taille du transfert en octets (0 pour les segments HLS)
         """
         try:
+            # AJOUT: Vérifier si le canal est dans la liste des canaux valides fournie à l'initialisation
+            if channel not in self.valid_channels:
+                logger.debug(f"Activité ignorée pour le canal '{channel}' car il n'est pas dans la liste des canaux valides.")
+                return
+
             current_time = time.time()
             
             # Vérifier si l'utilisateur a changé de chaîne
@@ -347,7 +356,7 @@ class StatsCollector:
                                         active_ips_old.append(viewer_ip)
                         
                         if hasattr(self, 'update_watchers_callback'):
-                            self.update_watchers_callback(old_channel, len(active_ips_old), active_ips_old, "/hls/", source="channel_change")
+                            self.update_watchers_callback(old_channel, len(active_ips_old), active_ips_old, HLS_DIR, source="channel_change")
                             logger.info(f"[{old_channel}] 👥 Mise à jour après départ de {ip}: {len(active_ips_old)} spectateurs restants")
             
             # Mettre à jour la chaîne actuelle de l'utilisateur
@@ -504,7 +513,7 @@ class StatsCollector:
                 # Forcer une mise à jour immédiate pour chaque segment
                 if bytes_transferred == 0:  # C'est un segment HLS
                     try:
-                        self.update_watchers_callback(channel, len(active_ips), active_ips, "/hls/", source="stats_collector_direct")
+                        self.update_watchers_callback(channel, len(active_ips), active_ips, HLS_DIR, source="stats_collector_direct")
                         logger.info(f"[{channel}] 👁️ Mise à jour directe via StatsCollector: {len(active_ips)} spectateurs actifs")
                     except Exception as e:
                         logger.error(f"[{channel}] ❌ Erreur lors de la mise à jour directe des spectateurs: {str(e)}")
@@ -629,14 +638,14 @@ class StatsCollector:
                 # Mettre à jour l'ancienne chaîne
                 try:
                     logger.info(f"[{previous_channel}] 🔄 Mise à jour après changement: {len(active_ips_old_channel)} spectateurs actifs restants")
-                    self.update_watchers_callback(previous_channel, len(active_ips_old_channel), active_ips_old_channel, "/hls/", source="channel_change")
+                    self.update_watchers_callback(previous_channel, len(active_ips_old_channel), active_ips_old_channel, HLS_DIR, source="channel_change")
                 except Exception as e:
                     logger.error(f"[{previous_channel}] ❌ Erreur lors de la mise à jour après changement: {str(e)}")
                 
                 # Mettre à jour la nouvelle chaîne
                 try:
                     logger.info(f"[{new_channel}] 🔄 Mise à jour après changement: {len(active_ips_new_channel)} spectateurs actifs")
-                    self.update_watchers_callback(new_channel, len(active_ips_new_channel), active_ips_new_channel, "/hls/", source="channel_change")
+                    self.update_watchers_callback(new_channel, len(active_ips_new_channel), active_ips_new_channel, HLS_DIR, source="channel_change")
                 except Exception as e:
                     logger.error(f"[{new_channel}] ❌ Erreur lors de la mise à jour après changement: {str(e)}")
                 
@@ -694,10 +703,44 @@ class StatsCollector:
                 # Notifier le changement via le callback
                 if hasattr(self, 'update_watchers_callback') and self.update_watchers_callback:
                     try:
-                        self.update_watchers_callback(channel, len(active_ips), active_ips, "/hls/", source="periodic_cleanup")
+                        self.update_watchers_callback(channel, len(active_ips), active_ips, HLS_DIR, source="periodic_cleanup")
                         logger.debug(f"[{channel}] 👥 Mise à jour périodique: {len(active_ips)} spectateurs actifs")
                     except Exception as e:
                         logger.error(f"[{channel}] ❌ Erreur lors de la mise à jour périodique: {str(e)}")
+
+    def _reconcile_with_valid_channels(self, valid_channels: Set[str]):
+        """Reconstruit les statistiques pour ne contenir que les canaux valides."""
+        with self.lock:
+            all_stats_channels = set(self.channel_stats.keys())
+            all_stats_channels.discard("global")
+
+            channels_to_remove = all_stats_channels - valid_channels
+            if not channels_to_remove:
+                logger.info("La réconciliation des statistiques n'a trouvé aucun canal à supprimer.")
+                return
+
+            logger.info(f"Réconciliation des statistiques : {len(channels_to_remove)} canaux à supprimer : {channels_to_remove}")
+
+            # Créer un nouveau dictionnaire de statistiques de canaux
+            new_channel_stats = {"global": self.channel_stats.get("global", {})}
+            for channel_name in valid_channels:
+                if channel_name in self.channel_stats:
+                    new_channel_stats[channel_name] = self.channel_stats[channel_name]
+            
+            self.channel_stats = new_channel_stats
+            
+            # Supprimer les données des canaux supprimés des statistiques utilisateur
+            for ip, user_data in self.user_stats.get("users", {}).items():
+                if "channels" in user_data:
+                    user_channels = list(user_data["channels"].keys())
+                    for channel_name in user_channels:
+                        if channel_name not in valid_channels:
+                            del self.user_stats["users"][ip]["channels"][channel_name]
+                            logger.debug(f"🗑️ Données du canal '{channel_name}' supprimées pour l'utilisateur {ip}.")
+
+            # Sauvegarder immédiatement les changements pour refléter l'état nettoyé
+            self._save_stats()
+            logger.info("Réconciliation des statistiques terminée et changements sauvegardés.")
 
     def stop(self):
         """Arrête tous les threads."""
@@ -708,3 +751,20 @@ class StatsCollector:
             self.log_monitor_thread.join(timeout=5)
         if hasattr(self, 'cleanup_thread'):
             self.cleanup_thread.join(timeout=5)
+
+    def remove_channel(self, channel_name: str):
+        """Supprime une chaîne des statistiques."""
+        with self.lock:
+            # Supprimer des stats par chaîne
+            if channel_name in self.channel_stats:
+                del self.channel_stats[channel_name]
+                logger.info(f"🗑️ Chaîne '{channel_name}' supprimée de channel_stats.")
+
+            # Supprimer des stats par utilisateur
+            for ip, user_data in self.user_stats.get("users", {}).items():
+                if channel_name in user_data.get("channels", {}):
+                    del self.user_stats["users"][ip]["channels"][channel_name]
+                    logger.debug(f"🗑️ Données de la chaîne '{channel_name}' supprimées pour l'utilisateur {ip}.")
+        
+        # Sauvegarder immédiatement les changements
+        self._save_stats()

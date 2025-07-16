@@ -43,8 +43,8 @@ http {
         server_name  localhost;
 
         # Endpoint HLS avec paramètres optimisés
-        location /hls {
-            root /app;
+        location /hls/ {
+            alias ${HLS_DIR}/;
             
             # Headers pour désactiver le cache
             add_header 'Access-Control-Allow-Origin' '*' always;
@@ -82,6 +82,15 @@ http {
         location / {
             root   /usr/share/nginx/html;
             index  index.html index.htm;
+        }
+
+        # Playlist principale
+        location = /playlist.m3u {
+            root ${HLS_DIR};
+            add_header 'Content-Type' 'application/vnd.apple.mpegurl';
+            add_header 'Cache-Control' 'no-cache, no-store, must-revalidate, proxy-revalidate, max-age=0' always;
+            add_header 'Pragma' 'no-cache' always;
+            add_header 'Expires' '0' always;
         }
     }
 }

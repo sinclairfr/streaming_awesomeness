@@ -6,7 +6,7 @@ import psutil
 import threading
 import subprocess
 from pathlib import Path
-from config import logger
+from config import logger, HLS_DIR
 import traceback
 from typing import Callable, Optional
 from datetime import datetime
@@ -212,7 +212,7 @@ class FFmpegProcessManager:
     def _clean_zombie_processes(self):
         """Nettoie les processus FFmpeg orphelins pour cette chaîne"""
         try:
-            pattern = f"/hls/{self.channel_name}/"
+            pattern = f"/{HLS_DIR.strip('/')}/{self.channel_name}/"
             current_pid = self.get_pid()
             processes_killed = 0
 
@@ -317,7 +317,7 @@ class FFmpegProcessManager:
                 return False
 
             # Récupération du répertoire HLS
-            hls_dir = f"/app/hls/{self.channel_name}"
+            hls_dir = f"{HLS_DIR}/{self.channel_name}"
             if not hls_dir or not Path(hls_dir).exists():
                 logger.error(f"[{self.channel_name}] ❌ Répertoire HLS introuvable")
                 return False
@@ -328,23 +328,38 @@ class FFmpegProcessManager:
                 logger.warning(f"[{self.channel_name}] ⚠️ Aucun segment TS trouvé")
                 return True  # On continue à surveiller
 
+            # --- FIX: Prevent race condition on stat() call ---
+            # Safely get stats for existing files to avoid race conditions with the cleaner
+            file_stats = []
+            for f in ts_files:
+                try:
+                    file_stats.append((f, f.stat()))
+                except FileNotFoundError:
+                    # This is expected if the cleaner removes a file while we are checking
+                    logger.debug(f"[{self.channel_name}] Segment {f.name} a été supprimé pendant la vérification de santé, ignoré.")
+                    continue
+
+            if not file_stats:
+                logger.warning(f"[{self.channel_name}] ⚠️ Aucun segment valide trouvé après vérification de l'existence.")
+                return True # Continue monitoring
+
             # Log détaillé des segments pour diagnostic
-            logger.info(f"[{self.channel_name}] 📊 {len(ts_files)} segments trouvés")
+            logger.info(f"[{self.channel_name}] 📊 {len(file_stats)} segments trouvés et validés")
+
+            # Trier par date de modification en utilisant les stats pré-chargées
+            file_stats.sort(key=lambda x: x[1].st_mtime)
             
             # Vérification de la boucle infinie
-            if len(ts_files) > 5:  # Réduit de 10 à 5 segments minimum
-                # On trie les segments par date de modification
-                ts_files.sort(key=lambda x: x.stat().st_mtime)
-                
+            if len(file_stats) > 5:  # Réduit de 10 à 5 segments minimum
                 # On vérifie les 3 derniers segments (réduit de 5 à 3)
-                last_segments = ts_files[-3:]
-                segment_sizes = [f.stat().st_size for f in last_segments]
+                last_segments_stats = file_stats[-3:]
+                segment_sizes = [s.st_size for _, s in last_segments_stats]
                 
                 # Log des tailles pour diagnostic
                 logger.info(f"[{self.channel_name}] 📏 Tailles des 3 derniers segments: {segment_sizes}")
                 
                 # Si les 3 derniers segments ont exactement la même taille
-                if len(set(segment_sizes)) == 1:
+                if len(set(segment_sizes)) == 1 and segment_sizes[0] > 0: # Ignore empty files
                     logger.warning(f"[{self.channel_name}] ⚠️ Détection possible de boucle infinie - segments identiques de taille {segment_sizes[0]}")
                     self.health_warnings += 1
                     
@@ -355,7 +370,8 @@ class FFmpegProcessManager:
                         return False
 
             # Vérification du temps écoulé depuis le dernier segment
-            latest_segment_time = max(f.stat().st_mtime for f in ts_files)
+            # Utiliser le dernier élément de la liste triée
+            latest_segment_time = file_stats[-1][1].st_mtime
             current_time = time.time()
             elapsed = current_time - latest_segment_time
 
@@ -368,8 +384,8 @@ class FFmpegProcessManager:
             memory_usage_mb = memory_usage.used / (1024 * 1024)
 
             # Vérification de la taille moyenne des segments
-            total_size = sum(f.stat().st_size for f in ts_files)
-            average_segment_size = total_size / len(ts_files) if ts_files else 0
+            total_size = sum(s.st_size for _, s in file_stats)
+            average_segment_size = total_size / len(file_stats) if file_stats else 0
 
             # Collecter des métriques pour les problèmes
             if elapsed > segment_threshold:
@@ -422,15 +438,15 @@ class FFmpegProcessManager:
                 if self.health_warnings >= 5:
                     # Diagnostic détaillé
                     diagnosis = "Aucun segment traité (génération ou téléchargement)"
-                    if len(ts_files) > 0 and (current_time - latest_segment_time) < 30:
+                    if len(file_stats) > 0 and (current_time - latest_segment_time) < 30:
                         diagnosis = "Segments générés mais non téléchargés par les clients"
                     elif cpu_usage > 90:
                         diagnosis = f"CPU surchargé ({cpu_usage:.1f}%), FFmpeg ne peut pas générer les segments assez rapidement"
-                    elif len(ts_files) == 0:
+                    elif len(file_stats) == 0:
                         diagnosis = "Aucun segment généré, FFmpeg a peut-être des problèmes avec le fichier source"
                     
                     logger.error(f"[{self.channel_name}] ❌ PROBLÈME DE SANTÉ CONFIRMÉ après {self.health_warnings} avertissements")
-                    logger.error(f"[{self.channel_name}] 📊 Résumé: {elapsed:.1f}s sans segment | CPU: {cpu_usage:.1f}% | {len(ts_files)} segments TS")
+                    logger.error(f"[{self.channel_name}] 📊 Résumé: {elapsed:.1f}s sans segment | CPU: {cpu_usage:.1f}% | {len(file_stats)} segments TS")
                     logger.error(f"[{self.channel_name}] 🔍 DIAGNOSTIC: {diagnosis}")
                     
                     # Notifier seulement après confirmation du problème
@@ -440,7 +456,7 @@ class FFmpegProcessManager:
                             "type": "health_check_failed",
                             "elapsed": elapsed,
                             "cpu_usage": cpu_usage,
-                            "segments_count": len(ts_files),
+                            "segments_count": len(file_stats),
                             "diagnosis": diagnosis,
                             "average_segment_size": average_segment_size
                         }

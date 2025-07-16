@@ -7,12 +7,13 @@ import traceback
 
 # Import from config
 try:
-    from config import SERVER_URL
+    from config import SERVER_URL, HLS_DIR
 except ImportError:
     # Fallback if config.py is not available
     SERVER_URL = os.getenv("SERVER_URL", "192.168.10.183")
+    HLS_DIR = os.getenv("HLS_DIR", "/mnt/iptv")
     
-PLAYLIST_PATH = "/app/hls/playlist.m3u"
+PLAYLIST_PATH = f"{HLS_DIR}/playlist.m3u"
 
 def create_master_playlist():
     """
@@ -23,10 +24,9 @@ def create_master_playlist():
         print(f"Création/mise à jour de la playlist master: {PLAYLIST_PATH}")
         
         # Vérifier que le dossier HLS existe
-        hls_dir = Path("/app/hls")
+        hls_dir = Path(HLS_DIR)
         if not hls_dir.exists():
             os.makedirs(str(hls_dir), exist_ok=True)
-            os.chmod(str(hls_dir), 0o777)
             print(f"Dossier HLS créé: {hls_dir}")
         
         # Conteneur pour les chaînes actives
@@ -63,8 +63,6 @@ def create_master_playlist():
         with open(PLAYLIST_PATH, "w", encoding="utf-8") as f:
             f.write(content)
         
-        # Assurer les permissions
-        os.chmod(PLAYLIST_PATH, 0o777)
         
         # Vérification
         if os.path.exists(PLAYLIST_PATH):
@@ -92,7 +90,6 @@ def create_master_playlist():
         try:
             with open(PLAYLIST_PATH, "w", encoding="utf-8") as f:
                 f.write("#EXTM3U\n# Erreur de génération - playlist minimale\n")
-            os.chmod(PLAYLIST_PATH, 0o777)
             print(f"Playlist minimale de secours créée: {PLAYLIST_PATH}")
             return True
         except Exception as inner_e:

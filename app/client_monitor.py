@@ -2,7 +2,7 @@ from pathlib import Path
 import os
 import time
 from typing import Callable, Dict, Optional, Set, List
-from config import logger, HLS_SEGMENT_DURATION
+from config import logger, HLS_SEGMENT_DURATION, HLS_DIR
 from log_utils import parse_access_log
 
 class ClientMonitor:
@@ -151,8 +151,8 @@ class ClientMonitor:
         
         # SI CHANGEMENT DE CHAÎNE: gérer le changement
         if previous_channel != channel:
-            # Log explicite du changement
-            logger.info(f"🔄 CHANGEMENT DE CHAÎNE DÉTECTÉ: {ip}: {previous_channel} → {channel}")
+            # Log explicite du changement pour prouver la détection
+            logger.warning(f"ZAP! Channel change detected. IP: {ip}, From: {previous_channel}, To: {channel}")
             
             # Mise à jour stats
             if previous_channel and self.stats_collector:
@@ -298,7 +298,7 @@ class ClientMonitor:
             
             # TOUJOURS envoyer la mise à jour, même quand count = 0
             # C'est crucial pour maintenir l'état cohérent des chaînes sans spectateurs
-            self.update_watchers(channel, count, active_viewers, "/hls/", source="nginx_log")
+            self.update_watchers(channel, count, active_viewers, HLS_DIR, source="nginx_log")
 
     def _notify_channel_immediately(self, channel, ip, remove=False):
         """
@@ -332,7 +332,7 @@ class ClientMonitor:
             
         # Notification TOUJOURS, même sans viewers pour mettre à jour correctement l'état
         # C'est crucial pour les channels sans spectateurs ou quand on en retire
-        self.update_watchers(channel, len(viewers), viewers, "/hls/", source="nginx_log_immediate")
+        self.update_watchers(channel, len(viewers), viewers, HLS_DIR, source="nginx_log_immediate")
         
         # Log plus détaillé
         if remove:

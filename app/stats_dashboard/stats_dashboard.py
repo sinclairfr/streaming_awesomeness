@@ -97,25 +97,40 @@ def format_time(seconds):
     seconds = int(seconds % 60)
     return f"{hours:02d}h {minutes:02d}m {seconds:02d}s"
 
-def create_channels_grid(channel_stats):
+def create_channels_grid(channel_status_data):
     """Creates a grid of channel cards with status indicators"""
     
     # Process channel data
     current_time = time.time()
     channels_data = []
     
-    for channel, stats in channel_stats.get("channels", {}).items():
-        is_active = stats.get("active", False)
+    # Itérer directement sur les données de statut des chaînes
+    for channel, stats in channel_status_data.items():
+        is_active = stats.get("is_live", False)
         is_streaming = stats.get("streaming", False)
         viewers = stats.get("viewers", 0)
-        last_seen = datetime.fromtimestamp(stats.get("last_update", current_time)).strftime('%H:%M:%S')
+        
+        # Utiliser last_updated qui est maintenant une chaîne ISO 8601
+        last_updated_str = stats.get("last_updated")
+        if last_updated_str:
+            try:
+                # Convertir la chaîne ISO 8601 en objet datetime
+                last_seen_dt = datetime.fromisoformat(last_updated_str)
+                last_seen = last_seen_dt.strftime('%H:%M:%S')
+            except (ValueError, TypeError):
+                last_seen = "N/A"
+        else:
+            last_seen = "N/A"
+
+        watchers = stats.get("watchers", [])
         
         channels_data.append({
             "name": channel,
-            "active": is_active and is_streaming,  # Une chaîne est active si elle est active ET en streaming
+            "active": is_active, # Simplifié: is_live est la source de vérité
             "streaming": is_streaming,
             "viewers": viewers,
-            "last_seen": last_seen
+            "last_seen": last_seen,
+            "watchers": watchers
         })
     
     # Sort channels: active ones first, then alphabetically
@@ -141,10 +156,12 @@ def create_channels_grid(channel_stats):
                          style={"backgroundColor": status_color}),
                 html.H3(ch["name"], className="channel-card-title"),
                 html.Div([
-                    html.P(f"{ch['viewers']} {'viewers' if ch['viewers'] != 1 else 'viewer'}", 
+                    html.P(f"{ch['viewers']} {'viewers' if ch['viewers'] != 1 else 'viewer'}",
                            className="channel-card-stat"),
-                    html.P(f"Last activity: {ch['last_seen']}", 
-                           className="channel-card-stat")
+                    html.P(f"Last activity: {ch['last_seen']}",
+                           className="channel-card-stat"),
+                    html.P(f"Viewers: {', '.join(ch['watchers'])}" if ch['watchers'] else "Viewers: None",
+                           className="channel-card-stat watchers-list")
                 ], className="channel-card-stats")
             ], className="channel-card-content")
         ], className="channel-card")
@@ -225,8 +242,15 @@ def update_dashboard(n):
     # 1. Statistiques globales
     total_watch_time = channel_stats.get("global", {}).get("total_watch_time", 0)
     unique_users = len(channel_stats.get("global", {}).get("unique_viewers", []))
-    total_channels = len(channel_stats) - 1  # -1 pour exclure "global"
-    
+    try:
+        with open(CHANNELS_STATUS_FILE, 'r') as f:
+            live_status = json.load(f)
+        live_channels = live_status.get('channels', {})
+        # Compter les chaînes marquées comme live
+        total_channels = sum(1 for ch_data in live_channels.values() if ch_data.get('is_live'))
+    except (FileNotFoundError, json.JSONDecodeError):
+        total_channels = len(channel_stats) - 1 # Fallback à l'ancienne méthode
+
     global_stats = html.Div([
         html.Div([
             html.H3(format_time(total_watch_time)),
@@ -331,7 +355,8 @@ def update_live_channels(n):
         channel_status = {"channels": {}}
     
     # Créer la grille de chaînes
-    grid = create_channels_grid(channel_status)
+    # Passer directement le dictionnaire des canaux
+    grid = create_channels_grid(channel_status.get("channels", {}))
     
     return grid
 
@@ -473,6 +498,11 @@ app.index_string = '''
                 margin: 5px 0;
                 color: #7f8c8d;
                 font-size: 14px;
+            }
+            .watchers-list {
+                font-size: 12px;
+                color: #3498db;
+                word-break: break-all;
             }
             @media (max-width: 768px) {
                 .six.columns {

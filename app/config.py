@@ -20,11 +20,12 @@ logger = logging.getLogger("config")
 
 # Configuration des chemins
 LOG_DIR = os.getenv("LOG_DIR", "/app/logs")
+HLS_DIR = os.getenv("HLS_DIR", "/mnt/iptv")
 CONTENT_DIR = Path(
-    os.getenv("CONTENT_DIR", "/mnt/frigate_data/streaming_awesomeness/content")
+    os.getenv("CONTENT_DIR", "/mnt/videos")
 )
 CHANNELS_STATUS_FILE = os.getenv("CHANNELS_STATUS_FILE", "/app/stats/channels_status.json")
-NGINX_ACCESS_LOG = "/app/logs/nginx/access.log"
+NGINX_ACCESS_LOG = os.getenv("NGINX_ACCESS_LOG", "/app/logs/nginx/access.log")
 
 # Determine server URL - automatically detect IP if set to "auto"
 def get_server_ip():
@@ -122,7 +123,7 @@ try:
     log_file = log_dir / "app.log"
     if not log_file.exists():
         try:
-            log_file.touch(mode=0o666)
+            log_file.touch()
         except:
             pass  # Ignorer l'erreur si on ne peut pas créer le fichier
     

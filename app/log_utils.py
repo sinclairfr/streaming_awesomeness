@@ -2,7 +2,7 @@
 Module d'utilitaires pour le traitement des logs
 """
 import re
-from config import logger
+from config import logger, HLS_DIR
 
 # Regexp compilées pour améliorer les performances 
 IP_PATTERN = re.compile(r'^(\d{1,3}\.){3}\d{1,3}$')

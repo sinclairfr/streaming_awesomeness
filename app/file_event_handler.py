@@ -4,7 +4,7 @@ import threading
 from watchdog.events import FileSystemEventHandler
 from pathlib import Path
 import os
-from config import logger, HLS_SEGMENT_DURATION, SERVER_URL
+from config import logger, HLS_SEGMENT_DURATION, SERVER_URL, HLS_DIR
 import subprocess
 import traceback
 import shutil
@@ -536,7 +536,7 @@ class FileEventHandler(BaseFileEventHandler):
         """Force la mise à jour de la playlist maître"""
         try:
             # Chemin de la playlist
-            playlist_path = "/app/hls/playlist.m3u"
+            playlist_path = f"{HLS_DIR}/playlist.m3u"
             
             # Créer le contenu de base
             content = "#EXTM3U\n"
@@ -545,7 +545,7 @@ class FileEventHandler(BaseFileEventHandler):
             active_channels = []
             
             # Vérification directe des dossiers HLS
-            hls_dir = Path("/app/hls")
+            hls_dir = Path(HLS_DIR)
             for channel_dir in hls_dir.iterdir():
                 if channel_dir.is_dir() and (channel_dir / "playlist.m3u8").exists():
                     channel_name = channel_dir.name
@@ -574,8 +574,6 @@ class FileEventHandler(BaseFileEventHandler):
             with open(playlist_path, "w", encoding="utf-8") as f:
                 f.write(content)
             
-            # S'assurer que le fichier a les bonnes permissions
-            os.chmod(playlist_path, 0o777)
             
             logger.info(f"✅ Playlist mise à jour avec {len(active_channels)} chaînes: {', '.join(active_channels)}")
             
@@ -638,8 +636,8 @@ class FileEventHandler(BaseFileEventHandler):
                 "-hls_time", str(HLS_SEGMENT_DURATION),
                 "-hls_list_size", "5",
                 "-hls_flags", "delete_segments+append_list",
-                "-hls_segment_filename", f"/app/hls/{channel_name}/segment_%d.ts",
-                f"/app/hls/{channel_name}/playlist.m3u8"
+                "-hls_segment_filename", f"{HLS_DIR}/{channel_name}/segment_%d.ts",
+                f"{HLS_DIR}/{channel_name}/playlist.m3u8"
             ]
             
             # Ajouter les options GPU si nécessaire

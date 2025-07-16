@@ -1,5 +1,6 @@
 services:
   iptv-manager:
+    image: streaming_awesomeness/iptv-manager
     container_name: iptv-manager
     env_file:
       - .env
@@ -7,13 +8,11 @@ services:
       context: .
       dockerfile: Dockerfile
     user: "1000:1000"  # Exécuter en tant qu'utilisateur non-root (streamer)
-    entrypoint: ["/app/start.sh"]
     volumes:
-      - ./app/hls:/app/hls:rw
+      - /mnt/iptv:/mnt/iptv:rw
       - ./app/logs:/app/logs:rw
       - ./app/stats:/app/stats:rw
-      - ./app:/app:ro  # En lecture seule, avec exceptions spécifiques ci-dessus
-      - /mnt/docker_data/streaming_awesomeness/streaming_awesomeness/content:/mnt/videos:rw
+      - /mnt/docker_data/streaming_awesomeness/content:/mnt/videos:rw
     #dvices:
       #- /dev/dri/card1:/dev/dri/card1
       #- /dev/dri/renderD128:/dev/dri/renderD128
@@ -37,8 +36,9 @@ services:
     ports:
       - "80:80"
     volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:rw
-      - ./app/hls:/app/hls:rw
+      - ./nginx/nginx.conf.template:/etc/nginx/templates/nginx.conf.template:ro
+      - ./nginx/start-nginx.sh:/usr/local/bin/start-nginx.sh:ro
+      - /mnt/iptv:/mnt/iptv:rw
       - ./app/logs/nginx:/var/log/nginx:rw
     tmpfs:
       - /var/run/nginx
@@ -46,9 +46,11 @@ services:
     depends_on:
       - iptv-manager
     restart: unless-stopped
+    command: ["/bin/sh", "-c", "/usr/local/bin/start-nginx.sh"]
 
   stats-dashboard:
-    build: 
+    image: streaming_awesomeness/stats-dashboard
+    build:
       context: ./app/stats_dashboard
       dockerfile: Dockerfile
     container_name: iptv-stats-dashboard

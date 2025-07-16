@@ -12,6 +12,7 @@ from config import (
     CPU_THRESHOLD,
     logger,
     FFMPEG_LOGS_DIR,
+    HLS_DIR,
 )
 
 
@@ -139,7 +140,7 @@ class ResourceMonitor(threading.Thread):
                 # Monitoring GPU info remains unchanged...
 
                 # IMPROVED: Add monitoring of disk space for HLS directory
-                hls_path = Path("/app/hls")
+                hls_path = Path(HLS_DIR)
                 if hls_path.exists():
                     try:
                         usage = shutil.disk_usage(hls_path)

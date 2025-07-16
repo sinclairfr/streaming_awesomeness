@@ -33,21 +33,12 @@ class ChannelStatusManager:
         self._debounce_interval = 0.8  # Wait 800ms before writing file
         self._last_update_time = 0
         self._rapid_switches_count = 0
+        self._last_forced_save_time = 0
         
         # Ensure directory exists and has proper permissions
         stats_dir = os.path.dirname(status_file)
         try:
             os.makedirs(stats_dir, exist_ok=True)
-            try:
-                os.chmod(stats_dir, 0o777)
-                logger.info(f"Set permissions 777 on stats directory: {stats_dir}")
-            except PermissionError:
-                logger.warning(f"⚠️ Cannot change permissions on stats directory: {stats_dir} (permission denied)")
-                # Check if the directory is at least writable
-                if os.access(stats_dir, os.W_OK):
-                    logger.info(f"✅ Stats directory {stats_dir} is writable, continuing anyway")
-                else:
-                    logger.error(f"❌ Stats directory {stats_dir} is not writable")
         except Exception as e:
             logger.error(f"❌ Error creating stats directory: {e}")
         
@@ -59,14 +50,6 @@ class ChannelStatusManager:
                     'last_updated': 0,
                     'active_viewers': 0
                 }, f, indent=2)
-            try:
-                os.chmod(status_file, 0o666)
-                logger.info(f"Set permissions 666 on status file: {status_file}")
-            except PermissionError:
-                logger.warning(f"⚠️ Cannot change permissions on status file (permission denied)")
-                # Check if the file is at least writable
-                if os.access(status_file, os.W_OK):
-                    logger.info(f"✅ Status file is writable, continuing anyway")
             logger.info("Created initial channel status file")
         except Exception as e:
             logger.error(f"Error creating initial channel status file: {e}")
@@ -116,11 +99,6 @@ class ChannelStatusManager:
                 # Atomic replace
                 os.replace(temp_file, self.status_file)
                 
-                # Ensure permissions
-                try:
-                    os.chmod(self.status_file, 0o666)
-                except Exception as e:
-                    logger.warning(f"Could not chmod status file: {e}")
                 
                 logger.info(f"✅ Status saved: {len(self.channels)} channels, {total_active_viewers} active viewers")
                 return True
@@ -133,6 +111,14 @@ class ChannelStatusManager:
     
     def _debounced_save(self):
         """Schedule a save operation with debouncing for rapid updates"""
+        if hasattr(self, '_last_forced_save_time') and time.time() - self._last_forced_save_time < 2.0:
+            logger.debug("Skipping debounced save, a forced save happened recently.")
+            self._pending_save = False
+            if self._save_timer:
+                self._save_timer.cancel()
+                self._save_timer = None
+            return
+
         # Cancel any pending timer
         if self._save_timer:
             self._save_timer.cancel()
@@ -234,6 +220,7 @@ class ChannelStatusManager:
                 # Use debounced save or immediate save based on force_save parameter
                 if force_save:
                     # Save immediately without debounce
+                    self._last_forced_save_time = time.time()
                     success = self._save_status()
                     if success:
                         logger.info(f"[{channel_id}] ✅ Sauvegarde immédiate forcée réussie")
@@ -320,35 +307,44 @@ class ChannelStatusManager:
             logger.error(traceback.format_exc())
             return False
     
-    def update_all_channels(self, channels_dict):
-        """Update status for all channels at once"""
+    def update_all_channels(self, channels_dict: Dict[str, Any]) -> bool:
+        """
+        Met à jour le statut de toutes les chaînes en fusionnant les nouvelles données
+        avec les données existantes pour préserver les informations sur les viewers.
+        """
         try:
             with self._lock:
-                logger.debug("🔄 Mise à jour du statut de toutes les chaînes")
-                # Clear existing data
-                self.channels.clear()
+                logger.debug(f"🔄 Fusion du statut pour {len(channels_dict)} chaînes.")
                 
-                # Update with new data
-                for channel_id, channel_data in channels_dict.items():
-                    # Convert old format to new format if needed
-                    is_live = channel_data.get('is_live', channel_data.get('active', False))
-                    viewers = channel_data.get('viewers', 0)
-                    watchers = channel_data.get('watchers', [])
+                # Fusionner les nouvelles données, en préservant les clés existantes comme viewers/watchers
+                for channel_id, new_data in channels_dict.items():
+                    # Obtenir les données existantes ou créer un nouveau dictionnaire
+                    existing_data = self.channels.get(channel_id, {})
                     
-                    self.channels[channel_id] = {
-                        'is_live': is_live,
-                        'viewers': viewers,
-                        'watchers': watchers,
-                        'last_updated': datetime.now().isoformat()
-                    }
+                    # Mettre à jour avec les nouvelles données (ex: is_live, streaming)
+                    existing_data.update(new_data)
+
+                    # Assurer la structure de base pour les nouvelles chaînes
+                    if 'is_live' not in existing_data:
+                        existing_data['is_live'] = False
+                    if 'viewers' not in existing_data:
+                        existing_data['viewers'] = 0
+                    if 'watchers' not in existing_data:
+                        existing_data['watchers'] = []
+                    
+                    # Toujours mettre à jour le timestamp
+                    existing_data['last_updated'] = datetime.now().isoformat()
+                    
+                    # Remettre dans le dictionnaire principal
+                    self.channels[channel_id] = existing_data
                 
-                # Use debounced save for update_all_channels too
+                # Utiliser la sauvegarde débauncée
                 self._debounced_save()
-                logger.debug("✅ Statut de toutes les chaînes mis à jour avec succès")
+                logger.debug("✅ Fusion du statut de toutes les chaînes terminée.")
                 return True
-                    
+                
         except Exception as e:
-            logger.error(f"❌ Erreur lors de la mise à jour de toutes les chaînes: {e}")
+            logger.error(f"❌ Erreur lors de la fusion de toutes les chaînes: {e}")
             import traceback
             logger.error(traceback.format_exc())
             return False
@@ -428,3 +424,13 @@ class ChannelStatusManager:
                 import traceback
                 logger.error(traceback.format_exc())
                 return False
+
+    def remove_channel(self, channel_id: str) -> bool:
+        """Remove a channel from the status file"""
+        with self._lock:
+            if channel_id in self.channels:
+                del self.channels[channel_id]
+                logger.info(f"🗑️ Canal '{channel_id}' supprimé du gestionnaire de statut.")
+                # Save immediately after removal
+                return self._save_status()
+        return False
