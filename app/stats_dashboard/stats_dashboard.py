@@ -230,26 +230,27 @@ app.layout = html.Div([
      Output("channel-pie-chart", "figure"),
      Output("channel-bar-chart", "figure"),
      Output("user-activity-chart", "figure"),
-     Output("user-details", "children")],
+     Output("user-details", "children"),
+     Output("live-channels-container", "children")],
     [Input("interval-component", "n_intervals")]
 )
 def update_dashboard(n):
-    # Charger les données
+    # Charger les données de statistiques et de statut en une seule fois
     channel_stats, user_stats = load_stats()
-    channel_df = create_channel_stats_df(channel_stats)
-    user_df = create_user_activity_df(user_stats)
-    
-    # 1. Statistiques globales
-    total_watch_time = channel_stats.get("global", {}).get("total_watch_time", 0)
-    unique_users = len(channel_stats.get("global", {}).get("unique_viewers", []))
     try:
         with open(CHANNELS_STATUS_FILE, 'r') as f:
             live_status = json.load(f)
-        live_channels = live_status.get('channels', {})
-        # Compter les chaînes marquées comme live
-        total_channels = sum(1 for ch_data in live_channels.values() if ch_data.get('is_live'))
     except (FileNotFoundError, json.JSONDecodeError):
-        total_channels = len(channel_stats) - 1 # Fallback à l'ancienne méthode
+        live_status = {"channels": {}}
+
+    channel_df = create_channel_stats_df(channel_stats)
+    user_df = create_user_activity_df(user_stats)
+    
+    # 1. Statistiques globales (utilisant live_status)
+    total_watch_time = channel_stats.get("global", {}).get("total_watch_time", 0)
+    unique_users = len(channel_stats.get("global", {}).get("unique_viewers", []))
+    live_channels_data = live_status.get('channels', {})
+    total_channels = sum(1 for ch_data in live_channels_data.values() if ch_data.get('is_live'))
 
     global_stats = html.Div([
         html.Div([
@@ -267,25 +268,24 @@ def update_dashboard(n):
     ])
     
     # 2. Graphique en secteurs par chaîne
-    if len(channel_df) > 0:
+    if not channel_df.empty:
         pie_fig = px.pie(
-            channel_df, 
-            values="watch_time", 
+            channel_df,
+            values="watch_time",
             names="channel",
             title="Répartition du Temps de Visionnage",
             color_discrete_sequence=px.colors.qualitative.Plotly
         )
         pie_fig.update_traces(textposition='inside', textinfo='percent+label')
     else:
-        pie_fig = go.Figure()
-        pie_fig.add_annotation(text="Aucune donnée disponible", showarrow=False)
+        pie_fig = go.Figure().add_annotation(text="Aucune donnée disponible", showarrow=False)
     
     # 3. Graphique à barres du temps par chaîne
-    if len(channel_df) > 0:
-        channel_df["formatted_time"] = channel_df["watch_time"].apply(lambda x: format_time(x))
+    if not channel_df.empty:
+        channel_df["formatted_time"] = channel_df["watch_time"].apply(format_time)
         bar_fig = px.bar(
-            channel_df, 
-            x="channel", 
+            channel_df,
+            x="channel",
             y="watch_time",
             text="formatted_time",
             labels={"watch_time": "Temps de Visionnage (s)", "channel": "Chaîne"},
@@ -294,12 +294,11 @@ def update_dashboard(n):
         )
         bar_fig.update_traces(textposition='outside')
     else:
-        bar_fig = go.Figure()
-        bar_fig.add_annotation(text="Aucune donnée disponible", showarrow=False)
+        bar_fig = go.Figure().add_annotation(text="Aucune donnée disponible", showarrow=False)
     
     # 4. Graphique d'activité utilisateur
-    if len(user_df) > 0:
-        user_df["formatted_time"] = user_df["watch_time"].apply(lambda x: format_time(x))
+    if not user_df.empty:
+        user_df["formatted_time"] = user_df["watch_time"].apply(format_time)
         user_fig = px.bar(
             user_df,
             x="ip",
@@ -310,16 +309,15 @@ def update_dashboard(n):
             hover_data=["formatted_time", "favorite"]
         )
     else:
-        user_fig = go.Figure()
-        user_fig.add_annotation(text="Aucune donnée disponible", showarrow=False)
+        user_fig = go.Figure().add_annotation(text="Aucune donnée disponible", showarrow=False)
     
     # 5. Détails par utilisateur
-    user_details = []
+    user_details_list = []
     for ip, user_data in user_stats.get("users", {}).items():
         total_time = user_data.get("total_watch_time", 0)
-        last_seen = datetime.fromtimestamp(user_data.get("last_seen", 0))
+        last_seen_ts = user_data.get("last_seen", 0)
+        last_seen_dt = datetime.fromtimestamp(last_seen_ts) if last_seen_ts else "N/A"
         
-        # Trouver la chaîne favorite
         favorite_channel = "Inconnue"
         max_time = 0
         if "channels" in user_data:
@@ -329,36 +327,19 @@ def update_dashboard(n):
                     max_time = channel_time
                     favorite_channel = channel
         
-        user_details.append(html.Div([
+        user_details_list.append(html.Div([
             html.H3(f"Utilisateur: {ip}"),
             html.P(f"Temps total: {format_time(total_time)}"),
-            html.P(f"Dernière activité: {last_seen.strftime('%Y-%m-%d %H:%M:%S')}"),
+            html.P(f"Dernière activité: {last_seen_dt.strftime('%Y-%m-%d %H:%M:%S') if last_seen_dt != 'N/A' else 'N/A'}"),
             html.P(f"Chaîne favorite: {favorite_channel}")
         ], className="user-detail-box"))
     
-    if not user_details:
-        user_details = [html.Div(html.P("Aucune donnée utilisateur disponible"))]
-    
-    return global_stats, pie_fig, bar_fig, user_fig, user_details
+    user_details_container = user_details_list if user_details_list else [html.P("Aucune donnée utilisateur disponible")]
 
-# Callback pour mettre à jour le statut des chaînes en direct
-@app.callback(
-    Output("live-channels-container", "children"),
-    [Input("interval-component", "n_intervals")]
-)
-def update_live_channels(n):
-    # Charger les données de statut en direct
-    try:
-        with open(CHANNELS_STATUS_FILE, 'r') as f:
-            channel_status = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        channel_status = {"channels": {}}
+    # 6. Grille des chaînes en direct (logique de l'ancien callback)
+    live_channels_grid = create_channels_grid(live_channels_data)
     
-    # Créer la grille de chaînes
-    # Passer directement le dictionnaire des canaux
-    grid = create_channels_grid(channel_status.get("channels", {}))
-    
-    return grid
+    return global_stats, pie_fig, bar_fig, user_fig, user_details_container, live_channels_grid
 
 # CSS pour le dashboard
 app.index_string = '''
