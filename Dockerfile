@@ -2,6 +2,10 @@
 #FROM nvidia/cuda:11.8.0-base-ubuntu22.04
 FROM ubuntu:22.04
 
+# Arguments for user and group IDs
+ARG PUID=1000
+ARG PGID=1000
+
 # Passer en root pour l'installation des paquets
 USER root
 
@@ -40,24 +44,14 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y tzdata
 ENV TZ=Europe/Paris
 
-# Permettre à l'utilisateur streamer d'utiliser sudo pour kill
-RUN echo "streamer ALL=(ALL) NOPASSWD: /usr/bin/kill" >> /etc/sudoers
-# Après la création de l'utilisateur streamer
-RUN echo "streamer ALL=(ALL) NOPASSWD: /bin/kill, /usr/bin/kill, /bin/pkill" >> /etc/sudoers.d/streamer
-
-# Création d'un utilisateur non-root pour éviter les problèmes de permissions
-RUN useradd -m -s /bin/bash streamer
-
-# Après la création de l'utilisateur streamer
-RUN usermod -aG sudo streamer && \
+# Create a group and user with specified GID and UID
+RUN groupadd -g $PGID streamer && \
+    useradd -u $PUID -g $PGID -m -s /bin/bash streamer && \
+    usermod -aG sudo streamer && \
     echo "streamer ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers.d/streamer
 
-# Donne TOUS les droits sur /app
-RUN mkdir -p /app/hls /app/logs/ffmpeg /app/restart_requests /app/stats /mnt/iptv && \
-    chown -R streamer:streamer /app && \
-    chmod -R 777 /app && \
-    chown -R streamer:streamer /mnt/iptv && \
-    chmod -R 777 /mnt/iptv
+# Create necessary directories
+RUN mkdir -p /app/hls /app/logs/ffmpeg /app/restart_requests /app/stats /mnt/iptv
 
 # Configuration de logrotate pour nginx
 RUN echo '/var/log/nginx/*.log {\n\
@@ -85,16 +79,19 @@ RUN touch /var/log/cron.log && \
     chmod 666 /var/log/cron.log
 
 # Créer les fichiers stats initiaux
+# Create initial stats files
 RUN touch /app/stats/user_stats_v2.json /app/stats/channel_stats.json /app/stats/channels_status.json /app/stats/channel_stats_bytes.json /app/stats/user_stats_bytes.json && \
-    chmod 666 /app/stats/*.json && \
     echo "{}" > /app/stats/user_stats_v2.json && \
     echo "{}" > /app/stats/channel_stats.json && \
     echo "{}" > /app/stats/channels_status.json && \
     echo '{"global":{"total_watch_time":0,"total_bytes_transferred":0,"unique_viewers":[],"last_update":0}}' > /app/stats/channel_stats_bytes.json && \
-    echo '{"users":{},"last_updated":0}' > /app/stats/user_stats_bytes.json && \
-    chown -R streamer:streamer /app/stats
+    echo '{"users":{},"last_updated":0}' > /app/stats/user_stats_bytes.json
 
 # Passer à l'utilisateur non-root
+# Change ownership of the directories to the new user
+RUN chown -R streamer:streamer /app /mnt/iptv
+
+# Switch to the non-root user
 USER streamer
 
 # Définir le répertoire de travail
@@ -104,35 +101,17 @@ WORKDIR /app
 COPY --chown=streamer:streamer requirements.txt /app/
 COPY --chown=streamer:streamer setup_cron.sh /app/
 COPY --chown=streamer:streamer app/ /app/
-RUN chmod +x /app/setup_cron.sh && \
-    chmod +x /app/fix_permissions.sh && \
-    chmod +x /app/fix_log_permissions.sh && \
-    chmod +x /app/fix_stats_permissions.sh
+RUN chmod +x /app/setup_cron.sh
 
 # Installation des dépendances Python
 RUN pip3 install --no-cache-dir -r /app/requirements.txt
 
 # Création du script de démarrage
 RUN echo '#!/bin/bash\n\
-sudo chown -R streamer:streamer /mnt/iptv\n\
-mkdir -p /mnt/iptv\n\
-chown -R streamer:streamer /mnt/iptv\n\
-chmod -R 777 /mnt/iptv\n\
-chown -R streamer:streamer /app\n\
-chmod -R 777 /app\n\
-mkdir -p /app/stats\n\
-chown -R streamer:streamer /app/stats\n\
-chmod 777 /app/stats\n\
-touch /app/stats/user_stats_v2.json /app/stats/channel_stats.json /app/stats/channels_status.json /app/stats/channel_stats_bytes.json /app/stats/user_stats_bytes.json\n\
-chmod 666 /app/stats/*.json\n\
-chown streamer:streamer /app/stats/*.json\n\
 sudo service cron start\n\
 echo "Cron service started"\n\
-/app/fix_log_permissions.sh\n\
-/app/fix_stats_permissions.sh\n\
-echo "Log and stats permissions fixed"\n\
 exec python3 main.py' > /app/start.sh && \
-chmod +x /app/start.sh
+    chmod +x /app/start.sh
 
 # Point d'entrée : lancement du service avec correction des permissions au runtime
 ENTRYPOINT ["/app/start.sh"]

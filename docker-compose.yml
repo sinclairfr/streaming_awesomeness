@@ -7,11 +7,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    user: "1000:1000"  # Exécuter en tant qu'utilisateur non-root (streamer)
+    user: "${PUID:-1000}:${PGID:-1000}"
     volumes:
       - /mnt/iptv:/mnt/iptv:rw
-      - ./app/logs:/app/logs:rw
-      - ./app/stats:/app/stats:rw
+      - ./app:/app:rw
       - /mnt/docker_data/streaming_awesomeness/content:/mnt/videos:rw
     #dvices:
       #- /dev/dri/card1:/dev/dri/card1
@@ -21,8 +20,8 @@ services:
     environment:
       - TZ=Europe/Paris
       - NVIDIA_VISIBLE_DEVICES=
-      - PUID=1000
-      - PGID=1000
+      - PUID=${UID:-1000}
+      - PGID=${GID:-1000}
     restart: unless-stopped
 
   nginx:
