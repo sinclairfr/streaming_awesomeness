@@ -65,7 +65,7 @@ class FFmpegMonitor(threading.Thread):
                         cmd_str = " ".join(cmd_args)
 
                         # Détecter le nom de la chaîne
-                        for channel_name in self.channels:
+                        for channel_name in list(self.channels.keys()):
                             if f"/{HLS_DIR.strip('/')}/{channel_name}/" in cmd_str:
                                 ffmpeg_processes.setdefault(channel_name, []).append(proc.info["pid"])
                                 break
@@ -109,7 +109,7 @@ class FFmpegMonitor(threading.Thread):
         """Génère un résumé des chaînes en cours d'exécution"""
         try:
             active_channels = []
-            for name, channel in sorted(self.channels.items()):
+            for name, channel in sorted(list(self.channels.items())):
                 if hasattr(channel, "is_running") and channel.is_running():
                     watchers = getattr(channel, "watchers_count", 0)
                     active_channels.append(f"{name}: {watchers} viewers")
@@ -136,7 +136,7 @@ class FFmpegMonitor(threading.Thread):
 
                 # Health check espacé (10 minutes)
                 if current_time - last_health_check > 600:
-                    for channel_name, channel in self.channels.items():
+                    for channel_name, channel in list(self.channels.items()):
                         if hasattr(channel, "check_stream_health"):
                             try:
                                 # On vérifie mais on n'agit pas automatiquement
@@ -153,7 +153,7 @@ class FFmpegMonitor(threading.Thread):
                 # Log des viewers actifs
                 if current_time - last_log_time > log_cycle:
                     active_channels = []
-                    for name, channel in sorted(self.channels.items()):
+                    for name, channel in sorted(list(self.channels.items())):
                         if hasattr(channel, "watchers_count") and channel.watchers_count > 0:
                             active_channels.append(f"{name}: {channel.watchers_count}")
 
@@ -200,7 +200,7 @@ class FFmpegMonitor(threading.Thread):
         """Vérifie périodiquement les logs FFmpeg pour détecter des erreurs"""
         try:
             # Vérifier les logs de chaque chaîne
-            for channel_name in self.channels:
+            for channel_name in list(self.channels.keys()):
                 # Créer ou récupérer le logger FFmpeg pour cette chaîne
                 ffmpeg_logger = FFmpegLogger(channel_name)
                 

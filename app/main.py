@@ -195,5 +195,17 @@ class Application:
         return 0
 
 if __name__ == "__main__":
-    app = Application()
-    sys.exit(app.run_main_loop())
+    import argparse
+    parser = argparse.ArgumentParser(description="IPTV Manager")
+    parser.add_argument('--restart-channel', type=str, help='Request a restart for a specific channel')
+    args = parser.parse_args()
+
+    if args.restart_channel:
+        from restart_channel import request_channel_restart
+        if request_channel_restart(args.restart_channel):
+            sys.exit(0)
+        else:
+            sys.exit(1)
+    else:
+        app = Application()
+        sys.exit(app.run_main_loop())

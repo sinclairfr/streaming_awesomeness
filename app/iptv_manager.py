@@ -42,6 +42,10 @@ import re
 from log_utils import parse_access_log
 from typing import Optional
 from datetime import datetime
+from base_file_event_handler import BaseFileEventHandler
+
+
+COMMAND_DIR = "/app/commands"
 
 
 class IPTVManager:
@@ -100,6 +104,7 @@ class IPTVManager:
         self.last_scan_time = 0
         self.scan_queue = Queue()
         self.failing_channels = set()
+        self.restarting_channels = set()
 
         # Queue pour les chaînes à initialiser en parallèle
         self.channel_init_queue = Queue()
@@ -177,6 +182,13 @@ class IPTVManager:
         event_handler = FileEventHandler(self)
         self.observer.schedule(event_handler, self.content_dir, recursive=True)
         logger.info(f"👁️ Observer configuré pour surveiller {self.content_dir} en mode récursif")
+
+        # Command actions
+        self.command_actions = {
+            '.restart': self.restart_channel,
+        }
+        Path(COMMAND_DIR).mkdir(parents=True, exist_ok=True)
+        logger.info(f"Directory des commandes configuré sur {COMMAND_DIR}")
 
         # Démarrage des threads dans l'ordre correct
         self.scan_thread.start()
@@ -794,7 +806,7 @@ class IPTVManager:
         # Stop all threads first
         self.stop_scan_thread.set()
         self.stop_init_thread.set()
-
+ 
         # Vider tous les viewers du fichier de statut avant arrêt
         try:
             if self.channel_status is not None:
@@ -862,7 +874,7 @@ class IPTVManager:
             logger.error(f"❌ Erreur lors de l'arrêt du ready observer: {e}")
             
         # Clean up channels
-        for name, channel in self.channels.items():
+        for name, channel in list(self.channels.items()):
             try:
                 if channel is not None:
                     channel._clean_processes()
@@ -1002,53 +1014,70 @@ class IPTVManager:
         except Exception as e:
             logger.error(f"❌ Erreur vérification timeouts: {e}")
 
+    def _run_periodic_tasks(self):
+        """Exécute toutes les tâches périodiques."""
+        last_times = {
+            "scan": 0,
+            "summary": 0,
+            "resync": 0,
+            "log_watchers": 0,
+            "process_logs": 0,
+            "commands": 0,
+        }
+        
+        while not self.stop_scan_thread.is_set():
+            now = time.time()
+
+            # Vérifier les commandes (toutes les 2 secondes)
+            if now - last_times["commands"] > 2:
+                self._check_for_commands()
+                last_times["commands"] = now
+
+            # Traiter les logs Nginx (fréquemment)
+            if now - last_times["process_logs"] > 0.5 and hasattr(self, "client_monitor") and self.client_monitor:
+                self.client_monitor.process_new_logs()
+                last_times["process_logs"] = now
+
+            # Scan périodique
+            if now - last_times["scan"] > self.periodic_scan_interval:
+                self._periodic_scan()
+                last_times["scan"] = now
+
+            # Affichage du récapitulatif
+            if now - last_times["summary"] > SUMMARY_CYCLE:
+                self._log_channels_summary()
+                last_times["summary"] = now
+            
+            # Resynchronisation des playlists
+            if now - last_times["resync"] > 600:
+                self._resync_all_playlists()
+                last_times["resync"] = now
+
+            # Log des watchers
+            if now - last_times["log_watchers"] > WATCHERS_LOG_CYCLE and hasattr(self, "_log_watchers_status"):
+                self._log_watchers_status()
+                last_times["log_watchers"] = now
+
+            time.sleep(0.1)
+
     def run_manager_loop(self):
-        """Boucle principale du gestionnaire IPTV"""
+        """Boucle principale du gestionnaire IPTV."""
         logger.info("🔄 Démarrage de la boucle principale du gestionnaire")
         
-        # Démarrer les composants dans le bon ordre
         if not hasattr(self, "observer") or not self.observer.is_alive():
             self.observer.start()
-            logger.info("👁️ Observateur démarré")
-            
+            logger.info("👁️ Observateur de contenu démarré")
+
+        # Démarrer le thread pour les tâches périodiques
+        self.periodic_task_thread = threading.Thread(target=self._run_periodic_tasks, daemon=True)
+        self.periodic_task_thread.start()
+        logger.info("🔄 Thread des tâches périodiques démarré")
+
         try:
-            last_scan_time = time.time()
-            last_summary_time = time.time()
-            last_resync_time = time.time()
-            last_log_watchers_time = time.time()
-            last_process_logs_time = time.time()  # Pour traiter les logs régulièrement
-            
-            while True:
-                current_time = time.time()
-                
-                # >>> NOUVEAU: Traiter les logs access.log régulièrement
-                if current_time - last_process_logs_time > 0.5 and hasattr(self, "client_monitor") and self.client_monitor is not None:
-                    self.client_monitor.process_new_logs()
-                    last_process_logs_time = current_time
-                # <<< FIN NOUVEAU
-                
-                # Scan périodique 
-                if current_time - last_scan_time > SUMMARY_CYCLE:
-                    self._periodic_scan()
-                    last_scan_time = current_time
-                    
-                # Affichage périodique du récapitulatif
-                if current_time - last_summary_time > SUMMARY_CYCLE:
-                    self._log_channels_summary()
-                    last_summary_time = current_time
-                
-                # Resynchronisation générale de toutes les playlists
-                if current_time - last_resync_time > 600:  # Toutes les 10 minutes
-                    self._resync_all_playlists()
-                    last_resync_time = current_time
-                
-                # Log périodique des watchers
-                if current_time - last_log_watchers_time > WATCHERS_LOG_CYCLE and hasattr(self, "_log_watchers_status"):
-                    self._log_watchers_status()
-                    last_log_watchers_time = current_time
-                
-                # Dormir un peu pour éviter de surcharger le CPU
-                time.sleep(0.1)
+            # La boucle principale peut maintenant être utilisée pour d'autres logiques si nécessaire,
+            # ou simplement pour maintenir le processus en vie.
+            while not self.stop_scan_thread.is_set():
+                time.sleep(1)
                 
         except KeyboardInterrupt:
             logger.info("👋 Interruption clavier, arrêt du gestionnaire")
@@ -1080,7 +1109,7 @@ class IPTVManager:
         """Force la resynchronisation des playlists pour toutes les chaînes"""
         try:
             resync_count = 0
-            for channel_name, channel in self.channels.items():
+            for channel_name, channel in list(self.channels.items()):
                 # Vérifier si la chaîne a une méthode de création de playlist
                 if hasattr(channel, "_create_concat_file"):
                     # On ne recréé pas toutes les playlists à chaque fois, on alterne
@@ -1542,3 +1571,52 @@ class IPTVManager:
             self._update_master_playlist()
             
             logger.info(f"✅ Suppression de la chaîne '{channel_name}' terminée.")
+
+    def _check_for_commands(self):
+        """Scans the command directory for new commands."""
+        try:
+            command_dir = Path(COMMAND_DIR)
+            if not command_dir.exists():
+                return
+
+            for command_file in command_dir.glob("*.restart"):
+                if command_file.is_file():
+                    channel_name = command_file.stem
+                    if channel_name in self.channels:
+                        logger.info(f"ACTION: Commande '{command_file.suffix}' reçue pour la chaîne '{channel_name}' via scan")
+                        self.restart_channel(channel_name)
+                        try:
+                            os.remove(command_file)
+                            logger.info(f"Fichier de commande '{command_file}' supprimé.")
+                        except OSError as e:
+                            logger.error(f"Erreur lors de la suppression du fichier de commande '{command_file}': {e}")
+        except Exception as e:
+            logger.error(f"Erreur lors de la vérification des commandes: {e}")
+
+    def restart_channel(self, channel_name: str):
+        """Redémarre une chaîne spécifique en utilisant sa méthode interne."""
+        with self.scan_lock:
+            channel = self.channels.get(channel_name)
+            if channel and hasattr(channel, '_restart_stream'):
+                logger.info(f"[{channel_name}] 🔄 Redémarrage initié par le manager.")
+                self.restarting_channels.add(channel_name)
+                # Exécuter le redémarrage dans un thread séparé pour ne pas bloquer
+                threading.Thread(
+                    target=self._restart_channel_thread,
+                    args=(channel, channel_name),
+                    daemon=True
+                ).start()
+            elif channel:
+                logger.error(f"[{channel_name}] ❌ La méthode _restart_stream est introuvable.")
+            else:
+                logger.error(f"[{channel_name}] ❌ Chaîne introuvable pour le redémarrage.")
+
+    def _restart_channel_thread(self, channel, channel_name):
+        """Thread worker for restarting a channel."""
+        try:
+            channel._restart_stream("manual_manager_restart")
+        finally:
+            # Attendre un peu pour que les opérations sur les fichiers se terminent
+            time.sleep(5)
+            self.restarting_channels.discard(channel_name)
+            logger.info(f"[{channel_name}] ✅ Redémarrage terminé.")

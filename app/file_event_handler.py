@@ -196,6 +196,10 @@ class FileEventHandler(BaseFileEventHandler):
         if not channel_name:
             return
 
+        if channel_name in self.manager.restarting_channels:
+            logger.debug(f"[{channel_name}] 🤫 Ignorer l'événement de fichier pendant le redémarrage.")
+            return
+
         # Vérifier le cooldown
         if not self._check_cooldown(channel_name):
             return

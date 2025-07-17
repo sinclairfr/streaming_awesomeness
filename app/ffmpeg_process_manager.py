@@ -115,9 +115,10 @@ class FFmpegProcessManager:
                 
                 self.process = subprocess.Popen(
                     command,
-                    stdout=subprocess.PIPE, # Garder stdout en pipe si nécessaire
-                    stderr=stderr_log_file, # Rediriger stderr vers le fichier log
-                    text=True
+                    stdout=subprocess.PIPE,
+                    stderr=stderr_log_file,
+                    text=True,
+                    preexec_fn=os.setsid  # Run in a new process group
                 )
                 # Enregistrer le temps de démarrage pour la période de grâce
                 self.start_time = time.time()
@@ -144,13 +145,13 @@ class FFmpegProcessManager:
                 
                 # Vérifier la création du premier segment
                 segment_check_start = time.time()
-                while time.time() - segment_check_start < 10:  # Attendre jusqu'à 10 secondes
+                while time.time() - segment_check_start < 20:  # Attendre jusqu'à 20 secondes
                     if any(Path(hls_dir).glob("segment_*.ts")):
                         logger.info(f"[{self.channel_name}] ✅ Premier segment créé avec succès")
                         return True
                     time.sleep(1)
                 
-                logger.warning(f"[{self.channel_name}] ⚠️ Aucun segment créé après 10 secondes")
+                logger.warning(f"[{self.channel_name}] ⚠️ Aucun segment créé après 20 secondes")
                 return True  # On retourne True quand même car le processus est en cours
                 
             except Exception as e:
@@ -177,25 +178,35 @@ class FFmpegProcessManager:
                 if pid_to_stop:
                     try:
                         p = psutil.Process(pid_to_stop)
-                        # Tenter un arrêt propre
-                        p.terminate() 
+                        # Terminate children first
+                        for child in p.children(recursive=True):
+                            try:
+                                child.terminate()
+                            except psutil.NoSuchProcess:
+                                pass
+                        # Terminate the parent process
+                        p.terminate()
                         
-                        # Attendre plus longtemps pour l'arrêt normal
+                        # Wait for the process to terminate
                         try:
-                            p.wait(timeout=timeout + 5) # Increased timeout
+                            p.wait(timeout=timeout)
                             logger.info(f"[{self.channel_name}] ✅ Processus {pid_to_stop} arrêté proprement.")
                         except psutil.TimeoutExpired:
-                            # Kill forcé si nécessaire
                             logger.warning(f"[{self.channel_name}] ⚠️ Kill forcé du processus FFmpeg PID {pid_to_stop}")
+                            # Kill children first
+                            for child in p.children(recursive=True):
+                                try:
+                                    child.kill()
+                                except psutil.NoSuchProcess:
+                                    pass
+                            # Kill the parent process
                             p.kill()
                             time.sleep(1.0) # Allow time for kill
-                            
-                            # Vérification finale
                             if p.is_running():
                                 logger.error(f"[{self.channel_name}] ❌ Échec du kill forcé pour PID {pid_to_stop}")
                             else:
                                 logger.info(f"[{self.channel_name}] ✅ Processus {pid_to_stop} tué avec succès.")
-                                
+
                     except psutil.NoSuchProcess:
                         logger.info(f"[{self.channel_name}] ✅ Processus {pid_to_stop} déjà arrêté.")
                     except Exception as e:
@@ -344,7 +355,7 @@ class FFmpegProcessManager:
                 return True # Continue monitoring
 
             # Log détaillé des segments pour diagnostic
-            logger.info(f"[{self.channel_name}] 📊 {len(file_stats)} segments trouvés et validés")
+            logger.debug(f"[{self.channel_name}] 📊 {len(file_stats)} segments trouvés et validés")
 
             # Trier par date de modification en utilisant les stats pré-chargées
             file_stats.sort(key=lambda x: x[1].st_mtime)
@@ -356,7 +367,7 @@ class FFmpegProcessManager:
                 segment_sizes = [s.st_size for _, s in last_segments_stats]
                 
                 # Log des tailles pour diagnostic
-                logger.info(f"[{self.channel_name}] 📏 Tailles des 3 derniers segments: {segment_sizes}")
+                logger.debug(f"[{self.channel_name}] 📏 Tailles des 3 derniers segments: {segment_sizes}")
                 
                 # Si les 3 derniers segments ont exactement la même taille
                 if len(set(segment_sizes)) == 1 and segment_sizes[0] > 0: # Ignore empty files

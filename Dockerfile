@@ -89,12 +89,13 @@ RUN touch /app/stats/user_stats_v2.json /app/stats/channel_stats.json /app/stats
 
 # Passer à l'utilisateur non-root
 # Change ownership of the directories to the new user
-RUN chown -R streamer:streamer /app /mnt/iptv
+RUN chown -R streamer:streamer /app /mnt
 
 # Switch to the non-root user
 USER streamer
 
 # Définir le répertoire de travail
+SHELL ["/bin/bash", "-c"]
 WORKDIR /app
 
 # Copier les fichiers nécessaires à l'application

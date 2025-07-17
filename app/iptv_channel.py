@@ -406,13 +406,20 @@ class IPTVChannel:
             logger.error(traceback.format_exc())
 
     def _restart_stream(self, diagnostic=None) -> bool:
-        """Redémarre le stream en choisissant un NOUVEAU fichier VIDÉO aléatoire en cas de problème"""
+        """Redémarre le stream. Si le redémarrage est manuel, il relance la même vidéo. Sinon, il choisit un NOUVEAU fichier VIDÉO aléatoire."""
         try:
             restart_reason = diagnostic or "Raison inconnue"
-            logger.info(f"[{self.name}] 🔄 Tentative de redémarrage du stream - Raison: {restart_reason}")
+            is_manual_restart = (diagnostic == "manual_manager_restart")
+            
+            if is_manual_restart:
+                logger.info(f"[{self.name}] 🔄 Tentative de redémarrage MANUEL du stream.")
+            else:
+                logger.info(f"[{self.name}] 🔄 Tentative de redémarrage du stream - Raison: {restart_reason}")
 
             # Arrêter proprement les processus FFmpeg
-            self.process_manager.stop_process()
+            if self.process_manager.is_running():
+                logger.info(f"[{self.name}] 🛑 Arrêt du processus en cours avant redémarrage...")
+                self.process_manager.stop_process(timeout=10)
 
             # Nettoyer le dossier HLS
             self.hls_cleaner.cleanup_channel(self.name)
@@ -420,29 +427,42 @@ class IPTVChannel:
             # Attendre un peu avant de redémarrer
             time.sleep(random.uniform(1.5, 3.0))
             
-            # Sélectionner un nouveau fichier aléatoire
+            # --- Logique de sélection de vidéo ---
+            # --- Logique de sélection de vidéo ---
             with self.lock:
                 if not self.processed_videos:
                     logger.warning(f"[{self.name}] ⚠️ Liste de vidéos vide, impossible de redémarrer.")
                     return False
 
-                num_videos = len(self.processed_videos)
-                if num_videos > 1:
-                    old_index = self.current_video_index
-                    next_video_index = random.randrange(num_videos)
-                    while next_video_index == old_index:
+                if not is_manual_restart:
+                    # Comportement en cas de problème: sélectionner un nouveau fichier aléatoire
+                    num_videos = len(self.processed_videos)
+                    if num_videos > 1:
+                        old_index = self.current_video_index
                         next_video_index = random.randrange(num_videos)
-                    self.current_video_index = next_video_index
-                    logger.info(f"[{self.name}] 🔀 Sélection d'un nouveau fichier aléatoire: Index {next_video_index}")
+                        while next_video_index == old_index:
+                            next_video_index = random.randrange(num_videos)
+                        self.current_video_index = next_video_index
+                        logger.info(f"[{self.name}] 🔀 Sélection d'un nouveau fichier aléatoire (cause: erreur): Index {next_video_index}")
+                    else:
+                        self.current_video_index = 0
                 else:
-                    self.current_video_index = 0
+                    # Pour un redémarrage manuel, on garde le même index
+                    logger.info(f"[{self.name}] ℹ️ Conservation du fichier vidéo actuel (Index {self.current_video_index}) pour le redémarrage manuel.")
+
 
             # Redémarrer le stream
             success = self.start_stream()
             if success:
-                logger.info(f"[{self.name}] ✅ Stream redémarré avec succès sur un nouveau fichier.")
+                if is_manual_restart:
+                    logger.info(f"[{self.name}] ✅ Stream redémarré manuellement avec succès.")
+                else:
+                    logger.info(f"[{self.name}] ✅ Stream redémarré avec succès sur un nouveau fichier.")
             else:
-                logger.error(f"[{self.name}] ❌ Échec du redémarrage sur un nouveau fichier.")
+                if is_manual_restart:
+                    logger.error(f"[{self.name}] ❌ Échec du redémarrage manuel.")
+                else:
+                    logger.error(f"[{self.name}] ❌ Échec du redémarrage sur un nouveau fichier.")
             
             return success
         except Exception as e:

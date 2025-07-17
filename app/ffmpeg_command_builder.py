@@ -17,8 +17,8 @@ class FFmpegCommandBuilder:
 
         # Default parameters - adjusted for stability
         self.hls_time = HLS_SEGMENT_DURATION
-        self.hls_list_size = 20
-        self.hls_delete_threshold = 7
+        self.hls_list_size = 30
+        self.hls_delete_threshold = 15
         self.gop_size = 48
         self.keyint_min = 48
         self.video_bitrate = "5M"
@@ -45,6 +45,8 @@ class FFmpegCommandBuilder:
                 "-hide_banner",
                 "-loglevel", "warning",
                 "-y",
+                "-nostdin",
+                "-max_error_rate", "1",
                 "-thread_queue_size", "32768",
                 "-analyzeduration", "20M",
                 "-probesize", "20M",

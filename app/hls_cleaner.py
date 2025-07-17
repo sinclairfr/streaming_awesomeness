@@ -106,14 +106,22 @@ class HLSCleaner:
             return False
 
     def cleanup_channel(self, channel_name: str):
-        """Supprime le dossier HLS complet d'une chaîne."""
+        """Nettoie le contenu du dossier HLS d'une chaîne, sans supprimer le dossier lui-même."""
         try:
             channel_dir = self.hls_dir / channel_name
             if channel_dir.exists() and channel_dir.is_dir():
-                shutil.rmtree(channel_dir)
-                logger.info(f"🗑️ Dossier HLS de la chaîne '{channel_name}' supprimé.")
+                logger.info(f"🧹 Nettoyage du contenu HLS pour la chaîne '{channel_name}'...")
+                for item in channel_dir.iterdir():
+                    try:
+                        if item.is_dir():
+                            shutil.rmtree(item)
+                        else:
+                            item.unlink()
+                    except Exception as e:
+                        logger.error(f"Impossible de supprimer {item}: {e}")
+                logger.info(f"✅ Contenu HLS de la chaîne '{channel_name}' nettoyé.")
         except Exception as e:
-            logger.error(f"Erreur lors de la suppression du dossier HLS pour '{channel_name}': {e}")
+            logger.error(f"Erreur lors du nettoyage du contenu HLS pour '{channel_name}': {e}")
 
     def _cleanup_loop(self):
         """Boucle de nettoyage périodique"""
