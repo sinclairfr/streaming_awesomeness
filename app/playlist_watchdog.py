@@ -13,7 +13,7 @@ import subprocess
 
 # Configuration
 PLAYLIST_PATH = f"{os.getenv('HLS_DIR', '/mnt/iptv')}/playlist.m3u"
-CHECK_INTERVAL = 60  # Vérification toutes les 60 secondes
+CHECK_INTERVAL = 30  # Vérification toutes les 30 secondes (plus agressif)
 try:
     from config import SERVER_URL, HLS_DIR
 except ImportError:

@@ -11,8 +11,9 @@ services:
     volumes:
       - /mnt/iptv:/mnt/iptv:rw
       - ./app:/app:rw
-      - /mnt/docker_data/streaming_awesomeness/content:/mnt/videos:rw
-    #dvices:
+      #- /mnt/docker_data/streaming_awesomeness/content:/mnt/videos:rw
+      - /mnt/hdd4t/streaming_awesomeness:/mnt/videos:rw    
+#dvices:
       #- /dev/dri/card1:/dev/dri/card1
       #- /dev/dri/renderD128:/dev/dri/renderD128
     security_opt:

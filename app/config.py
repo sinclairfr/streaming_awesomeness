@@ -81,6 +81,14 @@ PLAYLIST_CHECK_INTERVAL = int(os.getenv("PLAYLIST_CHECK_INTERVAL", str(int(HLS_S
 WATCHERS_LOG_CYCLE = int(os.getenv("WATCHERS_LOG_CYCLE", str(int(HLS_SEGMENT_DURATION * 2.5))))  # 2.5 segments
 SUMMARY_CYCLE = int(os.getenv("SUMMARY_CYCLE", str(int(HLS_SEGMENT_DURATION * 30))))  # 30 segments
 
+# Master playlist update configuration
+FORCE_PLAYLIST_UPDATE_INTERVAL = int(os.getenv("FORCE_PLAYLIST_UPDATE_INTERVAL", "20"))  # Mise à jour périodique toutes les 20 secondes
+STARTUP_PLAYLIST_DELAY = int(os.getenv("STARTUP_PLAYLIST_DELAY", "90"))  # Délai de 90s avant première mise à jour
+PLAYLIST_UPDATE_RETRIES = int(os.getenv("PLAYLIST_UPDATE_RETRIES", "10"))  # 10 tentatives de mise à jour au démarrage
+RETRY_BACKOFF_BASE = int(os.getenv("RETRY_BACKOFF_BASE", "10"))  # Délai de base pour backoff exponentiel
+VALIDATION_RETRY_DELAY = int(os.getenv("VALIDATION_RETRY_DELAY", "45"))  # Délai entre les retries de validation
+VALIDATION_MAX_RETRIES = int(os.getenv("VALIDATION_MAX_RETRIES", "3"))  # Nombre maximum de retries de validation
+
 # Configuration des timeouts pour le monitoring des clients
 CLIENT_MONITOR_SEGMENT_TIMEOUT = int(os.getenv("CLIENT_MONITOR_SEGMENT_TIMEOUT", str(int(HLS_SEGMENT_DURATION * 5))))  # 5 segments
 CLIENT_MONITOR_PLAYLIST_TIMEOUT = int(os.getenv("CLIENT_MONITOR_PLAYLIST_TIMEOUT", str(int(HLS_SEGMENT_DURATION * 10))))  # 10 segments

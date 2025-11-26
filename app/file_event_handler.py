@@ -243,10 +243,14 @@ class FileEventHandler(BaseFileEventHandler):
         
         # Force un scan immédiat
         self.manager.scan_channels(force=True)
-        
+
         # Attendre un peu pour laisser le temps au scan de s'exécuter
-        time.sleep(2)
-        
+        time.sleep(5)
+
+        # Forcer une mise à jour de la playlist maître
+        logger.info(f"[{channel_name}] 🔄 Mise à jour forcée de la playlist maître après création de chaîne")
+        self._force_master_playlist_update()
+
         # Si la chaîne n'a pas été créée par le scan, la créer manuellement
         if channel_name not in self.manager.channels:
             logger.info(f"[{channel_name}] 🔄 Forçage de la création de la chaîne")

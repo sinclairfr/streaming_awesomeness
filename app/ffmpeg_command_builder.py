@@ -71,7 +71,7 @@ class FFmpegCommandBuilder:
                 "-start_at_zero",
                 "-sn", "-dn",
                 "-map", "0:v:0",
-                "-map", "0:a:0?",
+                "-map", "0:a",
                 "-max_muxing_queue_size", "16384",
             ])
 
