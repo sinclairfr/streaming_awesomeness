@@ -593,14 +593,21 @@ class IPTVChannel:
                     return False
 
                 # Scanner le dossier ready_to_stream (removed sorted())
-                video_files = list(ready_to_stream_dir.glob("*.mp4"))
+                all_video_files = list(ready_to_stream_dir.glob("*.mp4"))
+
+                # IMPORTANT: Filtrer les fichiers macOS (._*) et autres fichiers cachés
+                video_files = [v for v in all_video_files if not v.name.startswith('._') and not v.name.startswith('.')]
+
+                if len(all_video_files) != len(video_files):
+                    filtered_count = len(all_video_files) - len(video_files)
+                    logger.info(f"[{self.name}] 🗑️ {filtered_count} fichiers cachés/métadonnées ignorés")
 
                 if not video_files:
-                    logger.warning(f"[{self.name}] ⚠️ Aucun fichier MP4 dans {ready_to_stream_dir}")
+                    logger.warning(f"[{self.name}] ⚠️ Aucun fichier MP4 valide dans {ready_to_stream_dir}")
                     self.processed_videos = []
                     return False
-                    
-                logger.info(f"[{self.name}] 🔍 {len(video_files)} fichiers trouvés dans ready_to_stream")
+
+                logger.info(f"[{self.name}] 🔍 {len(video_files)} fichiers valides trouvés dans ready_to_stream")
 
                 # Vérifier que tous les fichiers sont valides
                 valid_files = []

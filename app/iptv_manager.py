@@ -104,13 +104,25 @@ class IPTVManager:
 
         # Queue pour les chaînes à initialiser en parallèle
         self.channel_init_queue = Queue()
-        self.max_parallel_inits = 15
+        self.max_parallel_inits = 60  # Augmenté de 15 à 60 pour supporter plus de chaînes
         self.active_init_threads = 0
         self.init_threads_lock = threading.RLock()
+
+        # Batch update de la playlist pour éviter les updates répétitives
+        self.playlist_update_pending = False
+        self.playlist_update_lock = threading.RLock()  # RLock pour permettre la ré-entrance
+        self.last_playlist_update = 0
 
         # Timeout d'inactivité pour arrêter un stream (en secondes)
         self.channel_inactivity_timeout = 300 # 5 minutes
         self.last_inactivity_check = 0
+
+        # Initialisation des événements d'arrêt (DOIT être fait AVANT le démarrage des threads)
+        self.stop_event = threading.Event()  # Événement principal d'arrêt
+        self.stop_scan_thread = threading.Event()
+        self.stop_init_thread = threading.Event()
+        self.stop_periodic_scan = threading.Event()  # Pour arrêter le scan périodique
+        self.periodic_scan_interval = 300  # 5 minutes entre chaque scan périodique
 
         # >>> STEP 2: Initialize channel status manager AFTER cleaning
         self.channel_status = None  # Initialiser à None
@@ -154,12 +166,6 @@ class IPTVManager:
 
         # On initialise le nettoyeur HLS avec le bon chemin
         # HLS Cleaner is already initialized above
-
-        # Initialisation des threads
-        self.stop_scan_thread = threading.Event()
-        self.stop_init_thread = threading.Event()
-        self.stop_periodic_scan = threading.Event()  # Pour arrêter le scan périodique
-        self.periodic_scan_interval = 300  # 5 minutes entre chaque scan périodique
 
         # Thread de scan unifié
         self.scan_thread = threading.Thread(
@@ -209,6 +215,22 @@ class IPTVManager:
         # _clean_startup called only once at the beginning now
         # self._clean_startup()
         # <<< END STEP 3
+
+        # Mise à jour finale de la playlist après que tous les streams soient lancés
+        def final_playlist_update():
+            try:
+                logger.info("⏳ Attente de 30 secondes pour que tous les streams démarrent...")
+                time.sleep(30)
+                logger.info("🔄 Mise à jour finale de la playlist après initialisation complète")
+                logger.info("🔄 Appel de _update_master_playlist()...")
+                self._update_master_playlist()
+                logger.info("✅ Mise à jour finale de la playlist terminée")
+            except Exception as e:
+                logger.error(f"❌ Erreur dans final_playlist_update: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+
+        threading.Thread(target=final_playlist_update, daemon=True, name="FinalPlaylistUpdate").start()
 
         last_scan_time = time.time()
         last_summary_time = time.time()
@@ -604,9 +626,23 @@ class IPTVManager:
                 logger.info(f"📡 Scan des chaînes disponibles...")
                 for channel_dir in channel_dirs:
                     channel_name = channel_dir.name
-                    
+
                     # Debug: check if this directory should be a channel
                     logger.debug(f"Examining directory: {channel_name} ({channel_dir})")
+
+                    # NOUVEAU: Vérifier si le dossier ready_to_stream existe et contient des vidéos
+                    ready_dir = channel_dir / "ready_to_stream"
+                    if not ready_dir.exists():
+                        logger.warning(f"⚠️ Dossier ignoré '{channel_name}': pas de dossier ready_to_stream")
+                        continue
+
+                    # Vérifier qu'il y a au moins un fichier vidéo
+                    video_extensions = {'.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.m4v', '.ts'}
+                    video_files = [f for f in ready_dir.iterdir() if f.is_file() and f.suffix.lower() in video_extensions]
+
+                    if not video_files:
+                        logger.warning(f"⚠️ Dossier ignoré '{channel_name}': aucune vidéo dans ready_to_stream")
+                        continue
 
                     if channel_name in self.channels:
                         # Si la chaîne existe déjà, on vérifie son état
@@ -618,10 +654,10 @@ class IPTVManager:
                             if hasattr(channel, "refresh_videos"):
                                 channel.refresh_videos()
                         else:
-                            logger.info(f"✅ Chaîne existante: {channel_name}")
+                            logger.debug(f"✅ Chaîne existante: {channel_name}")
                         continue
 
-                    logger.info(f"✅ Nouvelle chaîne trouvée: {channel_name}")
+                    logger.info(f"✅ Nouvelle chaîne détectée: {channel_name}")
 
                     # Ajoute la chaîne à la queue d'initialisation
                     self.channel_init_queue.put(
@@ -724,16 +760,47 @@ class IPTVManager:
                 logger.error(f"❌ Erreur dans le thread de mise à jour périodique: {e}")
                 time.sleep(FORCE_PLAYLIST_UPDATE_INTERVAL)
 
+    def _request_playlist_update(self):
+        """Demande une mise à jour de la playlist avec batching (évite les updates répétitives)"""
+        with self.playlist_update_lock:
+            current_time = time.time()
+
+            # Si une mise à jour a été faite il y a moins de 3 secondes, on attend
+            if current_time - self.last_playlist_update < 3:
+                # Planifier une mise à jour différée si pas déjà planifiée
+                if not self.playlist_update_pending:
+                    self.playlist_update_pending = True
+
+                    def delayed_update():
+                        time.sleep(3)
+                        with self.playlist_update_lock:
+                            self.playlist_update_pending = False
+                        self._update_master_playlist()
+
+                    threading.Thread(target=delayed_update, daemon=True, name="DelayedPlaylistUpdate").start()
+                    logger.debug("📅 Mise à jour de playlist différée (batching)")
+            else:
+                # Faire la mise à jour immédiatement
+                self._update_master_playlist()
+
     def _update_master_playlist(self):
         """Effectue la mise à jour de la playlist principale avec logging amélioré"""
         start_time = time.time()
         startup_elapsed = start_time - self.startup_time if hasattr(self, 'startup_time') else 0
 
+        logger.info("🔒 Tentative d'acquisition du playlist_update_lock...")
+        # Mettre à jour le timestamp de dernière mise à jour
+        with self.playlist_update_lock:
+            logger.info("✅ playlist_update_lock acquis")
+            self.last_playlist_update = start_time
+
         playlist_path = os.path.abspath(f"{HLS_DIR}/playlist.m3u")
         logger.info(f"🔄 Début mise à jour playlist (temps depuis démarrage: {startup_elapsed:.1f}s)")
 
+        logger.info("🔒 Tentative d'acquisition du scan_lock pour mise à jour playlist...")
         # Utiliser le verrou de scan pour protéger l'accès aux chaînes
         with self.scan_lock:
+            logger.info("✅ scan_lock acquis, début de la mise à jour...")
             try:
                 # On sauvegarde d'abord le contenu actuel au cas où
                 existing_content = "#EXTM3U\n"
@@ -756,11 +823,14 @@ class IPTVManager:
                     # Ensure channel object exists and check its ready status
                     if channel and hasattr(channel, 'is_ready_for_streaming') and channel.is_ready_for_streaming():
                         ready_channels.append((name, channel))
-                        logger.debug(f"[{name}] ✅ Chaîne prête pour la playlist maître")
+                        logger.info(f"[{name}] ✅ Chaîne prête pour la playlist maître")
                     elif channel:
-                        logger.debug(f"[{name}] ⏳ Chaîne non prête pour la playlist maître")
+                        # Log detailed status for debugging
+                        has_method = hasattr(channel, 'is_ready_for_streaming')
+                        is_ready = channel.is_ready_for_streaming() if has_method else False
+                        logger.warning(f"[{name}] ⏳ Chaîne non prête: has_method={has_method}, is_ready={is_ready}")
                     else:
-                        logger.debug(f"[{name}] ⏳ Chaîne non initialisée, non ajoutée à la playlist maître.")
+                        logger.warning(f"[{name}] ⏳ Chaîne non initialisée (channel object is None)")
 
                 # Écriture des chaînes prêtes
                 # No need to get SERVER_URL from os.getenv since we already imported it from config
@@ -947,10 +1017,12 @@ class IPTVManager:
     def cleanup_manager(self):
         """Cleanup everything before shutdown"""
         logger.info("Début du nettoyage...")
-        
+
         # Stop all threads first
+        self.stop_event.set()  # Arrêt principal
         self.stop_scan_thread.set()
         self.stop_init_thread.set()
+        self.stop_periodic_scan.set()
 
         # Vider tous les viewers du fichier de statut avant arrêt
         try:
@@ -1341,63 +1413,69 @@ class IPTVManager:
         logger.info("🔄 Démarrage du thread de traitement de la queue d'initialisation des chaînes")
         while not self.stop_init_thread.is_set():
             try:
-                # Limite le nombre d'initialisations parallèles
-                with self.init_threads_lock:
-                    active_threads = self.active_init_threads
-                    if active_threads >= self.max_parallel_inits:
-                        logger.debug(f"[INIT_QUEUE] ⏳ Limite d'initialisations parallèles atteinte ({active_threads}/{self.max_parallel_inits}), attente...")
-                        time.sleep(0.5)
-                        continue
-
-                # Essaie de récupérer une chaîne de la queue
+                # Essaie de récupérer une chaîne de la queue AVANT de vérifier la limite
                 channel_data = None
                 try:
                     logger.debug("[INIT_QUEUE] ⏱️ Attente d'un élément dans la queue...")
-                    channel_data = self.channel_init_queue.get(timeout=5)
+                    channel_data = self.channel_init_queue.get(timeout=1)
                     channel_name = channel_data.get('name', 'unknown')
                     logger.info(f"[INIT_QUEUE] 📥 Récupération de {channel_name} depuis la queue")
                 except Empty:
-                    logger.debug("[INIT_QUEUE] 📪 Queue vide, attente...")
-                    time.sleep(0.5)
-                    continue # Continue to next iteration to check stop_event
+                    # Queue vide, continuer la boucle pour vérifier stop_event
+                    continue
                 except Exception as q_err:
                     logger.error(f"[INIT_QUEUE] ❌ Erreur get() sur la queue: {q_err}")
-                    time.sleep(1) # Wait a bit before retrying
+                    time.sleep(1)
                     continue
 
-                # If we got an item from the queue
-                if channel_data:
-                    channel_name = channel_data.get('name', 'unknown')
-                    # Incrémente le compteur de threads actifs
+                # Attendre qu'un slot se libère si la limite est atteinte
+                while not self.stop_init_thread.is_set():
                     with self.init_threads_lock:
-                        self.active_init_threads += 1
-                        logger.debug(f"[INIT_QUEUE] ➕ [{channel_name}] Incrémentation du compteur de threads actifs: {self.active_init_threads}/{self.max_parallel_inits}")
+                        if self.active_init_threads < self.max_parallel_inits:
+                            # Slot disponible, incrémenter et sortir de la boucle d'attente
+                            self.active_init_threads += 1
+                            channel_name = channel_data.get('name', 'unknown')
+                            logger.debug(f"[INIT_QUEUE] ➕ [{channel_name}] Incrémentation du compteur de threads actifs: {self.active_init_threads}/{self.max_parallel_inits}")
+                            break
+                    # Limite atteinte, attendre un peu avant de revérifier
+                    logger.debug(f"[INIT_QUEUE] ⏳ Limite d'initialisations parallèles atteinte ({self.active_init_threads}/{self.max_parallel_inits}), attente...")
+                    time.sleep(0.1)
 
-                    # Lance un thread pour initialiser cette chaîne
-                    logger.info(f"[INIT_QUEUE] 🧵 [{channel_name}] Démarrage d'un thread d'initialisation")
-                    threading.Thread(
-                        target=self._init_channel_async,
-                        args=(channel_data,),
-                        daemon=True,
-                        name=f"Init-{channel_name}" # Add thread name
-                    ).start()
+                # Vérifier si on doit arrêter avant de lancer le thread
+                if self.stop_init_thread.is_set():
+                    # Décrementer car on ne va pas lancer le thread
+                    with self.init_threads_lock:
+                        self.active_init_threads -= 1
+                    self.channel_init_queue.task_done()
+                    break
+
+                # Lance un thread pour initialiser cette chaîne
+                channel_name = channel_data.get('name', 'unknown')
+                logger.info(f"[INIT_QUEUE] 🧵 [{channel_name}] Démarrage d'un thread d'initialisation")
+                threading.Thread(
+                    target=self._init_channel_async,
+                    args=(channel_data,),
+                    daemon=True,
+                    name=f"Init-{channel_name}"
+                ).start()
 
             except Exception as e:
                 logger.error(f"[INIT_QUEUE] ❌ Erreur majeure dans la boucle _process_channel_init_queue: {e}")
-                logger.error(traceback.format_exc()) # Log full traceback
-                time.sleep(5) # Wait longer after a major loop error
+                logger.error(traceback.format_exc())
+                time.sleep(5)
 
     def _init_channel_async(self, channel_data):
         """Initialise une chaîne de manière asynchrone"""
         channel_init_start = time.time()
+        channel_name = channel_data.get("name", "unknown")
+
         try:
-            channel_name = channel_data["name"]
             channel_dir = channel_data["dir"]
-            from_queue = channel_data.get("from_queue", True)  # Par défaut, on suppose que c'est de la queue
+            from_queue = channel_data.get("from_queue", True)
 
             logger.info(f"[{channel_name}] 🔄 Initialisation asynchrone de la chaîne")
 
-            # Crée l'objet chaîne
+            # Crée l'objet chaîne (phase rapide)
             channel = IPTVChannel(
                 channel_name,
                 str(channel_dir),
@@ -1415,45 +1493,51 @@ class IPTVManager:
             with self.scan_lock:
                 self.channels[channel_name] = channel
 
-            if is_ready:
-                logger.info(f"[{channel_name}] ✅ Chaîne prête, démarrage du stream...")
-                if hasattr(channel, "start_stream"):
-                    if channel.start_stream():
-                        logger.info(f"[{channel_name}] ✅ Stream démarré avec succès.")
-                        self._update_master_playlist()
-
-                        # Vérifier après un court délai que la chaîne est bien dans la playlist
-                        def delayed_check():
-                            time.sleep(10)
-                            if not self._validate_playlist_completeness():
-                                logger.warning(f"[{channel_name}] Chaîne manquante, nouvelle mise à jour")
-                                self._update_master_playlist()
-
-                        threading.Thread(target=delayed_check, daemon=True).start()
-                    else:
-                        logger.error(f"[{channel_name}] ❌ Échec du démarrage du stream.")
-                else:
-                    logger.warning(f"[{channel_name}] ⚠️ La méthode start_stream est manquante.")
-            else:
-                logger.warning(f"[{channel_name}] ⚠️ Chaîne non prête après initialisation.")
-
             init_duration = time.time() - channel_init_start
             logger.info(f"[{channel_name}] ⏱️ Initialisation complétée en {init_duration:.2f}s (Prêt: {is_ready})")
 
+            # IMPORTANT: Décrémenter IMMÉDIATEMENT le compteur pour libérer le slot
+            # Le démarrage du stream se fera en arrière-plan
+            with self.init_threads_lock:
+                self.active_init_threads -= 1
+                logger.debug(f"[{channel_name}] Slot d'initialisation libéré: {self.active_init_threads}/{self.max_parallel_inits}")
+
+            # Marquer la tâche comme terminée
+            if from_queue:
+                self.channel_init_queue.task_done()
+
+            # Démarrer le stream en arrière-plan (sans bloquer)
+            if is_ready and hasattr(channel, "start_stream"):
+                def start_stream_background():
+                    try:
+                        logger.info(f"[{channel_name}] ✅ Chaîne prête, démarrage du stream en arrière-plan...")
+                        if channel.start_stream():
+                            logger.info(f"[{channel_name}] ✅ Stream démarré avec succès.")
+                            # Demander une mise à jour de playlist (batched)
+                            self._request_playlist_update()
+                        else:
+                            logger.error(f"[{channel_name}] ❌ Échec du démarrage du stream.")
+                    except Exception as e:
+                        logger.error(f"[{channel_name}] ❌ Erreur démarrage stream en arrière-plan: {e}")
+
+                threading.Thread(target=start_stream_background, daemon=True, name=f"Start-{channel_name}").start()
+            elif not is_ready:
+                logger.warning(f"[{channel_name}] ⚠️ Chaîne non prête après initialisation.")
+
         except Exception as e:
-            logger.error(f"❌ Erreur initialisation de la chaîne {channel_data.get('name')}: {e}")
-            # Make sure to add placeholder if exception happens before adding the channel object
-            channel_name_for_exc = channel_data.get('name')
-            if channel_name_for_exc:
-                with self.scan_lock:
-                    if channel_name_for_exc not in self.channels:
-                        self.channels[channel_name_for_exc] = None # Placeholder on error
-        finally:
-            # Décrémente le compteur de threads actifs
+            logger.error(f"❌ Erreur initialisation de la chaîne {channel_name}: {e}")
+            logger.error(traceback.format_exc())
+
+            # Ajouter un placeholder en cas d'erreur
+            with self.scan_lock:
+                if channel_name not in self.channels:
+                    self.channels[channel_name] = None
+
+            # IMPORTANT: Décrementer même en cas d'erreur
             with self.init_threads_lock:
                 self.active_init_threads -= 1
 
-            # Marque la tâche comme terminée UNIQUEMENT si elle vient de la queue
+            # Marquer comme terminée même en cas d'erreur
             if channel_data.get("from_queue", True):
                 self.channel_init_queue.task_done()
 
