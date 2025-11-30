@@ -191,29 +191,33 @@ class StatsCollector:
             except Exception as e:
                 logger.error(f"❌ Erreur dans la boucle de sauvegarde: {e}", exc_info=True)
 
+    def _save_stats_unlocked(self):
+        """Sauvegarde les stats (mode bytes) dans les fichiers - VERSION INTERNE SANS LOCK."""
+        try:
+            # Save channel stats
+            channel_stats_to_save = self.channel_stats.copy()
+            # Convert sets to lists for JSON serialization
+            if "global" in channel_stats_to_save:
+                channel_stats_to_save["global"]["unique_viewers"] = list(channel_stats_to_save["global"]["unique_viewers"])
+            for channel in channel_stats_to_save:
+                if channel != "global" and "unique_viewers" in channel_stats_to_save[channel]:
+                    channel_stats_to_save[channel]["unique_viewers"] = list(channel_stats_to_save[channel]["unique_viewers"])
+
+            with open(self.channel_stats_file, 'w') as f:
+                json.dump(channel_stats_to_save, f, indent=2)
+
+            # Save user stats
+            with open(self.user_stats_file, 'w') as f:
+                json.dump(self.user_stats, f, indent=2)
+
+            logger.info(f"💾 Stats sauvegardées: {len(self.channel_stats.get('global', {}).get('unique_viewers', []))} utilisateurs uniques, {len(self.channel_stats) -1} chaînes actives.")
+        except Exception as e:
+            logger.error(f"❌ Erreur lors de la sauvegarde des stats: {e}")
+
     def _save_stats(self):
         """Sauvegarde les stats (mode bytes) dans les fichiers."""
         with self.lock:
-            try:
-                # Save channel stats
-                channel_stats_to_save = self.channel_stats.copy()
-                # Convert sets to lists for JSON serialization
-                if "global" in channel_stats_to_save:
-                    channel_stats_to_save["global"]["unique_viewers"] = list(channel_stats_to_save["global"]["unique_viewers"])
-                for channel in channel_stats_to_save:
-                    if channel != "global" and "unique_viewers" in channel_stats_to_save[channel]:
-                        channel_stats_to_save[channel]["unique_viewers"] = list(channel_stats_to_save[channel]["unique_viewers"])
-                
-                with open(self.channel_stats_file, 'w') as f:
-                    json.dump(channel_stats_to_save, f, indent=2)
-
-                # Save user stats
-                with open(self.user_stats_file, 'w') as f:
-                    json.dump(self.user_stats, f, indent=2)
-
-                logger.info(f"💾 Stats sauvegardées: {len(self.channel_stats.get('global', {}).get('unique_viewers', []))} utilisateurs uniques, {len(self.channel_stats) -1} chaînes actives.")
-            except Exception as e:
-                logger.error(f"❌ Erreur lors de la sauvegarde des stats: {e}")
+            self._save_stats_unlocked()
 
     # --- Log Monitoring ---
     def _log_monitor_loop(self):
@@ -739,7 +743,8 @@ class StatsCollector:
                             logger.debug(f"🗑️ Données du canal '{channel_name}' supprimées pour l'utilisateur {ip}.")
 
             # Sauvegarder immédiatement les changements pour refléter l'état nettoyé
-            self._save_stats()
+            # Utiliser _save_stats_unlocked car on a déjà le lock
+            self._save_stats_unlocked()
             logger.info("Réconciliation des statistiques terminée et changements sauvegardés.")
 
     def stop(self):
