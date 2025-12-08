@@ -251,7 +251,7 @@ class IPTVChannel:
             if stderr:
                 logger.info(f"[{self.name}] ℹ️ FFmpeg stderr (premières lignes):\n{stderr[:500]}")
 
-            # --- Handle Successful Completion (Advance to Random Next Video) ---
+            # --- Handle Successful Completion (Advance to Next Video) ---
             if exit_code == 0:
                 logger.info(f"[{self.name}] ✅ Fichier vidéo terminé avec succès.")
                 next_video_index = 0 # Default index
@@ -262,16 +262,26 @@ class IPTVChannel:
                         logger.warning(f"[{self.name}] ⚠️ Liste de vidéos vide après fin de lecture.")
                         return # Cannot proceed
 
+                    # Check if series.txt exists for sequential playback
+                    channel_root_dir = Path(self.video_dir)
+                    series_file = channel_root_dir / "series.txt"
+                    use_sequential_order = series_file.exists()
+
                     num_videos = len(self.processed_videos)
                     old_index = self.current_video_index
 
                     if num_videos > 1:
-                        # Pick a new random index, different from the old one
-                        next_video_index = random.randrange(num_videos)
-                        while next_video_index == old_index:
-                            logger.debug(f"[{self.name}] 🔀 Vidéo suivante identique ({next_video_index}), re-tirage...")
+                        if use_sequential_order:
+                            # Sequential: advance to next video
+                            next_video_index = (old_index + 1) % num_videos
+                            logger.info(f"[{self.name}] ➡️ Passage à la vidéo suivante (mode série): Index {next_video_index}")
+                        else:
+                            # Random: pick a new random index, different from the old one
                             next_video_index = random.randrange(num_videos)
-                        logger.info(f"[{self.name}] 🔀 Sélection aléatoire de la prochaine vidéo: Index {next_video_index}")
+                            while next_video_index == old_index:
+                                logger.debug(f"[{self.name}] 🔀 Vidéo suivante identique ({next_video_index}), re-tirage...")
+                                next_video_index = random.randrange(num_videos)
+                            logger.info(f"[{self.name}] 🔀 Sélection aléatoire de la prochaine vidéo: Index {next_video_index}")
                     elif num_videos == 1:
                         # Only one video, index must be 0
                         next_video_index = 0
@@ -592,6 +602,14 @@ class IPTVChannel:
                     self.processed_videos = []
                     return False
 
+                # Check if series.txt exists in the channel folder root
+                channel_root_dir = Path(self.video_dir)
+                series_file = channel_root_dir / "series.txt"
+                use_alphabetic_order = series_file.exists()
+
+                if use_alphabetic_order:
+                    logger.info(f"[{self.name}] 📄 Fichier series.txt détecté - ordre alphabétique activé")
+
                 # Scanner le dossier ready_to_stream (removed sorted())
                 all_video_files = list(ready_to_stream_dir.glob("*.mp4"))
 
@@ -631,9 +649,13 @@ class IPTVChannel:
                     self.processed_videos = []
                     return False
 
-                # *** Shuffle the valid files ***
-                random.shuffle(valid_files)
-                logger.info(f"[{self.name}] 🔀 Liste de vidéos mélangée.")
+                # Sort alphabetically or shuffle based on series.txt presence
+                if use_alphabetic_order:
+                    valid_files.sort(key=lambda x: x.name.lower())
+                    logger.info(f"[{self.name}] 🔤 Liste de vidéos triée alphabétiquement.")
+                else:
+                    random.shuffle(valid_files)
+                    logger.info(f"[{self.name}] 🔀 Liste de vidéos mélangée.")
 
                 logger.info(f"[{self.name}] ✅ {len(valid_files)} vidéos valides trouvées.")
                 self.processed_videos = valid_files # Update the list
