@@ -1,6 +1,6 @@
 import dash
 from dash import dcc, html
-from dash.dependencies import Input, Output
+from dash.dependencies import Input, Output, State, ALL
 import plotly.express as px
 import plotly.graph_objects as go
 import pandas as pd
@@ -9,12 +9,16 @@ import os
 from datetime import datetime, timedelta
 import numpy as np
 import time
+import requests
 
 # Chemin vers les fichiers de statistiques
 STATS_DIR = "/app/stats"
 USER_STATS_FILE = os.path.join(STATS_DIR, "user_stats_bytes.json")
 CHANNEL_STATS_FILE = os.path.join(STATS_DIR, "channel_stats_bytes.json")
 CHANNELS_STATUS_FILE = os.path.join(STATS_DIR, "channels_status.json")
+
+# URL de l'API des chaînes (depuis variable d'environnement ou localhost par défaut)
+CHANNEL_API_URL = os.getenv("CHANNEL_API_URL", "http://localhost:5000")
 
 def load_stats():
     """Charge les données de statistiques depuis les fichiers bytes"""
@@ -98,18 +102,19 @@ def format_time(seconds):
     return f"{hours:02d}h {minutes:02d}m {seconds:02d}s"
 
 def create_channels_grid(channel_status_data):
-    """Creates a grid of channel cards with status indicators"""
-    
+    """Creates a grid of channel cards with status indicators and restart buttons"""
+
     # Process channel data
     current_time = time.time()
     channels_data = []
-    
+
     # Itérer directement sur les données de statut des chaînes
     for channel, stats in channel_status_data.items():
         is_active = stats.get("is_live", False)
         is_streaming = stats.get("streaming", False)
         viewers = stats.get("viewers", 0)
-        
+        current_video = stats.get("current_video", None)
+
         # Utiliser last_updated qui est maintenant une chaîne ISO 8601
         last_updated_str = stats.get("last_updated")
         if last_updated_str:
@@ -123,19 +128,20 @@ def create_channels_grid(channel_status_data):
             last_seen = "N/A"
 
         watchers = stats.get("watchers", [])
-        
+
         channels_data.append({
             "name": channel,
             "active": is_active, # Simplifié: is_live est la source de vérité
             "streaming": is_streaming,
             "viewers": viewers,
             "last_seen": last_seen,
-            "watchers": watchers
+            "watchers": watchers,
+            "current_video": current_video
         })
-    
+
     # Sort channels: active ones first, then alphabetically
     channels_data.sort(key=lambda x: (not x["active"], x["name"].lower()))
-    
+
     # Create grid of cards
     cards = []
     for ch in channels_data:
@@ -149,12 +155,25 @@ def create_channels_grid(channel_status_data):
         else:
             status_color = "#e74c3c"  # Rouge pour inactif
             status_text = "INACTIVE"
-        
+
+        # Afficher le titre de la vidéo en cours avec effet de défilement si trop long
+        video_title_element = html.Div("En attente...", className="video-title")
+        if ch.get("current_video"):
+            video_title = ch["current_video"]
+            # Si le titre est trop long (plus de 30 caractères), activer le défilement
+            if len(video_title) > 30:
+                video_title_element = html.Div([
+                    html.Div(video_title, className="video-title scrolling-title")
+                ], className="video-title-container")
+            else:
+                video_title_element = html.Div(video_title, className="video-title")
+
         card = html.Div([
             html.Div([
-                html.Div(status_text, className="channel-status-badge", 
+                html.Div(status_text, className="channel-status-badge",
                          style={"backgroundColor": status_color}),
                 html.H3(ch["name"], className="channel-card-title"),
+                video_title_element,
                 html.Div([
                     html.P(f"{ch['viewers']} {'viewers' if ch['viewers'] != 1 else 'viewer'}",
                            className="channel-card-stat"),
@@ -162,67 +181,182 @@ def create_channels_grid(channel_status_data):
                            className="channel-card-stat"),
                     html.P(f"Viewers: {', '.join(ch['watchers'])}" if ch['watchers'] else "Viewers: None",
                            className="channel-card-stat watchers-list")
-                ], className="channel-card-stats")
+                ], className="channel-card-stats"),
+                html.Div([
+                    html.Button(
+                        "⬅️",
+                        id={"type": "prev-btn", "channel": ch["name"]},
+                        className="nav-button nav-button-prev",
+                        n_clicks=0,
+                        title="Vidéo précédente"
+                    ),
+                    html.Button(
+                        "🔄 Relancer",
+                        id={"type": "restart-btn", "channel": ch["name"]},
+                        className="restart-button",
+                        n_clicks=0
+                    ),
+                    html.Button(
+                        "➡️",
+                        id={"type": "next-btn", "channel": ch["name"]},
+                        className="nav-button nav-button-next",
+                        n_clicks=0,
+                        title="Vidéo suivante"
+                    ),
+                ], className="button-group")
             ], className="channel-card-content")
         ], className="channel-card")
-        
+
         cards.append(card)
-    
+
     return html.Div(cards, className="channel-grid")
 
 # Initialiser l'application Dash
-app = dash.Dash(__name__, 
+app = dash.Dash(__name__,
                 title="IPTV Stats Dashboard",
+                suppress_callback_exceptions=True,
                 meta_tags=[{"name": "viewport", "content": "width=device-width, initial-scale=1"}])
 
 # Layout de l'application
 app.layout = html.Div([
     html.H1("IPTV Streaming Service - Dashboard de Statistiques", className="header-title"),
-    
-    html.Div([
-        html.Div([
-            html.H2("Statistiques Globales"),
-            html.Div(id="global-stats", className="stats-container")
-        ], className="six columns"),
-        
-        html.Div([
-            html.H2("Activité par Chaîne"),
-            dcc.Graph(id="channel-pie-chart")
-        ], className="six columns"),
-    ], className="row"),
-    
-    html.Div([
-        html.Div([
-            html.H2("Temps de Visionnage par Chaîne"),
-            dcc.Graph(id="channel-bar-chart")
-        ], className="six columns"),
-        
-        html.Div([
-            html.H2("Activité des Utilisateurs"),
-            dcc.Graph(id="user-activity-chart")
-        ], className="six columns"),
-    ], className="row"),
-    
-    html.Div([
-        html.Div([
-            html.H2("Détails par Utilisateur"),
-            html.Div(id="user-details", className="stats-container")
-        ], className="twelve columns")
-    ], className="row"),
 
-    html.Div([
-        html.Div([
-            html.H2("Statut des Chaînes en Direct"),
-            html.Div(id="live-channels-container", className="live-channels-container")
-        ], className="twelve columns")
-    ], className="row"),
-    
+    # Zone de notification
+    html.Div(id="notification-container", className="notification-container"),
+
+    # Onglets pour naviguer entre les vues
+    dcc.Tabs(id="tabs", value='tab-stats', children=[
+        dcc.Tab(label='📊 Statistiques', value='tab-stats', className='custom-tab', selected_className='custom-tab--selected'),
+        dcc.Tab(label='📺 Guide EPG', value='tab-epg', className='custom-tab', selected_className='custom-tab--selected'),
+    ]),
+
+    html.Div(id='tabs-content'),
+
     dcc.Interval(
         id='interval-component',
         interval=2*1000,  # 2 secondes en millisecondes
         n_intervals=0
     )
 ], className="dashboard-container")
+
+# Contenu de l'onglet Statistiques
+def render_stats_tab():
+    return html.Div([
+        html.Div([
+            html.Div([
+                html.H2("Statistiques Globales"),
+                html.Div(id="global-stats", className="stats-container")
+            ], className="six columns"),
+
+            html.Div([
+                html.H2("Activité par Chaîne"),
+                dcc.Graph(id="channel-pie-chart")
+            ], className="six columns"),
+        ], className="row"),
+
+        html.Div([
+            html.Div([
+                html.H2("Temps de Visionnage par Chaîne"),
+                dcc.Graph(id="channel-bar-chart")
+            ], className="six columns"),
+
+            html.Div([
+                html.H2("Activité des Utilisateurs"),
+                dcc.Graph(id="user-activity-chart")
+            ], className="six columns"),
+        ], className="row"),
+
+        html.Div([
+            html.Div([
+                html.H2("Détails par Utilisateur"),
+                html.Div(id="user-details", className="stats-container")
+            ], className="twelve columns")
+        ], className="row"),
+
+        html.Div([
+            html.Div([
+                html.H2("Statut des Chaînes en Direct"),
+                html.Div(id="live-channels-container", className="live-channels-container")
+            ], className="twelve columns")
+        ], className="row"),
+    ])
+
+# Contenu de l'onglet EPG
+def render_epg_tab():
+    return html.Div([
+        html.H2("Guide des Programmes (EPG)", style={"textAlign": "center", "marginBottom": "20px"}),
+        html.Div(id="epg-timeline", className="epg-container")
+    ])
+
+# Callback pour changer d'onglet
+@app.callback(
+    Output('tabs-content', 'children'),
+    Input('tabs', 'value')
+)
+def render_content(tab):
+    if tab == 'tab-stats':
+        return render_stats_tab()
+    elif tab == 'tab-epg':
+        return render_epg_tab()
+
+# Fonction pour créer la vue EPG en frise temporelle
+def create_epg_timeline(channel_status_data):
+    """Crée une vue en frise temporelle des chaînes et de leurs programmes"""
+    epg_rows = []
+
+    # Trier les chaînes par nom
+    sorted_channels = sorted(channel_status_data.items(), key=lambda x: x[0])
+
+    for channel_name, stats in sorted_channels:
+        is_active = stats.get("is_live", False)
+        current_video = stats.get("current_video", "Aucun programme")
+        viewers = stats.get("viewers", 0)
+
+        # Couleur selon le statut
+        if viewers > 0:
+            row_color = "#d5f4e6"  # Vert clair
+            status_icon = "🟢"
+        elif is_active:
+            row_color = "#fff3cd"  # Jaune clair
+            status_icon = "🟡"
+        else:
+            row_color = "#f8d7da"  # Rouge clair
+            status_icon = "🔴"
+
+        # Créer la ligne EPG
+        epg_row = html.Div([
+            html.Div([
+                html.Span(status_icon, style={"marginRight": "8px"}),
+                html.Strong(channel_name, style={"fontSize": "16px"}),
+                html.Span(f" ({viewers} viewer{'s' if viewers != 1 else ''})",
+                         style={"fontSize": "12px", "color": "#7f8c8d", "marginLeft": "10px"})
+            ], className="epg-channel-name"),
+            html.Div([
+                html.Div([
+                    html.Span("▶", style={"marginRight": "8px", "color": "#e74c3c"}),
+                    html.Span(current_video, style={"fontSize": "14px", "fontWeight": "500"})
+                ], className="epg-program-info")
+            ], className="epg-program-bar")
+        ], className="epg-row", style={"backgroundColor": row_color})
+
+        epg_rows.append(epg_row)
+
+    return html.Div(epg_rows, className="epg-timeline-container")
+
+# Callback pour mettre à jour l'EPG
+@app.callback(
+    Output("epg-timeline", "children"),
+    Input("interval-component", "n_intervals")
+)
+def update_epg(n):
+    try:
+        with open(CHANNELS_STATUS_FILE, 'r') as f:
+            live_status = json.load(f)
+        live_channels_data = live_status.get('channels', {})
+        return create_epg_timeline(live_channels_data)
+    except Exception as e:
+        return html.Div(f"Erreur lors du chargement de l'EPG: {str(e)}",
+                       style={"textAlign": "center", "color": "#e74c3c", "padding": "20px"})
 
 # Callback pour mettre à jour tous les graphiques
 @app.callback(
@@ -338,8 +472,95 @@ def update_dashboard(n):
 
     # 6. Grille des chaînes en direct (logique de l'ancien callback)
     live_channels_grid = create_channels_grid(live_channels_data)
-    
+
     return global_stats, pie_fig, bar_fig, user_fig, user_details_container, live_channels_grid
+
+# Callback pour gérer les clics sur les boutons (relance, précédent, suivant)
+@app.callback(
+    Output("notification-container", "children"),
+    [Input({"type": "restart-btn", "channel": ALL}, "n_clicks"),
+     Input({"type": "prev-btn", "channel": ALL}, "n_clicks"),
+     Input({"type": "next-btn", "channel": ALL}, "n_clicks")],
+    [State({"type": "restart-btn", "channel": ALL}, "id"),
+     State({"type": "prev-btn", "channel": ALL}, "id"),
+     State({"type": "next-btn", "channel": ALL}, "id")],
+    prevent_initial_call=True
+)
+def handle_channel_buttons(restart_clicks, prev_clicks, next_clicks, restart_ids, prev_ids, next_ids):
+    """Gère les clics sur les boutons de relance et de navigation des chaînes"""
+    # Identifier quel bouton a été cliqué
+    ctx = dash.callback_context
+
+    if not ctx.triggered:
+        return html.Div()
+
+    # Récupérer l'ID du bouton qui a déclenché le callback
+    triggered_prop = ctx.triggered[0]["prop_id"]
+
+    # Déterminer le type de bouton et le nom de la chaîne
+    channel_name = None
+    action = None
+    api_endpoint = None
+    action_message = None
+
+    # Parser l'ID pour extraire le type et la chaîne
+    if "restart-btn" in triggered_prop:
+        for idx, n_clicks in enumerate(restart_clicks):
+            if n_clicks and n_clicks > 0:
+                channel_name = restart_ids[idx]["channel"]
+                action = "restart"
+                api_endpoint = f"{CHANNEL_API_URL}/api/channels/{channel_name}/restart"
+                action_message = "Relance"
+                break
+    elif "prev-btn" in triggered_prop:
+        for idx, n_clicks in enumerate(prev_clicks):
+            if n_clicks and n_clicks > 0:
+                channel_name = prev_ids[idx]["channel"]
+                action = "previous"
+                api_endpoint = f"{CHANNEL_API_URL}/api/channels/{channel_name}/previous"
+                action_message = "Navigation vers vidéo précédente"
+                break
+    elif "next-btn" in triggered_prop:
+        for idx, n_clicks in enumerate(next_clicks):
+            if n_clicks and n_clicks > 0:
+                channel_name = next_ids[idx]["channel"]
+                action = "next"
+                api_endpoint = f"{CHANNEL_API_URL}/api/channels/{channel_name}/next"
+                action_message = "Navigation vers vidéo suivante"
+                break
+
+    if channel_name and api_endpoint:
+        # Appeler l'API
+        try:
+            response = requests.post(api_endpoint, timeout=5)
+
+            if response.status_code == 200:
+                message = f"✅ {action_message} de '{channel_name}' en cours..."
+                color = "#2ecc71"
+            else:
+                message = f"❌ Erreur lors de {action_message.lower()} de '{channel_name}'"
+                color = "#e74c3c"
+
+        except Exception as e:
+            message = f"❌ Erreur de connexion à l'API: {str(e)}"
+            color = "#e74c3c"
+
+        # Retourner une notification
+        return html.Div(
+            message,
+            className="notification",
+            style={
+                "backgroundColor": color,
+                "color": "white",
+                "padding": "15px",
+                "borderRadius": "5px",
+                "marginBottom": "20px",
+                "textAlign": "center",
+                "fontWeight": "bold"
+            }
+        )
+
+    return html.Div()
 
 # CSS pour le dashboard
 app.index_string = '''
@@ -485,6 +706,184 @@ app.index_string = '''
                 color: #3498db;
                 word-break: break-all;
             }
+            .video-title {
+                margin: 10px 0;
+                font-size: 13px;
+                color: #2c3e50;
+                font-weight: 500;
+                padding: 8px;
+                background-color: #ecf0f1;
+                border-radius: 4px;
+                text-align: center;
+            }
+            .video-title-container {
+                margin: 10px 0;
+                overflow: hidden;
+                position: relative;
+                background-color: #ecf0f1;
+                border-radius: 4px;
+                padding: 8px 0;
+                height: 30px;
+            }
+            .scrolling-title {
+                display: inline-block;
+                white-space: nowrap;
+                animation: scroll-left 15s linear infinite;
+                font-size: 13px;
+                color: #2c3e50;
+                font-weight: 500;
+                padding-left: 100%;
+            }
+            @keyframes scroll-left {
+                0% {
+                    transform: translateX(0);
+                }
+                100% {
+                    transform: translateX(-100%);
+                }
+            }
+            .scrolling-title:hover {
+                animation-play-state: paused;
+            }
+            .custom-tab {
+                padding: 12px 24px !important;
+                border: none !important;
+                background-color: #ecf0f1 !important;
+                color: #7f8c8d !important;
+                font-weight: 500 !important;
+                transition: all 0.3s ease !important;
+            }
+            .custom-tab--selected {
+                background-color: #3498db !important;
+                color: white !important;
+                border-bottom: 3px solid #2980b9 !important;
+            }
+            .custom-tab:hover {
+                background-color: #d5dbdb !important;
+            }
+            .epg-container {
+                background-color: #fff;
+                border-radius: 8px;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+                padding: 20px;
+                margin-top: 20px;
+            }
+            .epg-timeline-container {
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
+            }
+            .epg-row {
+                display: flex;
+                align-items: center;
+                padding: 15px;
+                border-radius: 6px;
+                border-left: 4px solid #3498db;
+                transition: transform 0.2s, box-shadow 0.2s;
+                min-height: 60px;
+            }
+            .epg-row:hover {
+                transform: translateX(5px);
+                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            }
+            .epg-channel-name {
+                min-width: 250px;
+                flex-shrink: 0;
+                padding-right: 20px;
+                border-right: 2px solid #ddd;
+            }
+            .epg-program-bar {
+                flex: 1;
+                padding-left: 20px;
+                display: flex;
+                align-items: center;
+            }
+            .epg-program-info {
+                display: flex;
+                align-items: center;
+                padding: 8px 16px;
+                background-color: rgba(255,255,255,0.7);
+                border-radius: 4px;
+                border: 1px solid #ddd;
+            }
+            .button-group {
+                display: flex;
+                gap: 8px;
+                margin-top: 10px;
+                align-items: stretch;
+            }
+            .restart-button {
+                background-color: #3498db;
+                color: white;
+                border: none;
+                border-radius: 5px;
+                padding: 10px 15px;
+                cursor: pointer;
+                font-size: 14px;
+                font-weight: bold;
+                flex: 1;
+                transition: background-color 0.3s, transform 0.2s;
+            }
+            .restart-button:hover {
+                background-color: #2980b9;
+                transform: scale(1.05);
+            }
+            .restart-button:active {
+                transform: scale(0.95);
+            }
+            .nav-button {
+                background-color: #95a5a6;
+                color: white;
+                border: none;
+                border-radius: 5px;
+                padding: 10px;
+                cursor: pointer;
+                font-size: 16px;
+                font-weight: bold;
+                min-width: 45px;
+                transition: background-color 0.3s, transform 0.2s;
+            }
+            .nav-button:hover {
+                background-color: #7f8c8d;
+                transform: scale(1.1);
+            }
+            .nav-button:active {
+                transform: scale(0.9);
+            }
+            .nav-button-prev {
+                background-color: #e67e22;
+            }
+            .nav-button-prev:hover {
+                background-color: #d35400;
+            }
+            .nav-button-next {
+                background-color: #27ae60;
+            }
+            .nav-button-next:hover {
+                background-color: #229954;
+            }
+            .notification-container {
+                position: fixed;
+                top: 80px;
+                left: 50%;
+                transform: translateX(-50%);
+                z-index: 1000;
+                min-width: 300px;
+                max-width: 600px;
+            }
+            .notification {
+                animation: slideDown 0.3s ease-out;
+            }
+            @keyframes slideDown {
+                from {
+                    opacity: 0;
+                    transform: translateY(-20px);
+                }
+                to {
+                    opacity: 1;
+                    transform: translateY(0);
+                }
+            }
             @media (max-width: 768px) {
                 .six.columns {
                     flex: 0 0 100%;
@@ -493,10 +892,33 @@ app.index_string = '''
                 .user-detail-box {
                     width: calc(50% - 20px);
                 }
+                .notification-container {
+                    top: 60px;
+                    min-width: 90%;
+                }
+                .epg-row {
+                    flex-direction: column;
+                    align-items: flex-start;
+                }
+                .epg-channel-name {
+                    min-width: 100%;
+                    border-right: none;
+                    border-bottom: 2px solid #ddd;
+                    padding-bottom: 10px;
+                    margin-bottom: 10px;
+                }
+                .epg-program-bar {
+                    padding-left: 0;
+                    width: 100%;
+                }
             }
             @media (max-width: 480px) {
                 .user-detail-box {
                     width: calc(100% - 20px);
+                }
+                .custom-tab {
+                    padding: 8px 16px !important;
+                    font-size: 14px !important;
                 }
             }
         </style>

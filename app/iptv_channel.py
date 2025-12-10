@@ -96,6 +96,9 @@ class IPTVChannel:
         self.last_watcher_time = time.time()
         self.last_segment_time = time.time()
 
+        # Flag pour la navigation manuelle (éviter l'auto-avancement pendant previous/next)
+        self.manual_navigation = False
+
         # État du scan initial
         self.initial_scan_complete = False
         self.scan_lock = threading.Lock()
@@ -253,13 +256,24 @@ class IPTVChannel:
 
             # --- Handle Successful Completion (Advance to Next Video) ---
             if exit_code == 0:
+                # Vérifier si on est en navigation manuelle
+                if self.manual_navigation:
+                    logger.info(f"[{self.name}] 🔄 Navigation manuelle en cours, pas d'auto-avancement")
+                    self.manual_navigation = False
+                    return
+
                 logger.info(f"[{self.name}] ✅ Fichier vidéo terminé avec succès.")
+
+                # NOUVEAU: Marquer qu'on est en transition pour désactiver les checks de santé
+                self.process_manager.transitioning = True
+
                 next_video_index = 0 # Default index
                 num_videos = 0
 
                 with self.lock:
                     if not self.processed_videos: # Should not happen if started, but check
                         logger.warning(f"[{self.name}] ⚠️ Liste de vidéos vide après fin de lecture.")
+                        self.process_manager.transitioning = False
                         return # Cannot proceed
 
                     # Check if series.txt exists for sequential playback
@@ -288,14 +302,15 @@ class IPTVChannel:
                         logger.info(f"[{self.name}] ℹ️ Une seule vidéo disponible, lecture en boucle.")
                     else: # Should be caught above, but safety check
                          logger.error(f"[{self.name}] ❌ Incohérence: 0 vidéo mais blocage non déclenché plus tôt.")
+                         self.process_manager.transitioning = False
                          return
 
                     self.current_video_index = next_video_index
 
-                # Schedule the start of the next video slightly delayed
+                # Schedule the start of the next video with a delay to ensure proper cleanup
                 # Use the updated index for logging
-                logger.info(f"[{self.name}] ⏱️ Planification du démarrage du prochain fichier ({self.current_video_index + 1}/{num_videos}) dans 1 seconde...")
-                threading.Timer(1.0, self.start_stream).start()
+                logger.info(f"[{self.name}] ⏱️ Planification du démarrage du prochain fichier ({self.current_video_index + 1}/{num_videos}) dans 2 secondes...")
+                threading.Timer(2.0, self.start_stream).start()
                 return # Don't proceed to error handling
             # --- End Successful Completion Handling ---
             
@@ -415,8 +430,13 @@ class IPTVChannel:
             logger.error(f"[{self.name}] Erreur lors de la gestion du processus: {e}")
             logger.error(traceback.format_exc())
 
-    def _restart_stream(self, diagnostic=None) -> bool:
-        """Redémarre le stream en choisissant un NOUVEAU fichier VIDÉO aléatoire en cas de problème"""
+    def _restart_stream(self, diagnostic=None, reset_to_first=False) -> bool:
+        """Redémarre le stream en choisissant un NOUVEAU fichier VIDÉO (séquentiel si series.txt existe, sinon aléatoire)
+
+        Args:
+            diagnostic: Raison du redémarrage
+            reset_to_first: Si True, repart du premier épisode (index 0) au lieu de passer au suivant
+        """
         try:
             restart_reason = diagnostic or "Raison inconnue"
             logger.info(f"[{self.name}] 🔄 Tentative de redémarrage du stream - Raison: {restart_reason}")
@@ -429,23 +449,46 @@ class IPTVChannel:
 
             # Attendre un peu avant de redémarrer
             time.sleep(random.uniform(1.5, 3.0))
-            
-            # Sélectionner un nouveau fichier aléatoire
+
+            # Sélectionner un nouveau fichier (séquentiel ou aléatoire selon series.txt)
             with self.lock:
                 if not self.processed_videos:
                     logger.warning(f"[{self.name}] ⚠️ Liste de vidéos vide, impossible de redémarrer.")
                     return False
 
-                num_videos = len(self.processed_videos)
-                if num_videos > 1:
-                    old_index = self.current_video_index
-                    next_video_index = random.randrange(num_videos)
-                    while next_video_index == old_index:
-                        next_video_index = random.randrange(num_videos)
-                    self.current_video_index = next_video_index
-                    logger.info(f"[{self.name}] 🔀 Sélection d'un nouveau fichier aléatoire: Index {next_video_index}")
+                # Si la navigation manuelle est active, ne PAS changer l'index
+                if self.manual_navigation:
+                    logger.info(f"[{self.name}] 🎯 Navigation manuelle: index déjà défini à {self.current_video_index}")
+                    # Le flag sera réinitialisé dans _handle_process_died ou start_stream
                 else:
-                    self.current_video_index = 0
+                    # Check if series.txt exists for sequential playback
+                    channel_root_dir = Path(self.video_dir)
+                    series_file = channel_root_dir / "series.txt"
+                    use_sequential_order = series_file.exists()
+
+                    num_videos = len(self.processed_videos)
+
+                    # Si demandé, réinitialiser au premier épisode
+                    if reset_to_first:
+                        self.current_video_index = 0
+                        logger.info(f"[{self.name}] ⏮️ Réinitialisation au premier épisode (index 0)")
+                    elif num_videos > 1:
+                        old_index = self.current_video_index
+
+                        if use_sequential_order:
+                            # Mode série: passer à la vidéo suivante dans l'ordre
+                            next_video_index = (old_index + 1) % num_videos
+                            logger.info(f"[{self.name}] ➡️ Passage à la vidéo suivante (mode série): Index {next_video_index}")
+                        else:
+                            # Mode aléatoire: sélectionner une nouvelle vidéo aléatoire
+                            next_video_index = random.randrange(num_videos)
+                            while next_video_index == old_index:
+                                next_video_index = random.randrange(num_videos)
+                            logger.info(f"[{self.name}] 🔀 Sélection d'un nouveau fichier aléatoire: Index {next_video_index}")
+
+                        self.current_video_index = next_video_index
+                    else:
+                        self.current_video_index = 0
 
             # Redémarrer le stream
             success = self.start_stream()
@@ -453,7 +496,7 @@ class IPTVChannel:
                 logger.info(f"[{self.name}] ✅ Stream redémarré avec succès sur un nouveau fichier.")
             else:
                 logger.error(f"[{self.name}] ❌ Échec du redémarrage sur un nouveau fichier.")
-            
+
             return success
         except Exception as e:
             logger.error(f"[{self.name}] ❌ Erreur majeure lors du redémarrage: {e}", exc_info=True)
@@ -566,6 +609,10 @@ class IPTVChannel:
                 if success:
                     logger.info(f"[{self.name}] ✅ Processus FFmpeg démarré avec succès pour {video_file.name}")
                     self.error_handler.reset() # Reset errors on successful start
+                    # NOUVEAU: Réactiver les checks de santé après un démarrage réussi
+                    self.process_manager.transitioning = False
+                    # Réinitialiser le flag de navigation manuelle après un démarrage réussi
+                    self.manual_navigation = False
                 else:
                     logger.error(f"[{self.name}] ❌ Échec du démarrage du processus FFmpeg pour {video_file.name}")
                     

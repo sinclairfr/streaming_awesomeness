@@ -98,9 +98,9 @@ class ChannelStatusManager:
                 
                 # Atomic replace
                 os.replace(temp_file, self.status_file)
-                
-                
-                logger.info(f"✅ Status saved: {len(self.channels)} channels, {total_active_viewers} active viewers")
+
+
+                logger.debug(f"✅ Status saved: {len(self.channels)} channels, {total_active_viewers} active viewers")
                 return True
                 
             except Exception as e:
@@ -223,7 +223,7 @@ class ChannelStatusManager:
                     self._last_forced_save_time = time.time()
                     success = self._save_status()
                     if success:
-                        logger.info(f"[{channel_id}] ✅ Sauvegarde immédiate forcée réussie")
+                        logger.debug(f"[{channel_id}] ✅ Sauvegarde immédiate forcée réussie")
                     else:
                         logger.warning(f"[{channel_id}] ⚠️ Échec de la sauvegarde immédiate forcée")
                 else:

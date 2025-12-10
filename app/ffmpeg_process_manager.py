@@ -35,12 +35,13 @@ class FFmpegProcessManager:
         self.playback_offset = 0
         self.total_duration = 0
         self.logger_instance = logger_instance
-        
+
         # État de santé et compteurs
         self.last_segment_time = time.time()  # Initialisation
         self.crash_count = 0
         self.last_crash_time = 0
         self.health_warnings = 0  # Compteur d'avertissements de santé
+        self.transitioning = False  # Flag pour désactiver les checks pendant les transitions
 
         # Callbacks
         self.on_process_died = None
@@ -167,10 +168,21 @@ class FFmpegProcessManager:
                 return True
 
             try:
-                # Arrêter la surveillance
+                # CORRECTION: Arrêter la surveillance ET attendre que le thread se termine
                 if self.monitor_thread and self.monitor_thread.is_alive():
                     self.stop_monitoring.set()
-                
+                    # Ne pas attendre depuis le thread de monitoring lui-même (deadlock)
+                    if self.monitor_thread != threading.current_thread():
+                        logger.debug(f"[{self.channel_name}] ⏳ Attente de la fin du thread de monitoring...")
+                        try:
+                            self.monitor_thread.join(timeout=5)
+                            if self.monitor_thread.is_alive():
+                                logger.warning(f"[{self.channel_name}] ⚠️ Le thread de monitoring ne s'est pas arrêté dans les temps")
+                            else:
+                                logger.debug(f"[{self.channel_name}] ✅ Thread de monitoring arrêté")
+                        except RuntimeError:
+                            pass
+
                 pid_to_stop = self.process.pid if self.process else None
                 logger.info(f"[{self.channel_name}] 🛑 Arrêt du processus FFmpeg PID {pid_to_stop}")
 
@@ -259,20 +271,27 @@ class FFmpegProcessManager:
 
     def _start_monitoring(self, hls_dir):
         """Démarre le thread de surveillance"""
+        # CORRECTION: Arrêter l'ancien thread s'il existe encore
         if self.monitor_thread and self.monitor_thread.is_alive():
             self.stop_monitoring.set()
             if self.monitor_thread != threading.current_thread():
                 try:
                     self.monitor_thread.join(timeout=3)
+                    if self.monitor_thread.is_alive():
+                        logger.warning(f"[{self.channel_name}] ⚠️ Ancien thread de monitoring encore actif après 3s")
                 except RuntimeError:
                     pass
-            self.stop_monitoring.clear()
 
+        # CORRECTION: Toujours réinitialiser le flag avant de créer un nouveau thread
+        self.stop_monitoring.clear()
+
+        # Créer et démarrer le nouveau thread de monitoring
         self.monitor_thread = threading.Thread(
             target=self._monitor_process,
             daemon=True
         )
         self.monitor_thread.start()
+        logger.debug(f"[{self.channel_name}] 🎬 Nouveau thread de monitoring démarré")
 
     def _monitor_process(self):
         """Surveillance du processus FFmpeg"""
@@ -280,10 +299,11 @@ class FFmpegProcessManager:
             # Intervalles de vérification
             health_check_interval = 60  # Vérification de santé toutes les 60 secondes
             startup_grace_period = 15  # Période de grâce au démarrage
-            
+            check_interval = 0.5  # Vérification très fréquente (2 fois par seconde)
+
             last_health_check = time.time()
             startup_time = time.time()
-            
+
             while not self.stop_monitoring.is_set():
                 # 1. Vérification de base: processus toujours en vie?
                 if not self.is_running():
@@ -300,10 +320,19 @@ class FFmpegProcessManager:
                     if current_time - startup_time > startup_grace_period:
                         self.check_stream_health()
                     last_health_check = current_time
-                
+
+                    # CORRECTION: Vérifier immédiatement après le check de santé
+                    # car il peut prendre du temps et le processus peut se terminer pendant
+                    if not self.is_running():
+                        return_code = self.process.poll() if self.process else -999
+                        logger.error(f"[{self.channel_name}] ❌ Processus FFmpeg arrêté (code: {return_code})")
+                        if self.on_process_died:
+                            self.on_process_died(return_code, None)
+                        break
+
                 # Pause courte pour économiser des ressources
-                time.sleep(1)
-                
+                time.sleep(check_interval)
+
         except Exception as e:
             logger.error(f"[{self.channel_name}] ❌ Erreur surveillance: {e}")
             if self.on_process_died:
@@ -315,6 +344,11 @@ class FFmpegProcessManager:
             # Vérification de base du processus
             if not self.is_running():
                 return False
+
+            # NOUVEAU: Ne pas faire de check de santé pendant une transition
+            if getattr(self, 'transitioning', False):
+                logger.debug(f"[{self.channel_name}] ⏭️ Check de santé ignoré (transition en cours)")
+                return True
 
             # Récupération du répertoire HLS
             hls_dir = f"{HLS_DIR}/{self.channel_name}"
@@ -344,30 +378,46 @@ class FFmpegProcessManager:
                 return True # Continue monitoring
 
             # Log détaillé des segments pour diagnostic
-            logger.info(f"[{self.channel_name}] 📊 {len(file_stats)} segments trouvés et validés")
+            logger.debug(f"[{self.channel_name}] 📊 {len(file_stats)} segments trouvés et validés")
 
             # Trier par date de modification en utilisant les stats pré-chargées
             file_stats.sort(key=lambda x: x[1].st_mtime)
-            
-            # Vérification de la boucle infinie
-            if len(file_stats) > 5:  # Réduit de 10 à 5 segments minimum
-                # On vérifie les 3 derniers segments (réduit de 5 à 3)
-                last_segments_stats = file_stats[-3:]
+
+            # Vérification de la boucle infinie - AMÉLIORÉE pour éviter les faux positifs
+            if len(file_stats) > 8:  # Augmenté de 5 à 8 segments minimum pour plus de confiance
+                # On vérifie les 5 derniers segments (augmenté de 3 à 5)
+                last_segments_stats = file_stats[-5:]
                 segment_sizes = [s.st_size for _, s in last_segments_stats]
-                
+
                 # Log des tailles pour diagnostic
-                logger.info(f"[{self.channel_name}] 📏 Tailles des 3 derniers segments: {segment_sizes}")
-                
-                # Si les 3 derniers segments ont exactement la même taille
+                logger.debug(f"[{self.channel_name}] 📏 Tailles des 5 derniers segments: {segment_sizes}")
+
+                # AMÉLIORATION: Vérifier que TOUS les segments ont exactement la même taille
+                # ET que cette situation persiste sur plusieurs checks
                 if len(set(segment_sizes)) == 1 and segment_sizes[0] > 0: # Ignore empty files
-                    logger.warning(f"[{self.channel_name}] ⚠️ Détection possible de boucle infinie - segments identiques de taille {segment_sizes[0]}")
-                    self.health_warnings += 1
-                    
-                    if self.health_warnings >= 2:  # Réduit de 3 à 2 avertissements
-                        logger.error(f"[{self.channel_name}] ❌ BOUCLE INFINIE CONFIRMÉE - redémarrage du stream")
-                        if self.on_process_died:
-                            self.on_process_died(-3, "Boucle infinie détectée")
-                        return False
+                    # Vérifier aussi que les timestamps sont espacés (pas tous récents)
+                    segment_times = [s.st_mtime for _, s in last_segments_stats]
+                    time_span = max(segment_times) - min(segment_times)
+
+                    # Si les segments sont espacés de plus de 15 secondes, c'est probablement OK
+                    if time_span > 15:
+                        logger.debug(f"[{self.channel_name}] ✅ Segments de même taille mais espacés sur {time_span:.1f}s - OK")
+                        self.health_warnings = 0  # Réinitialiser
+                    else:
+                        logger.warning(f"[{self.channel_name}] ⚠️ Détection possible de boucle infinie - 5 segments identiques de taille {segment_sizes[0]} sur {time_span:.1f}s")
+                        self.health_warnings += 1
+
+                        # Augmenté de 2 à 4 avertissements pour être plus conservateur
+                        if self.health_warnings >= 4:
+                            logger.error(f"[{self.channel_name}] ❌ BOUCLE INFINIE CONFIRMÉE - redémarrage du stream")
+                            if self.on_process_died:
+                                self.on_process_died(-3, "Boucle infinie détectée")
+                            return False
+                else:
+                    # Réinitialiser le compteur si les tailles varient
+                    if self.health_warnings > 0:
+                        logger.debug(f"[{self.channel_name}] ✅ Tailles de segments variées - réinitialisation du compteur de boucle")
+                        self.health_warnings = 0
 
             # Vérification du temps écoulé depuis le dernier segment
             # Utiliser le dernier élément de la liste triée

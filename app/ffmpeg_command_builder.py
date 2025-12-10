@@ -73,6 +73,9 @@ class FFmpegCommandBuilder:
                 "-map", "0:v:0",
                 "-map", "0:a",
                 "-max_muxing_queue_size", "16384",
+                # IMPORTANT: Force flush des buffers pour éviter la perte de fin de vidéo
+                "-flush_packets", "1",
+                "-max_interleave_delta", "0",
             ])
 
             # HLS parameters
@@ -201,7 +204,8 @@ class FFmpegCommandBuilder:
             "-hls_time", str(hls_time_val),
             "-hls_list_size", str(hls_list_size_val),
             "-hls_delete_threshold", str(hls_delete_threshold_val),
-            "-hls_flags", "delete_segments+append_list+independent_segments+omit_endlist+program_date_time",
+            # IMPORTANT: round_durations pour s'assurer que les segments sont correctement terminés
+            "-hls_flags", "delete_segments+append_list+independent_segments+omit_endlist+program_date_time+round_durations",
             "-use_wallclock_as_timestamps", "1",
             "-flags", "low_delay",
             "-avioflags", "direct",

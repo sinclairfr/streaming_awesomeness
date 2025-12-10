@@ -172,15 +172,31 @@ class FFmpegLogger:
                 
             # Rechercher des patterns d'erreur dans les dernières lignes
             error_patterns = [
-                r"No such file or directory",
                 r"Invalid data found when processing input",
                 r"Could not find file",
                 r"Error while decoding stream",
                 r"corrupt.*?frame",
                 r"Fichier d'entrée introuvable"
             ]
-            
+
+            # Patterns à ignorer (erreurs bénignes normales dans HLS)
+            ignore_patterns = [
+                r"failed to delete old segment.*No such file or directory",  # Normal: cleaner a déjà supprimé
+                r"hls muxer.*failed to delete",  # Même chose, format variant
+            ]
+
             for line in last_lines:
+                # Ignorer les erreurs bénignes
+                should_ignore = False
+                for ignore_pattern in ignore_patterns:
+                    if re.search(ignore_pattern, line, re.IGNORECASE):
+                        should_ignore = True
+                        break
+
+                if should_ignore:
+                    continue
+
+                # Vérifier les vraies erreurs
                 for pattern in error_patterns:
                     if re.search(pattern, line, re.IGNORECASE):
                         logger.warning(f"[{self.channel_name}] 🔍 Erreur FFmpeg détectée: {line.strip()}")

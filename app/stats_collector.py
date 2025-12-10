@@ -210,7 +210,7 @@ class StatsCollector:
             with open(self.user_stats_file, 'w') as f:
                 json.dump(self.user_stats, f, indent=2)
 
-            logger.info(f"💾 Stats sauvegardées: {len(self.channel_stats.get('global', {}).get('unique_viewers', []))} utilisateurs uniques, {len(self.channel_stats) -1} chaînes actives.")
+            logger.debug(f"💾 Stats sauvegardées: {len(self.channel_stats.get('global', {}).get('unique_viewers', []))} utilisateurs uniques, {len(self.channel_stats) -1} chaînes actives.")
         except Exception as e:
             logger.error(f"❌ Erreur lors de la sauvegarde des stats: {e}")
 
@@ -518,7 +518,7 @@ class StatsCollector:
                 if bytes_transferred == 0:  # C'est un segment HLS
                     try:
                         self.update_watchers_callback(channel, len(active_ips), active_ips, HLS_DIR, source="stats_collector_direct")
-                        logger.info(f"[{channel}] 👁️ Mise à jour directe via StatsCollector: {len(active_ips)} spectateurs actifs")
+                        logger.debug(f"[{channel}] 👁️ Mise à jour directe via StatsCollector: {len(active_ips)} spectateurs actifs")
                     except Exception as e:
                         logger.error(f"[{channel}] ❌ Erreur lors de la mise à jour directe des spectateurs: {str(e)}")
                 

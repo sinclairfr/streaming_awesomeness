@@ -401,18 +401,31 @@ class IPTVManager:
             # ou du moins potentiellement active si des watchers sont présents.
             channel_obj = self.channels.get(channel_name)
             is_live_status = False
+            current_video_name = None
+
             if channel_obj:
                 is_live_status = (hasattr(channel_obj, 'is_ready_for_streaming') and channel_obj.is_ready_for_streaming())
-            
+
+                # Récupérer le nom du fichier vidéo en cours
+                if hasattr(channel_obj, 'processed_videos') and hasattr(channel_obj, 'current_video_index'):
+                    try:
+                        if channel_obj.processed_videos and 0 <= channel_obj.current_video_index < len(channel_obj.processed_videos):
+                            current_video_path = channel_obj.processed_videos[channel_obj.current_video_index]
+                            # Extraire le nom du fichier sans extension
+                            current_video_name = current_video_path.stem if hasattr(current_video_path, 'stem') else str(current_video_path.name).rsplit('.', 1)[0]
+                    except Exception as e:
+                        logger.debug(f"[{channel_name}] Erreur récupération nom vidéo dans update_watchers: {e}")
+
             # Pour les canaux avec des watchers actifs, toujours les marquer comme actifs
             # même si le canal n'est pas techniquement "streaming"
             if watcher_count > 0:
                 is_live_status = True
-            
+
             status_data = {
                 "is_live": is_live_status,
                 "viewers": watcher_count,
                 "watchers": active_ips_list,
+                "current_video": current_video_name,
                 "last_updated": datetime.now().isoformat()
             }
             
@@ -788,19 +801,19 @@ class IPTVManager:
         start_time = time.time()
         startup_elapsed = start_time - self.startup_time if hasattr(self, 'startup_time') else 0
 
-        logger.info("🔒 Tentative d'acquisition du playlist_update_lock...")
+        logger.debug("🔒 Tentative d'acquisition du playlist_update_lock...")
         # Mettre à jour le timestamp de dernière mise à jour
         with self.playlist_update_lock:
-            logger.info("✅ playlist_update_lock acquis")
+            logger.debug("✅ playlist_update_lock acquis")
             self.last_playlist_update = start_time
 
         playlist_path = os.path.abspath(f"{HLS_DIR}/playlist.m3u")
-        logger.info(f"🔄 Début mise à jour playlist (temps depuis démarrage: {startup_elapsed:.1f}s)")
+        logger.debug(f"🔄 Début mise à jour playlist (temps depuis démarrage: {startup_elapsed:.1f}s)")
 
-        logger.info("🔒 Tentative d'acquisition du scan_lock pour mise à jour playlist...")
+        logger.debug("🔒 Tentative d'acquisition du scan_lock pour mise à jour playlist...")
         # Utiliser le verrou de scan pour protéger l'accès aux chaînes
         with self.scan_lock:
-            logger.info("✅ scan_lock acquis, début de la mise à jour...")
+            logger.debug("✅ scan_lock acquis, début de la mise à jour...")
             try:
                 # On sauvegarde d'abord le contenu actuel au cas où
                 existing_content = "#EXTM3U\n"
@@ -823,7 +836,7 @@ class IPTVManager:
                     # Ensure channel object exists and check its ready status
                     if channel and hasattr(channel, 'is_ready_for_streaming') and channel.is_ready_for_streaming():
                         ready_channels.append((name, channel))
-                        logger.info(f"[{name}] ✅ Chaîne prête pour la playlist maître")
+                        logger.debug(f"[{name}] ✅ Chaîne prête pour la playlist maître")
                     elif channel:
                         # Log detailed status for debugging
                         has_method = hasattr(channel, 'is_ready_for_streaming')
@@ -900,7 +913,7 @@ class IPTVManager:
 
                 # Timing info
                 duration = time.time() - start_time
-                logger.info(
+                logger.debug(
                     f"✅ Playlist mise à jour en {duration:.2f}s: {len(ready_channels)} chaînes prêtes sur {loaded_channels_count} chargées ({total_channels_known_by_manager} total connu par manager)"
                 )
             except Exception as e:
@@ -1003,7 +1016,7 @@ class IPTVManager:
 
             is_complete = len(missing_channels) == 0
 
-            logger.info(
+            logger.debug(
                 f"📊 Validation playlist: {len(playlist_channels)} dans fichier, "
                 f"{len(ready_channels)} prêtes, complète: {is_complete}"
             )
@@ -1167,12 +1180,24 @@ class IPTVManager:
                     if channel and hasattr(channel, 'is_ready_for_streaming'):
                         is_ready = channel.is_ready_for_streaming()
                         is_streaming = channel.is_running() if hasattr(channel, 'is_running') else False
-                        
+
+                        # Récupérer le nom du fichier vidéo en cours
+                        current_video_name = None
+                        if hasattr(channel, 'processed_videos') and hasattr(channel, 'current_video_index'):
+                            try:
+                                if channel.processed_videos and 0 <= channel.current_video_index < len(channel.processed_videos):
+                                    current_video_path = channel.processed_videos[channel.current_video_index]
+                                    # Extraire le nom du fichier sans extension
+                                    current_video_name = current_video_path.stem if hasattr(current_video_path, 'stem') else str(current_video_path.name).rsplit('.', 1)[0]
+                            except Exception as e:
+                                logger.debug(f"[{channel_name}] Erreur récupération nom vidéo: {e}")
+
                         # Les informations sur les viewers sont maintenant gérées par ChannelStatusManager
                         # On ne les met pas à jour ici pour éviter les conflits
                         status_data = {
                             "active": is_ready,
                             "streaming": is_streaming,
+                            "current_video": current_video_name,
                         }
                         channels_dict[channel_name] = status_data
                     # else: # Log channels that are skipped during update

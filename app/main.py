@@ -17,12 +17,14 @@ from config import (
     HLS_DIR
 )
 import traceback
+from channel_api import start_api_server
 
 class Application:
     def __init__(self):
         self.manager = None
         self.running = True
-        
+        self.api_thread = None
+
         # On gère SIGTERM et SIGINT
         signal.signal(signal.SIGTERM, self.handle_signal)
         signal.signal(signal.SIGINT, self.handle_signal)
@@ -173,7 +175,14 @@ class Application:
                     # On instancie le manager avec le chemin du contenu
                     use_gpu = USE_GPU.lower()
                     self.manager = IPTVManager(CONTENT_DIR, use_gpu=use_gpu)
-                
+
+                    # Démarrer l'API Flask pour les actions sur les chaînes
+                    try:
+                        self.api_thread = start_api_server(self.manager, host='0.0.0.0', port=5000)
+                        logger.info("✅ API des chaînes démarrée sur le port 5000")
+                    except Exception as e:
+                        logger.error(f"❌ Erreur lors du démarrage de l'API: {e}")
+
                 # On lance le manager
                 self.manager.run_manager_loop()
                 
