@@ -39,40 +39,19 @@ class FFmpegLogger:
                 # Vérifie la taille et applique rotation si nécessaire
                 self._check_and_rotate_log(log_file)
 
-    # Ajouter cette méthode à la classe FFmpegLogger dans ffmpeg_logger.py
-
-    def _track_segment_size(self, segment_path: str, stats_collector=None):
-        """Suit la taille des segments pour les statistiques"""
-        try:
-            # Vérifier que le fichier existe
-            if not os.path.exists(segment_path):
-                return
-
-            # Obtenir la taille du segment
-            segment_size = os.path.getsize(segment_path)
-
-            # Loguer la taille dans le fichier de log
-            self.log_segment(segment_path, segment_size)
-
-            # Si on a un StatsCollector, mettre à jour les stats
-            if stats_collector:
-                # Extraire le nom de la chaîne et l'ID du segment
-                segment_path_obj = Path(segment_path)
-                channel_name = segment_path_obj.parent.name
-                segment_id_match = re.search(
-                    r"segment_(\d+)\.ts", segment_path_obj.name
-                )
-
-                if segment_id_match and channel_name:
-                    segment_id = segment_id_match.group(1)
-                    stats_collector.update_segment_stats(
-                        channel_name, segment_id, segment_size
-                    )
-        except Exception as e:
-            logger.error(f"❌ Erreur tracking segment {segment_path}: {e}")
+    # MÉTHODE SUPPRIMÉE: _track_segment_size()
+    # Cette méthode était redondante avec le tracking fait par StatsCollector
+    # via l'analyse des logs Nginx. De plus, elle utilisait gc.get_objects()
+    # ce qui est extrêmement inefficace.
 
     def log_segment(self, segment_path: str, size: int):
-        """Log des infos sur les segments générés directement dans le log principal"""
+        """
+        Log des infos sur les segments générés directement dans le log principal.
+
+        Note: Le tracking des stats est maintenant géré par StatsCollector via
+        l'analyse des logs Nginx, ce qui évite la duplication et l'utilisation
+        coûteuse de gc.get_objects().
+        """
         segment_info = (
             f"{datetime.datetime.now()} - Segment {segment_path}: {size} bytes"
         )
@@ -80,14 +59,9 @@ class FFmpegLogger:
         # On utilise le logger principal plutôt qu'un fichier séparé
         logger.debug(f"[{self.channel_name}] {segment_info}")
 
-        # Si on a accès au StatsCollector, mettre à jour les stats
-        from iptv_manager import IPTVManager
-
-        for manager_instance in [
-            obj for obj in gc.get_objects() if isinstance(obj, IPTVManager)
-        ]:
-            if hasattr(manager_instance, "stats_collector"):
-                self._track_segment_size(segment_path, manager_instance.stats_collector)
+        # SUPPRIMÉ: Le tracking via gc.get_objects() est inefficace et redondant
+        # Les stats de segments sont maintenant calculées par StatsCollector
+        # en analysant les logs Nginx, ce qui est plus fiable et performant
 
     def _check_and_rotate_log(self, log_file: Path):
         """Vérifie la taille d'un fichier log et fait une rotation si nécessaire"""

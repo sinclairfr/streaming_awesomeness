@@ -74,15 +74,16 @@ def create_user_activity_df(user_stats):
     
     return pd.DataFrame(data)
 
-def create_channel_stats_df(channel_stats):
-    """Crée un DataFrame des statistiques par chaîne"""
+def create_channel_stats_df(channel_stats, channel_status_data=None):
+    """Crée un DataFrame des statistiques par chaîne, incluant toutes les chaînes configurées"""
     data = []
-    
+    processed_channels = set()
+
     # Parcourir toutes les chaînes sauf "global"
     for channel, stats in channel_stats.items():
         if channel == "global":
             continue
-            
+
         viewers = len(stats.get("unique_viewers", []))
         watch_time = stats.get("total_watch_time", 0)
         data.append({
@@ -91,7 +92,19 @@ def create_channel_stats_df(channel_stats):
             "watch_time": watch_time,
             "last_update": datetime.fromtimestamp(stats.get("last_update", 0))
         })
-    
+        processed_channels.add(channel)
+
+    # Ajouter les chaînes configurées mais sans viewers
+    if channel_status_data:
+        for channel_name in channel_status_data.keys():
+            if channel_name not in processed_channels:
+                data.append({
+                    "channel": channel_name,
+                    "viewers": 0,
+                    "watch_time": 0,
+                    "last_update": datetime.fromtimestamp(0)
+                })
+
     return pd.DataFrame(data)
 
 def format_time(seconds):
@@ -377,13 +390,13 @@ def update_dashboard(n):
     except (FileNotFoundError, json.JSONDecodeError):
         live_status = {"channels": {}}
 
-    channel_df = create_channel_stats_df(channel_stats)
+    live_channels_data = live_status.get('channels', {})
+    channel_df = create_channel_stats_df(channel_stats, live_channels_data)
     user_df = create_user_activity_df(user_stats)
     
     # 1. Statistiques globales (utilisant live_status)
     total_watch_time = channel_stats.get("global", {}).get("total_watch_time", 0)
     unique_users = len(channel_stats.get("global", {}).get("unique_viewers", []))
-    live_channels_data = live_status.get('channels', {})
     total_channels = sum(1 for ch_data in live_channels_data.values() if ch_data.get('is_live'))
 
     global_stats = html.Div([

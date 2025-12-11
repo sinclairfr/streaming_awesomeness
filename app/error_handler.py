@@ -25,16 +25,83 @@ class ErrorHandler:
         # Période de réinitialisation des erreurs
         self.error_reset_period = 3600  # 1 heure
         self.last_error_reset = time.time()
-        
+
+        # Gestion des avertissements de santé (health warnings)
+        self.health_warnings = 0
+        self.health_check_details = []
+        self.max_health_warnings = 3  # Nombre d'avertissements avant restart
+
         # Chemin du fichier de log unique pour ce canal
         self.crash_log_path = Path(f"/app/logs/crashes_{self.channel_name}.log")
         self.crash_log_path.parent.mkdir(exist_ok=True)
+
+    @staticmethod
+    def analyze_ffmpeg_error(exit_code: int, stderr: str = None) -> tuple:
+        """
+        Analyse un code de sortie FFmpeg et stderr pour déterminer le type d'erreur.
+
+        Args:
+            exit_code: Code de sortie du processus FFmpeg
+            stderr: Sortie d'erreur stderr (optionnel)
+
+        Returns:
+            tuple: (error_type, diagnosis) - Type d'erreur et diagnostic détaillé
+        """
+        error_type = "unknown_error"
+        diagnosis = ""
+
+        # Exit code 0 = succès
+        if exit_code == 0:
+            return ("success", "Vidéo terminée avec succès")
+
+        # Exit code -2 = problème de santé détecté
+        if exit_code == -2:
+            return ("health_check_failed", "Problème de santé du stream détecté")
+
+        # Signal négatif = terminaison par signal
+        if exit_code < 0:
+            error_type = f"signal_{abs(exit_code)}"
+            diagnosis = f"Processus terminé par signal {abs(exit_code)}"
+            return (error_type, diagnosis)
+
+        # Analyser stderr si disponible
+        if stderr:
+            stderr_lower = stderr.lower()
+
+            # Diagnostic structuré (format dictionnaire)
+            if stderr.startswith("{'type':"):
+                try:
+                    import ast
+                    error_info = ast.literal_eval(stderr)
+                    if isinstance(error_info, dict) and 'diagnosis' in error_info:
+                        return ("health_check_detailed", error_info['diagnosis'])
+                except:
+                    pass
+
+            # Erreurs spécifiques
+            if "no such file" in stderr_lower:
+                error_type = "missing_file"
+                diagnosis = "Fichier d'entrée introuvable"
+            elif "invalid data" in stderr_lower:
+                error_type = "invalid_data"
+                diagnosis = "Données invalides lors du traitement"
+            elif "dts" in stderr_lower:
+                error_type = "dts_error"
+                diagnosis = "Erreur DTS (timestamps)"
+            elif "timeout" in stderr_lower:
+                error_type = "timeout"
+                diagnosis = "Timeout de connexion"
+            elif "error" in stderr_lower:
+                error_type = "generic_error"
+                diagnosis = stderr[:200]  # Premier 200 caractères
+
+        return (error_type, diagnosis or f"Erreur avec code {exit_code}")
 
     def add_error(self, error_type: str) -> bool:
         """
         Ajoute une erreur et détermine si un redémarrage est nécessaire
         avec une approche plus tolérante
-        
+
         Returns:
             bool: True si un redémarrage est nécessaire
         """
@@ -63,6 +130,60 @@ class ErrorHandler:
             # Vérifier si on devrait redémarrer
             return self._should_restart(error_type)
         
+    def handle_health_warning(self, diagnosis: str = "", elapsed_since_segment: float = 0) -> bool:
+        """
+        Gère un avertissement de santé et décide si un restart est nécessaire.
+
+        Args:
+            diagnosis: Diagnostic du problème de santé
+            elapsed_since_segment: Temps écoulé depuis le dernier segment
+
+        Returns:
+            bool: True si un redémarrage est nécessaire après accumulation d'avertissements
+        """
+        with self.lock:
+            self.health_warnings += 1
+
+            # Enregistrer les détails
+            health_detail = {
+                "timestamp": time.time(),
+                "elapsed_since_segment": elapsed_since_segment,
+                "diagnosis": diagnosis or "Problème de santé non spécifié"
+            }
+            self.health_check_details.append(health_detail)
+
+            logger.warning(
+                f"[{self.channel_name}] ⚠️ Avertissement de santé {self.health_warnings}/{self.max_health_warnings}"
+            )
+
+            if diagnosis:
+                logger.warning(f"[{self.channel_name}] 🔍 Cause: {diagnosis}")
+
+            # Décider si on redémarre
+            if self.health_warnings >= self.max_health_warnings:
+                logger.warning(
+                    f"[{self.channel_name}] ❗ Redémarrage après {self.health_warnings} avertissements"
+                )
+
+                # Log l'historique
+                details_log = "\n".join([
+                    f"  - {i+1}: {d['elapsed_since_segment']:.1f}s sans segment, "
+                    f"diagnostic: {d['diagnosis']}"
+                    for i, d in enumerate(self.health_check_details)
+                ])
+                logger.warning(f"[{self.channel_name}] 📊 Historique:\n{details_log}")
+
+                # Réinitialiser
+                self.health_warnings = 0
+                self.health_check_details = []
+                return True
+
+            logger.info(
+                f"[{self.channel_name}] 🔍 Avertissement {self.health_warnings}/{self.max_health_warnings}, "
+                "surveillance continue"
+            )
+            return False
+
     def _should_restart(self, error_type: str) -> bool:
         """
         Détermine si un redémarrage est nécessaire avec une approche plus tolérante

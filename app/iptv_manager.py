@@ -17,7 +17,8 @@ import threading
 from file_event_handler import FileEventHandler
 from ready_content_handler import ReadyContentHandler
 from hls_cleaner import HLSCleaner
-from client_monitor import ClientMonitor
+# SUPPRIMÉ: from client_monitor import ClientMonitor
+# ClientMonitor a été fusionné dans StatsCollector
 from resource_monitor import ResourceMonitor
 from iptv_channel import IPTVChannel
 import signal
@@ -157,8 +158,8 @@ class IPTVManager:
             from types import SimpleNamespace
             self.stats_collector = SimpleNamespace()
             self.stats_collector.update_watchers_callback = lambda *args, **kwargs: None  # Fonction vide
-            
-        self.client_monitor = None
+
+        # SUPPRIMÉ: self.client_monitor (fusionné dans StatsCollector)
 
         # Moniteur FFmpeg
         self.ffmpeg_monitor = FFmpegMonitor(self.channels)
@@ -311,18 +312,35 @@ class IPTVManager:
             # 5. Parcourir les répertoires du système de fichiers pour ajouter/mettre à jour les canaux
             for channel_dir in channel_dirs:
                 channel_name = channel_dir.name
-                
+
+                # Vérifier que le dossier ready_to_stream existe et contient des vidéos
+                ready_dir = channel_dir / "ready_to_stream"
+                if not ready_dir.exists():
+                    logger.warning(f"⚠️ Dossier ignoré '{channel_name}': pas de dossier ready_to_stream")
+                    continue
+
+                # Vérifier qu'il y a au moins un fichier vidéo
+                video_extensions = {'.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.m4v', '.ts'}
+                video_files = [f for f in ready_dir.iterdir() if f.is_file() and f.suffix.lower() in video_extensions]
+
+                if not video_files:
+                    logger.warning(f"⚠️ Dossier ignoré '{channel_name}': aucune vidéo dans ready_to_stream")
+                    continue
+
                 with self.scan_lock:
                     if channel_name in self.channels:
                         if force:
                             logger.info(f"🔄 Scan forcé : Chaîne existante {channel_name} - rafraîchissement éventuel géré par la chaîne elle-même.")
+                            channel = self.channels[channel_name]
+                            if hasattr(channel, "refresh_videos"):
+                                channel.refresh_videos()
                         continue
                     else:
                         self.channels[channel_name] = None
                         logger.debug(f"[{channel_name}] Ajout d'un placeholder à self.channels.")
 
                 logger.info(f"✅ Nouvelle chaîne détectée : {channel_name}")
-                
+
                 logger.info(f"⏳ Mise en file d'attente pour initialisation de la chaîne {channel_name}")
                 self.channel_init_queue.put({
                     "name": channel_name,
@@ -598,92 +616,6 @@ class IPTVManager:
         except Exception as e:
             logger.error(f"❌ Erreur lors du nettoyage initial: {e}")
 
-    def scan_channels(self, force: bool = False, initial: bool = False):
-        """
-        Scanne le contenu pour détecter les nouveaux dossiers (chaînes).
-        Version améliorée avec limitation de fréquence et debug pour isolation du problème
-        """
-        # Limiter la fréquence des scans
-        current_time = time.time()
-        scan_cooldown = 30  # 30s entre scans complets (sauf si force=True)
-
-        if (
-            not force
-            and not initial
-            and hasattr(self, "last_scan_time")
-            and current_time - self.last_scan_time < scan_cooldown
-        ):
-            logger.debug(
-                f"Scan ignoré: dernier scan il y a {current_time - self.last_scan_time:.1f}s"
-            )
-            return
-
-        setattr(self, "last_scan_time", current_time)
-
-        with self.scan_lock:
-            try:
-                content_path = Path(self.content_dir)
-                if not content_path.exists():
-                    logger.error(f"Le dossier {content_path} n'existe pas!")
-                    return
-
-                # Debugging: log the directory and its existence
-                logger.debug(f"🔍 Scanning content directory: {content_path} (exists: {content_path.exists()})")
-                
-                # Get all subdirectories 
-                channel_dirs = [d for d in content_path.iterdir() if d.is_dir()]
-                
-                # Debug the found directories
-                logger.debug(f"📂 Found {len(channel_dirs)} potential channel directories: {[d.name for d in channel_dirs]}")
-
-                logger.info(f"📡 Scan des chaînes disponibles...")
-                for channel_dir in channel_dirs:
-                    channel_name = channel_dir.name
-
-                    # Debug: check if this directory should be a channel
-                    logger.debug(f"Examining directory: {channel_name} ({channel_dir})")
-
-                    # NOUVEAU: Vérifier si le dossier ready_to_stream existe et contient des vidéos
-                    ready_dir = channel_dir / "ready_to_stream"
-                    if not ready_dir.exists():
-                        logger.warning(f"⚠️ Dossier ignoré '{channel_name}': pas de dossier ready_to_stream")
-                        continue
-
-                    # Vérifier qu'il y a au moins un fichier vidéo
-                    video_extensions = {'.mp4', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.m4v', '.ts'}
-                    video_files = [f for f in ready_dir.iterdir() if f.is_file() and f.suffix.lower() in video_extensions]
-
-                    if not video_files:
-                        logger.warning(f"⚠️ Dossier ignoré '{channel_name}': aucune vidéo dans ready_to_stream")
-                        continue
-
-                    if channel_name in self.channels:
-                        # Si la chaîne existe déjà, on vérifie son état
-                        if force:
-                            logger.info(
-                                f"🔄 Rafraîchissement de la chaîne {channel_name}"
-                            )
-                            channel = self.channels[channel_name]
-                            if hasattr(channel, "refresh_videos"):
-                                channel.refresh_videos()
-                        else:
-                            logger.debug(f"✅ Chaîne existante: {channel_name}")
-                        continue
-
-                    logger.info(f"✅ Nouvelle chaîne détectée: {channel_name}")
-
-                    # Ajoute la chaîne à la queue d'initialisation
-                    self.channel_init_queue.put(
-                        {"name": channel_name, "dir": channel_dir}
-                    )
-
-                logger.info(f"📡 Scan terminé, {len(channel_dirs)} chaînes identifiées")
-
-            except Exception as e:
-                logger.error(f"Erreur scan des chaînes: {e}")
-                import traceback
-                logger.error(traceback.format_exc())
-
     def ensure_hls_directory(self, channel_name: str = None):
         """Crée et configure les dossiers HLS avec les bonnes permissions"""
         # Dossier HLS principal
@@ -699,62 +631,6 @@ class IPTVManager:
                 logger.info(f"📂 Création du dossier HLS pour {channel_name}")
                 channel_hls.mkdir(parents=True, exist_ok=True)
 
-    def _manage_master_playlist(self):
-        """Gère la mise à jour périodique de la playlist principale avec délai de démarrage et retries exponentiels"""
-        from config import STARTUP_PLAYLIST_DELAY, PLAYLIST_UPDATE_RETRIES, RETRY_BACKOFF_BASE
-
-        logger.info("🔄 Démarrage thread de mise à jour de la playlist principale")
-
-        # S'assurer que la playlist existe avec des permissions correctes dès le départ
-        playlist_path = os.path.abspath(f"{HLS_DIR}/playlist.m3u")
-        if not os.path.exists(playlist_path):
-            # Créer un contenu minimal
-            with open(playlist_path, "w", encoding="utf-8") as f:
-                f.write("#EXTM3U\n")
-            logger.info(f"✅ Playlist initiale créée: {playlist_path}")
-
-        # Attente initiale pour permettre l'initialisation des chaînes
-        logger.info(f"📋 Attente de {STARTUP_PLAYLIST_DELAY}s avant première mise à jour playlist")
-        time.sleep(STARTUP_PLAYLIST_DELAY)
-
-        logger.info("🚀 Début des mises à jour de playlist avec retries")
-
-        # Tentatives avec backoff exponentiel
-        delays = [RETRY_BACKOFF_BASE * (1.5 ** i) for i in range(PLAYLIST_UPDATE_RETRIES)]
-        # Exemple avec base=10: [10, 15, 22, 33, 50, 75, 113, 169, 254, 381]
-
-        for attempt, delay in enumerate(delays, 1):
-            try:
-                logger.info(f"📝 Tentative de mise à jour playlist {attempt}/{PLAYLIST_UPDATE_RETRIES}")
-                self._update_master_playlist()
-
-                # Vérifier la complétude
-                if self._validate_playlist_completeness():
-                    logger.info(f"✅ Playlist complète après {attempt} tentative(s)")
-                    break
-                else:
-                    logger.warning(f"⚠️ Playlist incomplète, retry dans {delay:.0f}s")
-
-                if attempt < PLAYLIST_UPDATE_RETRIES:
-                    time.sleep(delay)
-
-            except Exception as e:
-                logger.error(f"❌ Erreur tentative {attempt}: {e}")
-                if attempt < PLAYLIST_UPDATE_RETRIES:
-                    time.sleep(delay)
-
-        logger.info("✅ Phase de mise à jour initiale de la playlist terminée")
-
-        # Continuer avec des mises à jour périodiques
-        while True:
-            try:
-                self._update_master_playlist()
-                time.sleep(60)  # On attend 60s avant la prochaine mise à jour
-            except Exception as e:
-                logger.error(f"❌ Erreur maj master playlist: {e}")
-                logger.error(traceback.format_exc())
-                time.sleep(60)  # On attend même en cas d'erreur
-
     def _periodic_force_playlist_update(self):
         """Thread qui force périodiquement la mise à jour de la playlist maître"""
         from config import FORCE_PLAYLIST_UPDATE_INTERVAL
@@ -768,6 +644,12 @@ class IPTVManager:
                 if not self.stop_event.is_set():
                     logger.debug("⏰ Mise à jour périodique forcée de la playlist maître")
                     self._update_master_playlist()
+
+                    # Mettre à jour également le statut des chaînes pour le dashboard
+                    try:
+                        self._update_channel_status(initial_call=False)
+                    except Exception as e:
+                        logger.error(f"❌ Erreur lors de la mise à jour périodique du statut des chaînes: {e}")
 
             except Exception as e:
                 logger.error(f"❌ Erreur dans le thread de mise à jour périodique: {e}")
@@ -1165,14 +1047,33 @@ class IPTVManager:
             if not self.channel_status:
                 logger.warning("⚠️ Channel status manager not initialized")
                 return False
-                
+
             # Ensure stats directory exists and has proper permissions
             stats_dir = Path(os.path.dirname(CHANNELS_STATUS_FILE))
             stats_dir.mkdir(parents=True, exist_ok=True)
 
-            
+
             # Prepare channel status data
             channels_dict = {}
+
+            # Première étape: parcourir tous les dossiers de chaînes disponibles
+            # pour s'assurer que toutes les chaînes apparaissent dans le dashboard
+            try:
+                content_path = Path(self.content_dir)
+                if content_path.exists():
+                    for channel_dir in content_path.iterdir():
+                        if channel_dir.is_dir():
+                            channel_name = channel_dir.name
+                            # Initialiser avec des valeurs par défaut pour les chaînes non initialisées
+                            channels_dict[channel_name] = {
+                                "is_live": False,
+                                "streaming": False,
+                                "current_video": None,
+                            }
+            except Exception as e:
+                logger.error(f"❌ Erreur lors du scan des dossiers de chaînes: {e}")
+
+            # Deuxième étape: mettre à jour avec les informations des chaînes initialisées
             # Use scan_lock for iterating self.channels safely
             with self.scan_lock:
                 for channel_name, channel in self.channels.items():
@@ -1195,7 +1096,7 @@ class IPTVManager:
                         # Les informations sur les viewers sont maintenant gérées par ChannelStatusManager
                         # On ne les met pas à jour ici pour éviter les conflits
                         status_data = {
-                            "active": is_ready,
+                            "is_live": is_ready,
                             "streaming": is_streaming,
                             "current_video": current_video_name,
                         }
@@ -1270,16 +1171,13 @@ class IPTVManager:
             last_summary_time = time.time()
             last_resync_time = time.time()
             last_log_watchers_time = time.time()
-            last_process_logs_time = time.time()  # Pour traiter les logs régulièrement
+            # SUPPRIMÉ: last_process_logs_time (plus nécessaire)
             
             while True:
                 current_time = time.time()
                 
-                # >>> NOUVEAU: Traiter les logs access.log régulièrement
-                if current_time - last_process_logs_time > 0.5 and hasattr(self, "client_monitor") and self.client_monitor is not None:
-                    self.client_monitor.process_new_logs()
-                    last_process_logs_time = current_time
-                # <<< FIN NOUVEAU
+                # SUPPRIMÉ: Le traitement des logs est maintenant géré automatiquement
+                # par le thread de monitoring de StatsCollector (_log_monitor_loop)
                 
                 # Scan périodique 
                 if current_time - last_scan_time > SUMMARY_CYCLE:
@@ -1322,7 +1220,7 @@ class IPTVManager:
 
         try:
             logger.debug(f"🔄 Scan périodique des chaînes en cours...")
-            self.scan_channels(force=True)
+            self._do_scan(force=True)
             
             # NOUVEAU: Resynchronisation périodique des playlists
             self._resync_all_playlists()
@@ -1566,37 +1464,9 @@ class IPTVManager:
             if channel_data.get("from_queue", True):
                 self.channel_init_queue.task_done()
 
-    def init_stats_collector_and_client_monitor(self):
-        """Initialise le StatsCollector et le ClientMonitor une fois que les chaînes sont prêtes"""
-        logger.info("🚀 Initialisation de StatsCollector et ClientMonitor maintenant que les chaînes sont prêtes...")
-        
-        # Initialisation du StatsCollector
-        if self.stats_collector is None:
-            try:
-                logger.info(">>> INITIALIZING STATS COLLECTOR <<<")
-                self.stats_collector = StatsCollector()
-                logger.info("📊 StatsCollector initialisé")
-                # Passer le callback update_watchers pour que StatsCollector puisse mettre à jour les spectateurs directement
-                self.stats_collector.update_watchers_callback = self.update_watchers
-            except Exception as e:
-                logger.error(f"❌ Erreur initialisation StatsCollector: {e}")
-                self.stats_collector = None
-        
-        # Initialisation du ClientMonitor
-        if self.client_monitor is None:
-            try:
-                self.client_monitor = ClientMonitor(
-                    log_path=self.log_path,
-                    update_watchers_callback=self.update_watchers,
-                    manager=self,
-                    stats_collector=self.stats_collector
-                )
-                # Au lieu de démarrer le thread, on initialise juste la position
-                self.client_monitor.start()
-                logger.info("👁️ ClientMonitor initialisé et prêt")
-            except Exception as e:
-                logger.error(f"❌ Erreur initialisation ClientMonitor: {e}")
-                self.client_monitor = None
+    # MÉTHODE SUPPRIMÉE: init_stats_collector_and_client_monitor()
+    # StatsCollector est maintenant initialisé dans __init__ et gère tout le monitoring
+    # ClientMonitor a été fusionné dans StatsCollector
 
 
     def _start_channel(self, channel_name):
@@ -1707,29 +1577,18 @@ class IPTVManager:
                 status_file=CHANNELS_STATUS_FILE
             )
             
-            # Faire une mise à jour initiale avec retry, PASSING initial_call=True
-            # Note: _update_channel_status needs TimeTracker, ensure it's initialized before calling this if needed
-            # For now, we assume initialization is enough, actual update might happen later
-            # max_retries = 3
-            # retry_delay = 1
-            # for attempt in range(max_retries):
-            #     try:
-            #         # Pass initial_call=True here
-            #         success = self._update_channel_status(initial_call=True) # Depends on TimeTracker
-            #         if success:
-            #             logger.info("✅ Channel status manager initialized for dashboard (initial status set)")
-            #             return
-            #         else:
-            #             logger.warning(f"⚠️ Failed to update channel status during init (attempt {attempt + 1}/{max_retries})")
-            #             if attempt < max_retries - 1:
-            #                 time.sleep(retry_delay)
-            #     except Exception as e:
-            #         logger.error(f"❌ Error calling _update_channel_status during init (attempt {attempt + 1}/{max_retries}): {e}")
-            #         if attempt < max_retries - 1:
-            #             time.sleep(retry_delay)
-            # logger.error("❌ Failed to initialize channel status manager after all retries")
-            # self.channel_status = None
-            logger.info("✅ ChannelStatusManager initialisé. La mise à jour initiale se fera plus tard.")
+            # Faire une mise à jour initiale pour inclure toutes les chaînes disponibles
+            logger.info("🔄 Mise à jour initiale du statut des chaînes...")
+            try:
+                success = self._update_channel_status(initial_call=True)
+                if success:
+                    logger.info("✅ Channel status manager initialized for dashboard (initial status set)")
+                else:
+                    logger.warning("⚠️ Failed to update channel status during init")
+            except Exception as e:
+                logger.error(f"❌ Error calling _update_channel_status during init: {e}")
+
+            logger.info("✅ ChannelStatusManager initialisé.")
             
         except Exception as e:
             logger.error(f"❌ Error initializing channel status manager: {e}")

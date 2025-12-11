@@ -122,51 +122,10 @@ class FFmpegMonitor(threading.Thread):
         except Exception as e:
             logger.error(f"❌ Erreur lors de la génération du résumé: {e}")
 
-    def _watchers_loop(self):
-        """Surveille l'activité des viewers plus passivement"""
-        last_log_time = 0
-        last_health_check = 0
-        last_summary_time = 0
-        log_cycle = WATCHERS_LOG_CYCLE
-        summary_cycle = SUMMARY_CYCLE
-
-        while True:
-            try:
-                current_time = time.time()
-
-                # Health check espacé (10 minutes)
-                if current_time - last_health_check > 600:
-                    for channel_name, channel in self.channels.items():
-                        if hasattr(channel, "check_stream_health"):
-                            try:
-                                # On vérifie mais on n'agit pas automatiquement
-                                channel.check_stream_health()
-                            except Exception as e:
-                                logger.error(f"[{channel_name}] ❌ Erreur health check: {e}")
-                    last_health_check = current_time
-
-                # Récapitulatif des chaînes
-                if current_time - last_summary_time > summary_cycle:
-                    self._log_channels_summary()
-                    last_summary_time = current_time
-
-                # Log des viewers actifs
-                if current_time - last_log_time > log_cycle:
-                    active_channels = []
-                    for name, channel in sorted(self.channels.items()):
-                        if hasattr(channel, "watchers_count") and channel.watchers_count > 0:
-                            active_channels.append(f"{name}: {channel.watchers_count}")
-
-                    if active_channels:
-                        logger.info(f"👥 Viewers actifs: {', '.join(active_channels)}")
-                    last_log_time = current_time
-
-                # Pause plus longue
-                time.sleep(15)
-
-            except Exception as e:
-                logger.error(f"❌ Erreur watchers_loop: {e}")
-                time.sleep(15)
+    # MÉTHODE SUPPRIMÉE: _watchers_loop()
+    # Cette méthode contenait un health check redondant qui était déjà fait par
+    # FFmpegProcessManager._monitor_process(). Le monitoring des viewers est maintenant
+    # géré entièrement par StatsCollector.
     
     def run_monitor_loop(self):
         """Boucle principale du monitoring avec intervalle plus long"""
@@ -239,21 +198,10 @@ class FFmpegMonitor(threading.Thread):
             logger.error(f"[{channel_name}] ❌ Erreur vérification santé: {e}")
             return False
 
-    def check_stream_health(self):
-        """Vérifie la santé du stream"""
-        if not self.process:
-            return False
-
-        # Vérifie si le processus est toujours en cours d'exécution
-        if self.process.poll() is not None:
-            logger.error(f"Le processus FFmpeg pour {self.channel_name} s'est terminé avec le code {self.process.returncode}")
-            return False
-
-        # Vérifie les ressources système
-        if not self.check_system_resources():
-            return False
-
-        return True
+    # MÉTHODE SUPPRIMÉE: check_stream_health()
+    # Cette méthode était cassée (référençait self.process qui n'existe pas dans FFmpegMonitor)
+    # et redondante avec FFmpegProcessManager.check_stream_health()
+    # Le monitoring de la santé des streams est géré par FFmpegProcessManager.
 
     def ensure_hls_directory(self, channel_name: str = None):
         """Ensure that HLS directory exists for a channel or all channels"""

@@ -203,33 +203,11 @@ class IPTVChannel:
         finally:
             self._scan_in_progress = False
 
-    def _segment_monitor_loop(self):
-        """Boucle de surveillance des segments pour vérifier la santé du stream"""
-        try:
-            # Ajouter un délai initial pour laisser le temps à FFmpeg de démarrer
-            if not hasattr(self, "segment_monitor_started"):
-                self.segment_monitor_started = time.time()
-                logger.info(f"[{self.name}] 🔍 Surveillance du stream démarrée")
-                time.sleep(5)
-                if not hasattr(self, "_startup_time"):
-                    self._startup_time = time.time() - 5
-            
-            # Initialiser le timestamp du dernier health check
-            if not hasattr(self, "last_health_check"):
-                self.last_health_check = time.time()
-            
-            # La boucle s'exécute tant que le processus est en cours
-            while self.process_manager.is_running():
-                # Vérification périodique de la santé du stream
-                if time.time() - self.last_health_check >= 30:
-                    self.process_manager.check_stream_health()
-                    self.last_health_check = time.time()
-                
-                # Pause entre les vérifications
-                time.sleep(1)
-
-        except Exception as e:
-            logger.error(f"[{self.name}] ❌ Erreur dans la boucle de surveillance: {e}")
+    # MÉTHODE SUPPRIMÉE: _segment_monitor_loop()
+    # Cette boucle est REDONDANTE avec FFmpegProcessManager._monitor_process()
+    # qui appelle déjà check_stream_health() toutes les 60 secondes.
+    # Avoir deux boucles qui appellent la même vérification est inefficace et peut
+    # causer des race conditions.
 
     def _handle_segment_created(self, segment_path, size):
         """Gère la création d'un nouveau segment HLS"""
@@ -247,15 +225,23 @@ class IPTVChannel:
         logger.debug(f"[{self.name}] ⏱️ Segment créé: {Path(segment_path).name}")
 
     def _handle_process_died(self, exit_code, stderr=None):
-        """Gère la mort du processus FFmpeg et décide des actions à prendre"""
+        """
+        Gère la mort du processus FFmpeg et décide des actions à prendre.
+
+        Cette méthode a été simplifiée en déléguant l'analyse d'erreurs à ErrorHandler.
+        """
         try:
-            # Log the exit code and stderr for debugging
+            # Log initial
             logger.info(f"[{self.name}] ℹ️ Processus FFmpeg terminé avec code: {exit_code}")
-            if stderr:
-                logger.info(f"[{self.name}] ℹ️ FFmpeg stderr (premières lignes):\n{stderr[:500]}")
+            if stderr and len(stderr) > 0:
+                logger.debug(f"[{self.name}] FFmpeg stderr: {stderr[:200]}...")
+
+            # Analyser l'erreur avec ErrorHandler (méthode statique)
+            from error_handler import ErrorHandler
+            error_type, diagnosis = ErrorHandler.analyze_ffmpeg_error(exit_code, stderr)
 
             # --- Handle Successful Completion (Advance to Next Video) ---
-            if exit_code == 0:
+            if error_type == "success":
                 # Vérifier si on est en navigation manuelle
                 if self.manual_navigation:
                     logger.info(f"[{self.name}] 🔄 Navigation manuelle en cours, pas d'auto-avancement")
@@ -313,113 +299,40 @@ class IPTVChannel:
                 threading.Timer(2.0, self.start_stream).start()
                 return # Don't proceed to error handling
             # --- End Successful Completion Handling ---
-            
-            # --- Existing Error Handling (for crashes/non-zero exit codes) ---
-            logger.warning(f"[{self.name}] ⚠️ Processus FFmpeg terminé anormalement (code: {exit_code}).")
-            
-            # Analyser l'erreur pour détecter le type
-            error_type = "unknown_error"
-            diagnosis = ""
-            
-            if exit_code < 0:
-                # Signal négatif, indique une terminaison par signal
-                error_type = f"signal_{abs(exit_code)}"
-                logger.warning(f"[{self.name}] Processus terminé par signal {abs(exit_code)}")
-                
-            elif stderr and "error" in stderr.lower():
-                # Extraction du type d'erreur à partir du message
-                if "no such file" in stderr.lower():
-                    error_type = "missing_file"
-                elif "invalid data" in stderr.lower():
-                    error_type = "invalid_data"
-                elif "dts" in stderr.lower():
-                    error_type = "dts_error"
-                elif "timeout" in stderr.lower():
-                    error_type = "timeout"
-                
-                # Enregistrer le message d'erreur complet pour plus de contexte
-                logger.warning(f"[{self.name}] 📝 Message d'erreur FFmpeg: {stderr[:200]}...")
-            
-            # Traiter les erreurs de diagnostic enrichi (format dictionnaire)
-            if stderr and stderr.startswith("{'type':"):
-                try:
-                    # Tenter de récupérer le diagnostic structuré
-                    import ast
-                    error_info = ast.literal_eval(stderr)
-                    
-                    if isinstance(error_info, dict) and 'diagnosis' in error_info:
-                        diagnosis = error_info['diagnosis']
-                        error_type = "health_check_detailed"
-                        
-                        # Logs détaillés du diagnostic
-                        elapsed = error_info.get('elapsed', 0)
-                        cpu_usage = error_info.get('cpu_usage', 0)
-                        segments_count = error_info.get('segments_count', 0)
-                        avg_segment_size = error_info.get('average_segment_size', 0)
-                        
-                        logger.warning(f"[{self.name}] 📊 DIAGNOSTIC DÉTAILLÉ: {diagnosis}")
-                        logger.warning(f"[{self.name}] ⏱️ {elapsed:.1f}s sans activité | CPU: {cpu_usage:.1f}% | Segments: {segments_count} | Taille moy: {avg_segment_size/1024:.1f}KB")
-                except:
-                    # Si échec du parsing, utiliser le message standard
-                    error_type = "health_check_failed"
-                    logger.warning(f"[{self.name}] Diagnostic non structuré: {stderr[:100]}...")
-            
-            # Approche spécifique pour les problèmes de santé
-            if exit_code == -2:  # Code spécial pour problème de santé
-                # On incrémente progressivement un compteur d'avertissements
-                # au lieu de redémarrer immédiatement
-                if not hasattr(self, "_health_warnings"):
-                    self._health_warnings = 0
-                    self._health_check_details = []
-                
-                # Collecter des détails sur le problème de santé
+
+            # --- Error Handling (Simplifié et délégu\u00e9 à ErrorHandler) ---
+            logger.warning(f"[{self.name}] ⚠️ Processus terminé anormalement: {error_type}")
+            if diagnosis:
+                logger.info(f"[{self.name}] 📋 Diagnostic: {diagnosis}")
+
+            # Gérer les problèmes de santé avec ErrorHandler
+            if error_type in ["health_check_failed", "health_check_detailed"]:
                 current_time = time.time()
-                elapsed_since_last_segment = current_time - getattr(self.process_manager, "last_segment_time", current_time)
-                duration_threshold = getattr(self, "current_file_duration", 0) or 300  # Durée par défaut de 5 minutes
-                
-                health_details = {
-                    "timestamp": current_time,
-                    "elapsed_since_segment": elapsed_since_last_segment,
-                    "file_duration": duration_threshold,
-                    "diagnosis": diagnosis or "Problème de santé non spécifié",
-                    "stderr": stderr[:100] if stderr else "Aucune erreur spécifique"
-                }
-                
-                self._health_warnings += 1
-                self._health_check_details.append(health_details)
-                
-                # Log détaillé du problème de santé
-                logger.warning(f"[{self.name}] ⚠️ Problème de santé détecté - Avertissement {min(self._health_warnings, 3)}/3")
-                
-                if diagnosis:
-                    logger.warning(f"[{self.name}] 🔍 Cause probable: {diagnosis}")
-                else:
-                    logger.warning(f"[{self.name}] ⏱️ Temps écoulé depuis dernier segment: {elapsed_since_last_segment:.1f}s")
-                
-                # On redémarre seulement après plusieurs avertissements
-                if self._health_warnings >= 3:
-                    logger.warning(f"[{self.name}] ❗ Redémarrage après {self._health_warnings} avertissements de santé")
-                    details_log = "\n".join([f"  - {i+1}: {details['elapsed_since_segment']:.1f}s sans segment, diagnostic: {details['diagnosis']}" 
-                                            for i, details in enumerate(self._health_check_details)])
-                    logger.warning(f"[{self.name}] 📊 Historique des problèmes de santé:\n{details_log}")
-                    
-                    self._health_warnings = 0
-                    self._health_check_details = []
+                elapsed = current_time - getattr(self.process_manager, "last_segment_time", current_time)
+
+                # Déléguer à ErrorHandler
+                should_restart = self.error_handler.handle_health_warning(
+                    diagnosis=diagnosis,
+                    elapsed_since_segment=elapsed
+                )
+
+                if should_restart:
+                    time.sleep(random.uniform(0.5, 2.0))
                     self._restart_stream(diagnostic=diagnosis)
-                else:
-                    logger.info(f"[{self.name}] 🔍 Avertissement de santé {min(self._health_warnings, 3)}/3, surveillance continue")
+                # Sinon, on attend le prochain warning
+
+            # Gérer les autres erreurs
             else:
-                # Utiliser l'error handler seulement si ce n'est pas une fin normale (exit_code != 0)
-                if self.error_handler.add_error(error_type):
-                    logger.warning(f"[{self.name}] ❗ Redémarrage nécessaire après erreur: {error_type}")
-                    # Log des erreurs accumulées
-                    error_counts = [f"{err_type}: {data['count']}" for err_type, data in self.error_handler.errors.items() if data['count'] > 0]
-                    logger.warning(f"[{self.name}] 📊 Erreurs accumulées: {', '.join(error_counts)}")
-                    
-                    # On ajoute un petit délai aléatoire pour éviter les redémarrages simultanés
-                    # IMPORTANT: _restart_stream will call start_stream, which will use the *current* (failed) video index
+                # Ajouter l'erreur à ErrorHandler
+                should_restart = self.error_handler.add_error(error_type)
+
+                if should_restart:
+                    logger.warning(f"[{self.name}] ❗ Redémarrage nécessaire: {error_type}")
+                    logger.info(f"[{self.name}] 📊 {self.error_handler.get_errors_summary()}")
+
                     time.sleep(random.uniform(0.5, 3.0))
                     self._restart_stream(diagnostic=error_type)
+
                 elif self.error_handler.has_critical_errors():
                     logger.error(f"[{self.name}] ❌ Erreurs critiques détectées, arrêt du stream")
                     # Attendre un peu avant d'arrêter pour éviter les actions trop rapprochées

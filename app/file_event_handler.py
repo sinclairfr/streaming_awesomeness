@@ -242,7 +242,7 @@ class FileEventHandler(BaseFileEventHandler):
             return
         
         # Force un scan immédiat
-        self.manager.scan_channels(force=True)
+        self.manager._do_scan(force=True)
 
         # Attendre un peu pour laisser le temps au scan de s'exécuter
         time.sleep(5)

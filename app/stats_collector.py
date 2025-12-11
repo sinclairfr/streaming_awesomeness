@@ -33,7 +33,12 @@ LOG_PLAYLIST_REGEX = re.compile(
 )
 
 class StatsCollector:
-    """Gère les statistiques basées sur les logs Nginx (bytes transférés)."""
+    """
+    Gère les statistiques basées sur les logs Nginx (bytes transférés).
+    Inclut le monitoring des viewers et la détection des changements de chaîne.
+
+    Cette classe unifie les fonctionnalités de l'ancien ClientMonitor et du StatsCollector.
+    """
 
     def __init__(self, stats_dir="/app/stats", manager=None, valid_channels: Optional[Set[str]] = None):
         """Initialise le collecteur de statistiques."""
@@ -46,16 +51,19 @@ class StatsCollector:
         self.user_stats_file = self.stats_dir / "user_stats_bytes.json"
 
         self.lock = threading.Lock()
-        
+
         # Initialiser les structures de base
         self.channel_stats = {"global": {"total_watch_time": 0, "total_bytes_transferred": 0, "unique_viewers": set(), "last_update": 0}}
         self.user_stats = {
             "users": {},
             "last_updated": int(time.time())
         }
-        
-        # Dictionnaire pour suivre le canal actif de chaque IP
+
+        # Dictionnaire pour suivre le canal actif de chaque IP (unifié depuis ClientMonitor)
         self.active_channel_by_ip = {}
+
+        # Dictionnaire simple {ip: channel} pour détecter les changements de chaîne (depuis ClientMonitor)
+        self.viewers = {}
 
         # Calculer le timeout basé sur HLS_SEGMENT_DURATION et HLS_LIST_SIZE
         segment_duration = float(os.getenv("HLS_SEGMENT_DURATION", "2.0"))
@@ -311,8 +319,8 @@ class StatsCollector:
     def _record_log_activity(self, ip, channel, user_agent, bytes_transferred):
         """
         Enregistre l'activité d'un utilisateur basée sur les logs.
-        Cette méthode est appelée par ClientMonitor ou d'autres composants qui analysent les logs.
-        
+        Intègre la détection de changement de chaîne (anciennement dans ClientMonitor).
+
         Args:
             ip: Adresse IP de l'utilisateur
             channel: Nom de la chaîne
@@ -320,51 +328,51 @@ class StatsCollector:
             bytes_transferred: Taille du transfert en octets (0 pour les segments HLS)
         """
         try:
-            # AJOUT: Vérifier si le canal est dans la liste des canaux valides fournie à l'initialisation
+            # Vérifier si le canal est dans la liste des canaux valides
             if channel not in self.valid_channels:
                 logger.debug(f"Activité ignorée pour le canal '{channel}' car il n'est pas dans la liste des canaux valides.")
                 return
 
             current_time = time.time()
-            
-            # Vérifier si l'utilisateur a changé de chaîne
-            if not hasattr(self, '_current_channels'):
-                self._current_channels = {}
-            
-            old_channel = self._current_channels.get(ip)
-            if old_channel and old_channel != channel:
-                # L'utilisateur a changé de chaîne, on le retire de l'ancienne
+
+            # Détection de changement de chaîne (logique unifiée depuis ClientMonitor)
+            previous_channel = self.viewers.get(ip)
+
+            # SI CHANGEMENT DE CHAÎNE détecté
+            if previous_channel and previous_channel != channel:
+                logger.warning(f"ZAP! Channel change detected. IP: {ip}, From: {previous_channel}, To: {channel}")
+
+                # Forcer l'inactivité sur l'ancienne chaîne
                 if ip in self.user_stats["users"] and isinstance(self.user_stats["users"][ip], dict):
                     channels = self.user_stats["users"][ip].get('channels', {})
-                    if old_channel in channels:
-                        # Forcer l'inactivité sur l'ancienne chaîne
-                        self.user_stats["users"][ip]['channels'][old_channel]['last_seen'] = 0
-                        logger.info(f"🔄 {ip} a changé de chaîne: {old_channel} → {channel}")
-                        
-                        # Forcer une mise à jour des spectateurs de l'ancienne chaîne
-                        active_ips_old = []
-                        for viewer_ip in self.user_stats["users"]:
-                            if viewer_ip == ip:
-                                continue
-                            viewer_data = self.user_stats["users"][viewer_ip]
-                            if not isinstance(viewer_data, dict):
-                                continue
-                            channels = viewer_data.get('channels', {})
-                            if not isinstance(channels, dict):
-                                continue
-                            if old_channel in channels:
-                                channel_data = channels[old_channel]
-                                if isinstance(channel_data, dict):
-                                    last_seen = channel_data.get('last_seen', 0)
-                                    if current_time - last_seen < self.viewer_timeout:
-                                        active_ips_old.append(viewer_ip)
-                        
-                        if hasattr(self, 'update_watchers_callback'):
-                            self.update_watchers_callback(old_channel, len(active_ips_old), active_ips_old, HLS_DIR, source="channel_change")
-                            logger.info(f"[{old_channel}] 👥 Mise à jour après départ de {ip}: {len(active_ips_old)} spectateurs restants")
-            
+                    if previous_channel in channels:
+                        self.user_stats["users"][ip]['channels'][previous_channel]['last_seen'] = 0
+
+                # Calculer les spectateurs actifs restants sur l'ancienne chaîne
+                active_ips_old = []
+                for viewer_ip in self.user_stats["users"]:
+                    if viewer_ip == ip:  # Exclure l'IP qui change de chaîne
+                        continue
+                    viewer_data = self.user_stats["users"][viewer_ip]
+                    if not isinstance(viewer_data, dict):
+                        continue
+                    viewer_channels = viewer_data.get('channels', {})
+                    if not isinstance(viewer_channels, dict):
+                        continue
+                    if previous_channel in viewer_channels:
+                        channel_data = viewer_channels[previous_channel]
+                        if isinstance(channel_data, dict):
+                            last_seen = channel_data.get('last_seen', 0)
+                            if current_time - last_seen < self.viewer_timeout:
+                                active_ips_old.append(viewer_ip)
+
+                # Notifier le changement pour l'ancienne chaîne
+                if hasattr(self, 'update_watchers_callback') and self.update_watchers_callback:
+                    self.update_watchers_callback(previous_channel, len(active_ips_old), active_ips_old, HLS_DIR, source="channel_change")
+                    logger.info(f"[{previous_channel}] 👥 Mise à jour après départ de {ip}: {len(active_ips_old)} spectateurs restants")
+
             # Mettre à jour la chaîne actuelle de l'utilisateur
-            self._current_channels[ip] = channel
+            self.viewers[ip] = channel
             
             # Vérifier si on a déjà fait une mise à jour récente pour cette IP/chaîne
             update_key = f"{ip}_{channel}"
@@ -502,7 +510,7 @@ class StatsCollector:
                 active_ips = []
                 for viewer_ip in self.user_stats["users"]:
                     # Un spectateur n'est considéré actif que sur sa chaîne actuelle
-                    if self._current_channels.get(viewer_ip) == channel:
+                    if self.viewers.get(viewer_ip) == channel:
                         viewer_data = self.user_stats["users"][viewer_ip]
                         if isinstance(viewer_data, dict):
                             channels = viewer_data.get('channels', {})
@@ -529,138 +537,9 @@ class StatsCollector:
             import traceback
             logger.error(traceback.format_exc())
 
-    def handle_channel_change(self, ip, previous_channel, new_channel):
-        """
-        Gère le changement de chaîne pour un utilisateur spécifique.
-        Cette méthode est appelée par ClientMonitor quand un changement de chaîne est détecté.
-        
-        Args:
-            ip: Adresse IP de l'utilisateur qui change de chaîne
-            previous_channel: Nom de la chaîne précédente
-            new_channel: Nom de la nouvelle chaîne
-        """
-        logger.info(f"🔄 StatsCollector: Traitement du changement de chaîne {ip}: {previous_channel} → {new_channel}")
-        try:
-            current_time = time.time()
-            
-            # Retirer l'IP de l'ancienne chaîne dans le dictionnaire de suivi
-            if hasattr(self, 'active_channel_by_ip'):
-                if ip in self.active_channel_by_ip and self.active_channel_by_ip[ip] == previous_channel:
-                    del self.active_channel_by_ip[ip]
-            
-            # Mettre à jour le dictionnaire de suivi pour la nouvelle chaîne
-            self.active_channel_by_ip[ip] = new_channel
-            
-            # Mettre à jour les statistiques pour la nouvelle chaîne
-            if new_channel not in self.channel_stats:
-                self.channel_stats[new_channel] = {
-                    "first_seen": current_time,
-                    "last_seen": current_time,
-                    "total_watch_time": 0,
-                    "total_bytes": 0,
-                    "unique_viewers": [ip]
-                }
-            else:
-                # Mettre à jour last_seen
-                self.channel_stats[new_channel]["last_seen"] = current_time
-                
-                # Ajouter l'IP à la liste des viewers uniques si elle n'y est pas déjà
-                if "unique_viewers" not in self.channel_stats[new_channel]:
-                    self.channel_stats[new_channel]["unique_viewers"] = []
-                
-                if ip not in self.channel_stats[new_channel]["unique_viewers"]:
-                    self.channel_stats[new_channel]["unique_viewers"].append(ip)
-            
-            # CORRECTION: Ajouter l'IP aux viewers uniques globaux
-            if "unique_viewers" not in self.channel_stats["global"]:
-                if isinstance(self.channel_stats["global"], dict):
-                    self.channel_stats["global"]["unique_viewers"] = set()
-                else:
-                    self.channel_stats["global"] = {"total_watch_time": 0, "total_bytes_transferred": 0, "unique_viewers": set(), "last_update": 0}
-            
-            # Si c'est un set, ajouter directement
-            if isinstance(self.channel_stats["global"]["unique_viewers"], set):
-                self.channel_stats["global"]["unique_viewers"].add(ip)
-            # Si c'est une liste, vérifier si l'IP est déjà présente avant d'ajouter
-            elif isinstance(self.channel_stats["global"]["unique_viewers"], list):
-                if ip not in self.channel_stats["global"]["unique_viewers"]:
-                    self.channel_stats["global"]["unique_viewers"].append(ip)
-            
-            # Mettre à jour les statistiques utilisateur
-            if ip not in self.user_stats["users"]:
-                self.user_stats["users"][ip] = {
-                    "first_seen": current_time,
-                    "last_seen": current_time,
-                    "total_watch_time": 0,
-                    "total_bytes": 0,
-                    "channels": {}
-                }
-            
-            # Mettre à jour le timestamp de dernière activité pour la nouvelle chaîne
-            if new_channel not in self.user_stats["users"][ip].get("channels", {}):
-                self.user_stats["users"][ip]["channels"][new_channel] = {
-                    "first_seen": current_time,
-                    "last_seen": current_time,
-                    "total_watch_time": 0,
-                    "total_bytes": 0
-                }
-            else:
-                self.user_stats["users"][ip]["channels"][new_channel]["last_seen"] = current_time
-            
-            # Marquer explicitement l'IP comme inactive sur l'ancienne chaîne
-            if previous_channel and previous_channel in self.user_stats["users"][ip].get("channels", {}):
-                # Mettre à jour le timestamp de dernière activité pour forcer l'inactivité
-                self.user_stats["users"][ip]["channels"][previous_channel]["last_seen"] = 0
-            
-            # Calculer les spectateurs actifs pour les deux chaînes
-            active_ips_new_channel = []
-            active_ips_old_channel = []
-            
-            # Parcourir les utilisateurs pour trouver les spectateurs actifs
-            for viewer_ip, viewer_data in self.user_stats["users"].items():
-                if isinstance(viewer_ip, str) and isinstance(viewer_data, dict) and "channels" in viewer_data:
-                    # Pour la nouvelle chaîne
-                    if new_channel in viewer_data["channels"]:
-                        if isinstance(viewer_data["channels"][new_channel], dict) and "last_seen" in viewer_data["channels"][new_channel]:
-                            last_seen = viewer_data["channels"][new_channel]["last_seen"]
-                            if isinstance(last_seen, (int, float)) and current_time - last_seen < self.viewer_timeout:
-                                active_ips_new_channel.append(viewer_ip)
-                    
-                    # Pour l'ancienne chaîne (exclure l'IP qui change)
-                    if viewer_ip != ip and previous_channel in viewer_data["channels"]:
-                        if isinstance(viewer_data["channels"][previous_channel], dict) and "last_seen" in viewer_data["channels"][previous_channel]:
-                            last_seen = viewer_data["channels"][previous_channel]["last_seen"]
-                            if isinstance(last_seen, (int, float)) and current_time - last_seen < self.viewer_timeout:
-                                active_ips_old_channel.append(viewer_ip)
-            
-            # S'assurer que l'IP actuelle est incluse dans la liste des spectateurs de la nouvelle chaîne
-            if ip not in active_ips_new_channel:
-                active_ips_new_channel.append(ip)
-            
-            # Mise à jour des spectateurs pour les deux chaînes via le callback
-            if hasattr(self, 'update_watchers_callback') and self.update_watchers_callback:
-                # Mettre à jour l'ancienne chaîne
-                try:
-                    logger.info(f"[{previous_channel}] 🔄 Mise à jour après changement: {len(active_ips_old_channel)} spectateurs actifs restants")
-                    self.update_watchers_callback(previous_channel, len(active_ips_old_channel), active_ips_old_channel, HLS_DIR, source="channel_change")
-                except Exception as e:
-                    logger.error(f"[{previous_channel}] ❌ Erreur lors de la mise à jour après changement: {str(e)}")
-                
-                # Mettre à jour la nouvelle chaîne
-                try:
-                    logger.info(f"[{new_channel}] 🔄 Mise à jour après changement: {len(active_ips_new_channel)} spectateurs actifs")
-                    self.update_watchers_callback(new_channel, len(active_ips_new_channel), active_ips_new_channel, HLS_DIR, source="channel_change")
-                except Exception as e:
-                    logger.error(f"[{new_channel}] ❌ Erreur lors de la mise à jour après changement: {str(e)}")
-                
-                logger.info(f"✅ Changement de chaîne {ip}: {previous_channel} → {new_channel} traité avec succès")
-            else:
-                logger.warning("⚠️ update_watchers_callback non disponible, impossible de mettre à jour les spectateurs")
-                
-        except Exception as e:
-            logger.error(f"❌ Erreur lors du traitement du changement de chaîne: {str(e)}")
-            import traceback
-            logger.error(traceback.format_exc())
+    # MÉTHODE SUPPRIMÉE: handle_channel_change()
+    # La logique de changement de chaîne est maintenant intégrée directement
+    # dans _record_log_activity() pour éviter les duplications
 
     def _cleanup_loop(self):
         """Boucle de nettoyage périodique des viewers inactifs."""
