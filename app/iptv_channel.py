@@ -21,7 +21,6 @@ from config import (
 from video_processor import get_accurate_duration
 import datetime
 from error_handler import ErrorHandler
-from time_tracker import TimeTracker
 import psutil
 import traceback
 
@@ -51,9 +50,6 @@ class IPTVChannel:
 
         # Stats collector optionnel
         self.stats_collector = stats_collector
-        
-        # Gestion centralisée du temps de visionnage
-        self.time_tracker = TimeTracker(stats_collector) if stats_collector else None
 
         # Gestion des erreurs et des arrêts d'urgence
         self.error_handler = ErrorHandler(
@@ -123,6 +119,20 @@ class IPTVChannel:
         logger.info(
             f"[{self.name}] ✅ Initialisation complète. Chaîne prête: {self.ready_for_streaming} avec {len(self.processed_videos)} vidéos."
         )
+
+    def _safe_start_stream(self):
+        """Wrapper sécurisé pour start_stream() appelé depuis un Timer thread"""
+        try:
+            logger.debug(f"[{self.name}] 🔄 Démarrage du stream depuis Timer thread...")
+            result = self.start_stream()
+            if not result:
+                logger.error(f"[{self.name}] ❌ Échec du démarrage du stream depuis Timer thread")
+        except Exception as e:
+            logger.error(f"[{self.name}] ❌ Exception critique dans Timer thread: {e}")
+            logger.error(traceback.format_exc())
+            # Tenter un redémarrage d'urgence après un délai
+            logger.warning(f"[{self.name}] 🔄 Tentative de récupération automatique dans 10 secondes...")
+            threading.Timer(10.0, self._safe_start_stream).start()
 
     def _handle_position_update(self, position):
         """Reçoit les mises à jour de position du ProcessManager"""
@@ -296,7 +306,7 @@ class IPTVChannel:
                 # Schedule the start of the next video with a delay to ensure proper cleanup
                 # Use the updated index for logging
                 logger.info(f"[{self.name}] ⏱️ Planification du démarrage du prochain fichier ({self.current_video_index + 1}/{num_videos}) dans 2 secondes...")
-                threading.Timer(2.0, self.start_stream).start()
+                threading.Timer(2.0, self._safe_start_stream).start()
                 return # Don't proceed to error handling
             # --- End Successful Completion Handling ---
 
@@ -458,19 +468,39 @@ class IPTVChannel:
                 # Check if file still exists and is accessible
                 if not video_file.exists() or not os.access(video_file, os.R_OK):
                     logger.error(f"[{self.name}] ❌ Fichier vidéo inaccessible: {video_file}. Tentative de rescan...")
-                    self._scan_videos() # Try to refresh the list
-                    # Check index validity again after rescan
-                    if not (0 <= self.current_video_index < len(self.processed_videos)):
-                         self.current_video_index = 0 # Reset if still bad
-                    if not self.processed_videos: 
-                        logger.error(f"[{self.name}] ❌ Aucune vidéo valide trouvée après rescan.")
+
+                    # CORRECTION: Vérifier le succès du rescan et ajouter de la robustesse
+                    try:
+                        scan_success = self._scan_videos() # Try to refresh the list
+                        if not scan_success:
+                            logger.error(f"[{self.name}] ❌ Échec du rescan de la liste de vidéos.")
+                            return False
+
+                        logger.info(f"[{self.name}] ✅ Rescan réussi, {len(self.processed_videos)} vidéos trouvées")
+
+                        # Check index validity again after rescan
+                        if not (0 <= self.current_video_index < len(self.processed_videos)):
+                            logger.warning(f"[{self.name}] ⚠️ Index {self.current_video_index} invalide après rescan, réinitialisation à 0")
+                            self.current_video_index = 0
+
+                        if not self.processed_videos:
+                            logger.error(f"[{self.name}] ❌ Aucune vidéo valide trouvée après rescan.")
+                            return False
+
+                        # Try to get the file again
+                        video_file = self.processed_videos[self.current_video_index]
+                        logger.info(f"[{self.name}] 🔄 Nouveau fichier sélectionné après rescan: {video_file.name}")
+
+                        if not video_file.exists() or not os.access(video_file, os.R_OK):
+                            logger.error(f"[{self.name}] ❌ Fichier toujours inaccessible après rescan: {video_file}. Abandon.")
+                            return False # Give up if still inaccessible
+
+                        logger.info(f"[{self.name}] 🎥 Reprise avec fichier ({self.current_video_index + 1}/{len(self.processed_videos)}): {video_file.name}")
+
+                    except Exception as rescan_error:
+                        logger.error(f"[{self.name}] ❌ Exception lors du rescan: {rescan_error}")
+                        logger.error(traceback.format_exc())
                         return False
-                    # Try to get the file again
-                    video_file = self.processed_videos[self.current_video_index]
-                    if not video_file.exists() or not os.access(video_file, os.R_OK):
-                        logger.error(f"[{self.name}] ❌ Fichier toujours inaccessible après rescan: {video_file}. Abandon.")
-                        return False # Give up if still inaccessible
-                    logger.info(f"[{self.name}] 🎥 Reprise avec fichier ({self.current_video_index + 1}/{len(self.processed_videos)}): {video_file.name}")
 
 
                 # Créer le dossier HLS
@@ -507,9 +537,9 @@ class IPTVChannel:
                             
                         logger.info(f"[{self.name}] 🔀 Passage au fichier suivant: {old_index} → {next_video_index}")
                         self.current_video_index = next_video_index
-                        
+
                         # Lancer un nouveau thread pour redémarrer le stream avec le nouvel index
-                        threading.Timer(1.0, self.start_stream).start()
+                        threading.Timer(1.0, self._safe_start_stream).start()
                         return False
                     
                     return False
@@ -541,9 +571,9 @@ class IPTVChannel:
                             
                         logger.info(f"[{self.name}] 🔀 Passage au fichier suivant après échec: {old_index} → {next_video_index}")
                         self.current_video_index = next_video_index
-                        
+
                         # Lancer un nouveau thread pour redémarrer le stream avec le nouvel index
-                        threading.Timer(1.0, self.start_stream).start()
+                        threading.Timer(1.0, self._safe_start_stream).start()
 
                 return success # Return success status outside the lock
 

@@ -19,7 +19,6 @@ from ready_content_handler import ReadyContentHandler
 from hls_cleaner import HLSCleaner
 # SUPPRIMÉ: from client_monitor import ClientMonitor
 # ClientMonitor a été fusionné dans StatsCollector
-from resource_monitor import ResourceMonitor
 from iptv_channel import IPTVChannel
 import signal
 from ffmpeg_monitor import FFmpegMonitor
@@ -1193,12 +1192,7 @@ class IPTVManager:
                 if current_time - last_resync_time > 600:  # Toutes les 10 minutes
                     self._resync_all_playlists()
                     last_resync_time = current_time
-                
-                # Log périodique des watchers
-                if current_time - last_log_watchers_time > WATCHERS_LOG_CYCLE and hasattr(self, "_log_watchers_status"):
-                    self._log_watchers_status()
-                    last_log_watchers_time = current_time
-                
+
                 # Dormir un peu pour éviter de surcharger le CPU
                 time.sleep(0.1)
                 

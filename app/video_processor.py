@@ -437,16 +437,16 @@ class VideoProcessor:
                             logger.info(
                                 f"[{channel_name}] ✅ Chaîne nouvellement prête, mise à jour de la playlist maître"
                             )
-                            if hasattr(manager, "_manage_master_playlist"):
+                            if hasattr(manager, "_update_master_playlist"):
                                 threading.Thread(
-                                    target=manager._manage_master_playlist, daemon=True
+                                    target=manager._update_master_playlist, daemon=True
                                 ).start()
-                            
+
                             # Démarrer automatiquement le stream si nécessaire
-                            if hasattr(channel, "start_stream_if_needed"):
+                            if hasattr(channel, "start_stream"):
                                 logger.info(f"[{channel_name}] 🚀 Tentative de démarrage automatique du stream")
                                 threading.Thread(
-                                    target=channel.start_stream_if_needed,
+                                    target=channel.start_stream,
                                     daemon=True
                                 ).start()
 

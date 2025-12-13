@@ -152,8 +152,8 @@ def create_channels_grid(channel_status_data):
             "current_video": current_video
         })
 
-    # Sort channels: active ones first, then alphabetically
-    channels_data.sort(key=lambda x: (not x["active"], x["name"].lower()))
+    # Sort channels: channels with viewers first (descending), then active ones, then alphabetically
+    channels_data.sort(key=lambda x: (-x["viewers"], not x["active"], x["name"].lower()))
 
     # Create grid of cards
     cards = []

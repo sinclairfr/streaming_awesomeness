@@ -139,9 +139,9 @@ class ReadyContentHandler(BaseFileEventHandler):
                 else:
                     logger.info(f"[{channel_name}] ✓ Playlist inchangée, vérification du démarrage")
                     # Même si la playlist n'a pas changé, on vérifie si le stream doit être démarré
-                    if hasattr(channel, "start_stream_if_needed"):
+                    if not channel.is_running() and channel.is_ready_for_streaming():
                         threading.Thread(
-                            target=channel.start_stream_if_needed,
+                            target=channel.start_stream,
                             daemon=True
                         ).start()
 
